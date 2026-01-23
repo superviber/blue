@@ -1,0 +1,37 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/blue-core",
+    "crates/blue-mcp",
+    "apps/blue-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "CC0-1.0"
+repository = "https://git.beyondtheuniverse.superviber.com/superviber/blue"
+authors = ["Eric Minton Garcia"]
+
+[workspace.dependencies]
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Async runtime
+tokio = { version = "1.0", features = ["full", "io-std"] }
+
+# Error handling
+thiserror = "2.0"
+anyhow = "1.0"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# CLI
+clap = { version = "4.0", features = ["derive"] }
+
+# Internal
+blue-core = { path = "crates/blue-core" }
+blue-mcp = { path = "crates/blue-mcp" }

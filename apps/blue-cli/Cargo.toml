@@ -1,0 +1,19 @@
+[package]
+name = "blue"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Blue CLI - Welcome home"
+
+[[bin]]
+name = "blue"
+path = "src/main.rs"
+
+[dependencies]
+blue-core.workspace = true
+blue-mcp.workspace = true
+clap.workspace = true
+anyhow.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
