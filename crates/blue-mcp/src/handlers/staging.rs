@@ -203,6 +203,195 @@ pub fn handle_cleanup(state: &ProjectState, _args: &Value) -> Result<Value, Serv
     }))
 }
 
+/// Handle blue_staging_create
+///
+/// Detects IaC in the project and generates staging deployment commands.
+pub fn handle_create(args: &Value, repo_path: &std::path::Path) -> Result<Value, ServerError> {
+    let path = args
+        .get("cwd")
+        .and_then(|v| v.as_str())
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| repo_path.to_path_buf());
+
+    let ttl_hours = args
+        .get("ttl_hours")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(24);
+
+    let stack = args.get("stack").and_then(|v| v.as_str());
+
+    // Detect IaC type
+    let (iac_type, deploy_command, stacks) = if path.join("cdk.json").exists() {
+        let cmd = if let Some(s) = stack {
+            format!("cdk deploy {} --context stage=staging", s)
+        } else {
+            "cdk deploy --all --context stage=staging".to_string()
+        };
+        ("cdk", cmd, detect_cdk_stacks(&path))
+    } else if path.join("main.tf").exists() || path.join("terraform").is_dir() {
+        let cmd = if let Some(s) = stack {
+            format!("terraform apply -var=\"environment=staging\" -target=module.{}", s)
+        } else {
+            "terraform apply -var=\"environment=staging\"".to_string()
+        };
+        ("terraform", cmd, vec![])
+    } else if path.join("Pulumi.yaml").exists() {
+        let cmd = if let Some(s) = stack {
+            format!("pulumi up --stack {}", s)
+        } else {
+            "pulumi up --stack staging".to_string()
+        };
+        ("pulumi", cmd, vec![])
+    } else {
+        return Ok(json!({
+            "status": "error",
+            "message": blue_core::voice::error(
+                "No IaC detected",
+                "Need cdk.json, main.tf, or Pulumi.yaml"
+            )
+        }));
+    };
+
+    Ok(json!({
+        "status": "success",
+        "message": blue_core::voice::success(
+            &format!("Staging deployment ready ({})", iac_type.to_uppercase()),
+            Some(&format!("TTL: {} hours. Run the command to deploy.", ttl_hours))
+        ),
+        "iac_type": iac_type,
+        "deploy_command": deploy_command,
+        "stacks": stacks,
+        "ttl_hours": ttl_hours,
+        "instructions": format!(
+            "To deploy:\n  {}\n\nAcquire staging lock first if running migrations.",
+            deploy_command
+        )
+    }))
+}
+
+/// Handle blue_staging_destroy
+pub fn handle_destroy(args: &Value, repo_path: &std::path::Path) -> Result<Value, ServerError> {
+    let path = args
+        .get("cwd")
+        .and_then(|v| v.as_str())
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| repo_path.to_path_buf());
+
+    let (iac_type, destroy_command) = if path.join("cdk.json").exists() {
+        ("cdk", "cdk destroy --all --context stage=staging --force")
+    } else if path.join("main.tf").exists() || path.join("terraform").is_dir() {
+        ("terraform", "terraform destroy -var=\"environment=staging\" -auto-approve")
+    } else if path.join("Pulumi.yaml").exists() {
+        ("pulumi", "pulumi destroy --stack staging --yes")
+    } else {
+        return Ok(json!({
+            "status": "error",
+            "message": blue_core::voice::error(
+                "No IaC detected",
+                "Need cdk.json, main.tf, or Pulumi.yaml"
+            )
+        }));
+    };
+
+    Ok(json!({
+        "status": "success",
+        "message": blue_core::voice::success(
+            &format!("Staging destruction ready ({})", iac_type.to_uppercase()),
+            Some("Run the command to destroy resources")
+        ),
+        "iac_type": iac_type,
+        "destroy_command": destroy_command,
+        "instructions": format!("To destroy:\n  {}", destroy_command)
+    }))
+}
+
+/// Handle blue_staging_cost
+pub fn handle_cost(args: &Value, repo_path: &std::path::Path) -> Result<Value, ServerError> {
+    let path = args
+        .get("cwd")
+        .and_then(|v| v.as_str())
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| repo_path.to_path_buf());
+
+    let duration_hours = args
+        .get("duration_hours")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(24);
+
+    let (iac_type, cost_command, instructions) = if path.join("cdk.json").exists() {
+        (
+            "cdk",
+            "cdk synth && infracost breakdown --path cdk.out",
+            "Install infracost and run cdk synth first"
+        )
+    } else if path.join("main.tf").exists() || path.join("terraform").is_dir() {
+        (
+            "terraform",
+            "infracost breakdown --path .",
+            "Install infracost: brew install infracost"
+        )
+    } else if path.join("Pulumi.yaml").exists() {
+        (
+            "pulumi",
+            "# Pulumi doesn't have built-in cost estimation",
+            "Use cloud provider cost calculators"
+        )
+    } else {
+        return Ok(json!({
+            "status": "error",
+            "message": blue_core::voice::error(
+                "No IaC detected",
+                "Need cdk.json, main.tf, or Pulumi.yaml"
+            )
+        }));
+    };
+
+    Ok(json!({
+        "status": "success",
+        "message": blue_core::voice::info(
+            &format!("Cost estimation for {} hours", duration_hours),
+            Some(instructions)
+        ),
+        "iac_type": iac_type,
+        "cost_command": cost_command,
+        "duration_hours": duration_hours,
+        "instructions": instructions
+    }))
+}
+
+fn detect_cdk_stacks(path: &std::path::Path) -> Vec<String> {
+    let mut stacks = Vec::new();
+
+    // Check lib/ for TypeScript stacks
+    let lib_dir = path.join("lib");
+    if lib_dir.is_dir() {
+        if let Ok(entries) = std::fs::read_dir(&lib_dir) {
+            for entry in entries.flatten() {
+                let file_path = entry.path();
+                if file_path.extension().map(|e| e == "ts").unwrap_or(false) {
+                    if let Ok(content) = std::fs::read_to_string(&file_path) {
+                        for line in content.lines() {
+                            if line.contains("extends") && line.contains("Stack") {
+                                if let Some(class_name) = line.split_whitespace()
+                                    .skip_while(|&w| w != "class")
+                                    .nth(1)
+                                {
+                                    let name = class_name.trim_end_matches('{').to_string();
+                                    if !stacks.contains(&name) {
+                                        stacks.push(name);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    stacks
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

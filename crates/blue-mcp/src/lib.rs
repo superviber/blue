@@ -3,6 +3,8 @@
 //! Model Context Protocol server implementation.
 //! Implements JSON-RPC 2.0 over stdio.
 
+#![recursion_limit = "512"]
+
 mod error;
 mod handlers;
 mod server;

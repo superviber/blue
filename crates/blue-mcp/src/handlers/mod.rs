@@ -5,7 +5,11 @@
 pub mod adr;
 pub mod audit;
 pub mod decision;
+pub mod env;
+pub mod guide;
+pub mod lint;
 pub mod pr;
+pub mod prd;
 pub mod release;
 pub mod reminder;
 pub mod rfc;

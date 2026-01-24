@@ -880,6 +880,264 @@ impl BlueServer {
                         },
                         "required": ["title"]
                     }
+                },
+                // Phase 7: PRD tools
+                {
+                    "name": "blue_prd_create",
+                    "description": "Create a Product Requirements Document (PRD). Use when: user-facing features, business requirements, stakeholder sign-off needed.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "cwd": {
+                                "type": "string",
+                                "description": "Current working directory"
+                            },
+                            "title": {
+                                "type": "string",
+                                "description": "Feature title"
+                            },
+                            "problem": {
+                                "type": "string",
+                                "description": "What problem are users experiencing?"
+                            },
+                            "users": {
+                                "type": "string",
+                                "description": "Who are the target users?"
+                            },
+                            "goals": {
+                                "type": "array",
+                                "items": { "type": "string" },
+                                "description": "Business goals"
+                            },
+                            "non_goals": {
+                                "type": "array",
+                                "items": { "type": "string" },
+                                "description": "What this feature explicitly won't do"
+                            },
+                            "stakeholders": {
+                                "type": "array",
+                                "items": { "type": "string" },
+                                "description": "Who requested this, who benefits"
+                            }
+                        },
+                        "required": ["title"]
+                    }
+                },
+                {
+                    "name": "blue_prd_get",
+                    "description": "Get the content of a PRD.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "cwd": {
+                                "type": "string",
+                                "description": "Current working directory"
+                            },
+                            "title": {
+                                "type": "string",
+                                "description": "PRD title"
+                            }
+                        },
+                        "required": ["title"]
+                    }
+                },
+                {
+                    "name": "blue_prd_approve",
+                    "description": "Mark PRD as approved by stakeholders. Transitions: draft -> approved.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "cwd": {
+                                "type": "string",
+                                "description": "Current working directory"
+                            },
+                            "title": {
+                                "type": "string",
+                                "description": "PRD title"
+                            }
+                        },
+                        "required": ["title"]
+                    }
+                },
+                {
+                    "name": "blue_prd_complete",
+                    "description": "Mark PRD as implemented after verification. Checks acceptance criteria before allowing completion.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "cwd": {
+                                "type": "string",
+                                "description": "Current working directory"
+                            },
+                            "title": {
+                                "type": "string",
+                                "description": "PRD title"
+                            }
+                        },
+                        "required": ["title"]
+                    }
+                },
+                {
+                    "name": "blue_prd_list",
+                    "description": "List PRDs by status.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "cwd": {
+                                "type": "string",
+                                "description": "Current working directory"
+                            },
+                            "status": {
+                                "type": "string",
+                                "description": "Filter by status (draft, approved, implemented)"
+                            }
+                        }
+                    }
+                },
+                // Phase 7: Lint tool
+                {
+                    "name": "blue_lint",
+                    "description": "Run code quality checks. Detects project type (Rust, JS, Python, CDK) and runs appropriate linters.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "cwd": {
+                                "type": "string",
+                                "description": "Current working directory"
+                            },
+                            "check": {
+                                "type": "string",
+                                "description": "Specific check to run (default: all)",
+                                "enum": ["format", "lint", "all"]
+                            },
+                            "fix": {
+                                "type": "boolean",
+                                "description": "Auto-fix issues where possible (default: false)"
+                            }
+                        }
+                    }
+                },
+                // Phase 7: Environment isolation tools
+                {
+                    "name": "blue_env_detect",
+                    "description": "Detect external dependencies in a project. Returns S3, database, Redis, IaC configs found.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "cwd": {
+                                "type": "string",
+                                "description": "Current working directory"
+                            }
+                        }
+                    }
+                },
+                {
+                    "name": "blue_env_mock",
+                    "description": "Generate isolated environment configuration. Creates .env.isolated with agent ID and mock configs.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "cwd": {
+                                "type": "string",
+                                "description": "Current working directory"
+                            },
+                            "worktree_path": {
+                                "type": "string",
+                                "description": "Path to worktree (defaults to cwd)"
+                            },
+                            "agent_id": {
+                                "type": "string",
+                                "description": "Custom agent ID (auto-generated if not provided)"
+                            }
+                        }
+                    }
+                },
+                // Phase 7: Onboarding guide
+                {
+                    "name": "blue_guide",
+                    "description": "Interactive onboarding guide for new Blue users.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "cwd": {
+                                "type": "string",
+                                "description": "Current working directory"
+                            },
+                            "action": {
+                                "type": "string",
+                                "description": "Guide action to perform",
+                                "enum": ["start", "resume", "next", "skip", "reset", "status"]
+                            },
+                            "choice": {
+                                "type": "string",
+                                "description": "User's choice from the previous prompt"
+                            }
+                        }
+                    }
+                },
+                // Phase 7: Staging IaC tools
+                {
+                    "name": "blue_staging_create",
+                    "description": "Prepare staging environment deployment from IaC. Detects CDK/Terraform/Pulumi and generates deploy commands.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "cwd": {
+                                "type": "string",
+                                "description": "Current working directory"
+                            },
+                            "stack": {
+                                "type": "string",
+                                "description": "Specific stack to deploy (defaults to all)"
+                            },
+                            "ttl_hours": {
+                                "type": "number",
+                                "description": "TTL in hours for auto-cleanup (default: 24)"
+                            },
+                            "dry_run": {
+                                "type": "boolean",
+                                "description": "Just show command without running (default: true)"
+                            }
+                        }
+                    }
+                },
+                {
+                    "name": "blue_staging_destroy",
+                    "description": "Destroy a staging environment. Generates destroy command for detected IaC type.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "cwd": {
+                                "type": "string",
+                                "description": "Current working directory"
+                            },
+                            "name": {
+                                "type": "string",
+                                "description": "Deployment name to destroy"
+                            },
+                            "dry_run": {
+                                "type": "boolean",
+                                "description": "Just show command without executing (default: true)"
+                            }
+                        }
+                    }
+                },
+                {
+                    "name": "blue_staging_cost",
+                    "description": "Estimate costs for staging environment. Uses Infracost for Terraform/CDK.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "cwd": {
+                                "type": "string",
+                                "description": "Current working directory"
+                            },
+                            "duration_hours": {
+                                "type": "number",
+                                "description": "Duration in hours for cost calculation (default: 24)"
+                            }
+                        }
+                    }
                 }
             ]
         }))
@@ -940,6 +1198,23 @@ impl BlueServer {
             "blue_audit" => self.handle_audit(&call.arguments),
             "blue_rfc_complete" => self.handle_rfc_complete(&call.arguments),
             "blue_worktree_cleanup" => self.handle_worktree_cleanup(&call.arguments),
+            // Phase 7: PRD handlers
+            "blue_prd_create" => self.handle_prd_create(&call.arguments),
+            "blue_prd_get" => self.handle_prd_get(&call.arguments),
+            "blue_prd_approve" => self.handle_prd_approve(&call.arguments),
+            "blue_prd_complete" => self.handle_prd_complete(&call.arguments),
+            "blue_prd_list" => self.handle_prd_list(&call.arguments),
+            // Phase 7: Lint handler
+            "blue_lint" => self.handle_lint(&call.arguments),
+            // Phase 7: Environment handlers
+            "blue_env_detect" => self.handle_env_detect(&call.arguments),
+            "blue_env_mock" => self.handle_env_mock(&call.arguments),
+            // Phase 7: Guide handler
+            "blue_guide" => self.handle_guide(&call.arguments),
+            // Phase 7: Staging IaC handlers
+            "blue_staging_create" => self.handle_staging_create(&call.arguments),
+            "blue_staging_destroy" => self.handle_staging_destroy(&call.arguments),
+            "blue_staging_cost" => self.handle_staging_cost(&call.arguments),
             _ => Err(ServerError::ToolNotFound(call.name)),
         }?;
 
@@ -1493,6 +1768,96 @@ impl BlueServer {
         let args = args.as_ref().ok_or(ServerError::InvalidParams)?;
         let state = self.ensure_state()?;
         crate::handlers::worktree::handle_cleanup(state, args)
+    }
+
+    // Phase 7: PRD handlers
+
+    fn handle_prd_create(&mut self, args: &Option<Value>) -> Result<Value, ServerError> {
+        let args = args.as_ref().ok_or(ServerError::InvalidParams)?;
+        let state = self.ensure_state()?;
+        crate::handlers::prd::handle_create(state, args)
+    }
+
+    fn handle_prd_get(&mut self, args: &Option<Value>) -> Result<Value, ServerError> {
+        let args = args.as_ref().ok_or(ServerError::InvalidParams)?;
+        let state = self.ensure_state()?;
+        crate::handlers::prd::handle_get(state, args)
+    }
+
+    fn handle_prd_approve(&mut self, args: &Option<Value>) -> Result<Value, ServerError> {
+        let args = args.as_ref().ok_or(ServerError::InvalidParams)?;
+        let state = self.ensure_state()?;
+        crate::handlers::prd::handle_approve(state, args)
+    }
+
+    fn handle_prd_complete(&mut self, args: &Option<Value>) -> Result<Value, ServerError> {
+        let args = args.as_ref().ok_or(ServerError::InvalidParams)?;
+        let state = self.ensure_state()?;
+        crate::handlers::prd::handle_complete(state, args)
+    }
+
+    fn handle_prd_list(&mut self, args: &Option<Value>) -> Result<Value, ServerError> {
+        let empty = json!({});
+        let args = args.as_ref().unwrap_or(&empty);
+        let state = self.ensure_state()?;
+        crate::handlers::prd::handle_list(state, args)
+    }
+
+    // Phase 7: Lint handler
+
+    fn handle_lint(&mut self, args: &Option<Value>) -> Result<Value, ServerError> {
+        let empty = json!({});
+        let args = args.as_ref().unwrap_or(&empty);
+        let state = self.ensure_state()?;
+        crate::handlers::lint::handle_lint(args, &state.home.root)
+    }
+
+    // Phase 7: Environment handlers
+
+    fn handle_env_detect(&mut self, args: &Option<Value>) -> Result<Value, ServerError> {
+        let empty = json!({});
+        let args = args.as_ref().unwrap_or(&empty);
+        let state = self.ensure_state()?;
+        crate::handlers::env::handle_detect(args, &state.home.root)
+    }
+
+    fn handle_env_mock(&mut self, args: &Option<Value>) -> Result<Value, ServerError> {
+        let empty = json!({});
+        let args = args.as_ref().unwrap_or(&empty);
+        let state = self.ensure_state()?;
+        crate::handlers::env::handle_mock(args, &state.home.root)
+    }
+
+    // Phase 7: Guide handler
+
+    fn handle_guide(&mut self, args: &Option<Value>) -> Result<Value, ServerError> {
+        let empty = json!({});
+        let args = args.as_ref().unwrap_or(&empty);
+        let state = self.ensure_state()?;
+        crate::handlers::guide::handle_guide(args, &state.home.data_path)
+    }
+
+    // Phase 7: Staging IaC handlers
+
+    fn handle_staging_create(&mut self, args: &Option<Value>) -> Result<Value, ServerError> {
+        let empty = json!({});
+        let args = args.as_ref().unwrap_or(&empty);
+        let state = self.ensure_state()?;
+        crate::handlers::staging::handle_create(args, &state.home.root)
+    }
+
+    fn handle_staging_destroy(&mut self, args: &Option<Value>) -> Result<Value, ServerError> {
+        let empty = json!({});
+        let args = args.as_ref().unwrap_or(&empty);
+        let state = self.ensure_state()?;
+        crate::handlers::staging::handle_destroy(args, &state.home.root)
+    }
+
+    fn handle_staging_cost(&mut self, args: &Option<Value>) -> Result<Value, ServerError> {
+        let empty = json!({});
+        let args = args.as_ref().unwrap_or(&empty);
+        let state = self.ensure_state()?;
+        crate::handlers::staging::handle_cost(args, &state.home.root)
     }
 }
 
