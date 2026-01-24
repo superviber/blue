@@ -13,6 +13,7 @@ path = "src/main.rs"
 [dependencies]
 blue-core.workspace = true
 blue-mcp.workspace = true
+blue-ollama.workspace = true
 clap.workspace = true
 anyhow.workspace = true
 tokio.workspace = true

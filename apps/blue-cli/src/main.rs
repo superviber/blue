@@ -1530,6 +1530,8 @@ async fn detect_ollama_model() -> Option<String> {
 
 async fn handle_index_command(command: IndexCommands) -> Result<()> {
     use blue_core::store::DocumentStore;
+    use blue_core::{Indexer, IndexerConfig, is_indexable_file, LocalLlmConfig};
+    use blue_ollama::OllamaLlm;
     use std::path::Path;
 
     // Get the .blue database path
@@ -1545,21 +1547,64 @@ async fn handle_index_command(command: IndexCommands) -> Result<()> {
 
     match command {
         IndexCommands::All { path, model } => {
-            let target = path.as_deref().unwrap_or(".");
+            let target_path = path.as_deref().unwrap_or(".");
             let model_name = model.as_deref().unwrap_or("qwen2.5:3b");
 
-            println!("Indexing all files in '{}' with model '{}'...", target, model_name);
-            println!("(Full indexing requires Ollama running with the model pulled)");
+            // Collect all indexable files
+            let files = collect_indexable_files(Path::new(target_path))?;
+            println!("Found {} indexable files in '{}'", files.len(), target_path);
 
-            // For now, show what would be indexed
-            let count = count_indexable_files(Path::new(target))?;
-            println!("Found {} indexable files.", count);
-            println!("\nTo complete indexing:");
-            println!("  1. Ensure Ollama is running: ollama serve");
-            println!("  2. Pull the model: ollama pull {}", model_name);
-            println!("  3. Run this command again");
+            if files.is_empty() {
+                println!("No files to index.");
+                return Ok(());
+            }
 
-            // TODO: Implement actual indexing with Ollama integration
+            // Try to connect to Ollama
+            let llm_config = LocalLlmConfig {
+                model: model_name.to_string(),
+                use_external: true, // Use existing Ollama instance
+                ..Default::default()
+            };
+
+            let llm = OllamaLlm::new(&llm_config);
+            if let Err(e) = llm.start() {
+                println!("Ollama not available: {}", e);
+                println!("\nTo index files:");
+                println!("  1. Start Ollama: ollama serve");
+                println!("  2. Pull the model: ollama pull {}", model_name);
+                println!("  3. Run this command again");
+                return Ok(());
+            }
+
+            println!("Indexing with model '{}'...\n", model_name);
+
+            let indexer_config = IndexerConfig {
+                model: model_name.to_string(),
+                ..Default::default()
+            };
+            let indexer = Indexer::new(llm, indexer_config);
+
+            let mut indexed = 0;
+            let mut errors = 0;
+
+            for file_path in &files {
+                let path = Path::new(file_path);
+                print!("  {} ... ", file_path);
+
+                match indexer.index_and_store(path, &store) {
+                    Ok(result) => {
+                        let partial = if result.is_partial { " (partial)" } else { "" };
+                        println!("{} symbols{}", result.symbols.len(), partial);
+                        indexed += 1;
+                    }
+                    Err(e) => {
+                        println!("error: {}", e);
+                        errors += 1;
+                    }
+                }
+            }
+
+            println!("\nIndexed {} files ({} errors)", indexed, errors);
         }
 
         IndexCommands::Diff { model } => {
@@ -1570,41 +1615,109 @@ async fn handle_index_command(command: IndexCommands) -> Result<()> {
                 .args(["diff", "--cached", "--name-only"])
                 .output()?;
 
-            let staged_files: Vec<&str> = std::str::from_utf8(&output.stdout)?
+            let staged_files: Vec<String> = std::str::from_utf8(&output.stdout)?
                 .lines()
                 .filter(|l| !l.is_empty())
+                .filter(|l| is_indexable_file(Path::new(l)))
+                .map(|s| s.to_string())
                 .collect();
 
             if staged_files.is_empty() {
-                println!("No staged files to index.");
+                println!("No indexable staged files.");
                 return Ok(());
             }
 
-            println!("Indexing {} staged file(s) with '{}'...", staged_files.len(), model_name);
-            for file in &staged_files {
-                println!("  {}", file);
+            // Try to connect to Ollama
+            let llm_config = LocalLlmConfig {
+                model: model_name.to_string(),
+                use_external: true,
+                ..Default::default()
+            };
+
+            let llm = OllamaLlm::new(&llm_config);
+            if let Err(_) = llm.start() {
+                // Silently skip if Ollama not available (pre-commit hook shouldn't block)
+                return Ok(());
             }
 
-            // TODO: Implement actual indexing
+            println!("Indexing {} staged file(s)...", staged_files.len());
+
+            let indexer_config = IndexerConfig {
+                model: model_name.to_string(),
+                ..Default::default()
+            };
+            let indexer = Indexer::new(llm, indexer_config);
+
+            for file_path in &staged_files {
+                let path = Path::new(file_path);
+                if path.exists() {
+                    match indexer.index_and_store(path, &store) {
+                        Ok(result) => {
+                            println!("  {} - {} symbols", file_path, result.symbols.len());
+                        }
+                        Err(e) => {
+                            println!("  {} - error: {}", file_path, e);
+                        }
+                    }
+                }
+            }
         }
 
         IndexCommands::File { path, model } => {
             let model_name = model.as_deref().unwrap_or("qwen2.5:3b");
+            let file_path = Path::new(&path);
 
-            if !Path::new(&path).exists() {
+            if !file_path.exists() {
                 println!("File not found: {}", path);
+                return Ok(());
+            }
+
+            // Try to connect to Ollama
+            let llm_config = LocalLlmConfig {
+                model: model_name.to_string(),
+                use_external: true,
+                ..Default::default()
+            };
+
+            let llm = OllamaLlm::new(&llm_config);
+            if let Err(e) = llm.start() {
+                println!("Ollama not available: {}", e);
+                println!("\nStart Ollama first: ollama serve");
                 return Ok(());
             }
 
             println!("Indexing '{}' with '{}'...", path, model_name);
 
-            // TODO: Implement single file indexing
+            let indexer_config = IndexerConfig {
+                model: model_name.to_string(),
+                ..Default::default()
+            };
+            let indexer = Indexer::new(llm, indexer_config);
+
+            match indexer.index_and_store(file_path, &store) {
+                Ok(result) => {
+                    println!("\nSummary: {}", result.summary.unwrap_or_default());
+                    if let Some(rel) = &result.relationships {
+                        println!("\nRelationships:\n{}", rel);
+                    }
+                    println!("\nSymbols ({}):", result.symbols.len());
+                    for sym in &result.symbols {
+                        let lines = match (sym.start_line, sym.end_line) {
+                            (Some(s), Some(e)) => format!(" (lines {}-{})", s, e),
+                            (Some(s), None) => format!(" (line {})", s),
+                            _ => String::new(),
+                        };
+                        println!("  {} ({}){}", sym.name, sym.kind, lines);
+                    }
+                }
+                Err(e) => {
+                    println!("Error: {}", e);
+                }
+            }
         }
 
         IndexCommands::Refresh { model } => {
             let model_name = model.as_deref().unwrap_or("qwen2.5:3b");
-
-            // Get current realm (default to "default" for single-repo)
             let realm = "default";
 
             let (file_count, symbol_count) = store.get_index_stats(realm)?;
@@ -1615,10 +1728,67 @@ async fn handle_index_command(command: IndexCommands) -> Result<()> {
                 return Ok(());
             }
 
-            println!("Checking for stale entries...");
-            println!("(Refresh with model '{}')", model_name);
+            // Get all indexed files and check which are stale
+            let indexed_files = store.list_file_index(realm, None)?;
+            let mut stale_files = Vec::new();
 
-            // TODO: Implement refresh logic - compare hashes
+            for entry in &indexed_files {
+                let path = Path::new(&entry.file_path);
+                if path.exists() {
+                    if let Ok(content) = std::fs::read_to_string(path) {
+                        let current_hash = hash_file_content(&content);
+                        if current_hash != entry.file_hash {
+                            stale_files.push(entry.file_path.clone());
+                        }
+                    }
+                }
+            }
+
+            if stale_files.is_empty() {
+                println!("All indexed files are up to date.");
+                return Ok(());
+            }
+
+            println!("Found {} stale file(s)", stale_files.len());
+
+            // Try to connect to Ollama
+            let llm_config = LocalLlmConfig {
+                model: model_name.to_string(),
+                use_external: true,
+                ..Default::default()
+            };
+
+            let llm = OllamaLlm::new(&llm_config);
+            if let Err(e) = llm.start() {
+                println!("Ollama not available: {}", e);
+                println!("\nStale files:");
+                for f in &stale_files {
+                    println!("  {}", f);
+                }
+                return Ok(());
+            }
+
+            println!("Re-indexing stale files with '{}'...\n", model_name);
+
+            let indexer_config = IndexerConfig {
+                model: model_name.to_string(),
+                ..Default::default()
+            };
+            let indexer = Indexer::new(llm, indexer_config);
+
+            for file_path in &stale_files {
+                let path = Path::new(file_path);
+                print!("  {} ... ", file_path);
+
+                match indexer.index_and_store(path, &store) {
+                    Ok(result) => {
+                        println!("{} symbols", result.symbols.len());
+                    }
+                    Err(e) => {
+                        println!("error: {}", e);
+                    }
+                }
+            }
         }
 
         IndexCommands::InstallHook => {
@@ -1667,6 +1837,51 @@ blue index diff 2>/dev/null || true
     }
 
     Ok(())
+}
+
+/// Collect all indexable files in a directory
+fn collect_indexable_files(dir: &std::path::Path) -> Result<Vec<String>> {
+    use blue_core::{is_indexable_file, should_skip_dir};
+    use std::fs;
+
+    let mut files = Vec::new();
+
+    fn walk_dir(dir: &std::path::Path, files: &mut Vec<String>) -> Result<()> {
+        if !dir.is_dir() {
+            return Ok(());
+        }
+
+        for entry in fs::read_dir(dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+
+            if path.is_dir() {
+                if !should_skip_dir(name) {
+                    walk_dir(&path, files)?;
+                }
+            } else if is_indexable_file(&path) {
+                if let Some(s) = path.to_str() {
+                    files.push(s.to_string());
+                }
+            }
+        }
+        Ok(())
+    }
+
+    walk_dir(dir, &mut files)?;
+    files.sort();
+    Ok(files)
+}
+
+/// Hash file content for staleness detection
+fn hash_file_content(content: &str) -> String {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = DefaultHasher::new();
+    content.hash(&mut hasher);
+    format!("{:x}", hasher.finish())
 }
 
 async fn handle_search_command(query: &str, symbols_only: bool, limit: usize) -> Result<()> {
@@ -1797,50 +2012,4 @@ async fn handle_impact_command(file: &str) -> Result<()> {
     }
 
     Ok(())
-}
-
-fn count_indexable_files(dir: &std::path::Path) -> Result<usize> {
-    use std::fs;
-    use std::path::Path;
-
-    let mut count = 0;
-
-    // File extensions we care about
-    let extensions: &[&str] = &[
-        "rs", "py", "js", "ts", "tsx", "jsx", "go", "java", "c", "cpp", "h", "hpp",
-        "rb", "php", "swift", "kt", "scala", "clj", "ex", "exs", "erl", "hs",
-        "ml", "mli", "sql", "sh", "bash", "zsh", "yaml", "yml", "toml", "json",
-    ];
-
-    // Directories to skip
-    let skip_dirs: &[&str] = &[
-        "node_modules", "target", ".git", "__pycache__", "venv", ".venv",
-        "dist", "build", ".next", ".nuxt", "vendor", ".cargo",
-    ];
-
-    fn walk_dir(dir: &Path, extensions: &[&str], skip_dirs: &[&str], count: &mut usize) -> Result<()> {
-        if !dir.is_dir() {
-            return Ok(());
-        }
-
-        for entry in fs::read_dir(dir)? {
-            let entry = entry?;
-            let path = entry.path();
-            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-
-            if path.is_dir() {
-                if !skip_dirs.contains(&name) && !name.starts_with('.') {
-                    walk_dir(&path, extensions, skip_dirs, count)?;
-                }
-            } else if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-                if extensions.contains(&ext) {
-                    *count += 1;
-                }
-            }
-        }
-        Ok(())
-    }
-
-    walk_dir(dir, extensions, skip_dirs, &mut count)?;
-    Ok(count)
 }

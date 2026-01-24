@@ -314,14 +314,14 @@ blue impact src/domain.rs
 
 - [x] Add schema to blue.db (file_index, symbol_index, FTS5 tables)
 - [x] Create versioned indexing prompt for structured YAML extraction
-- [ ] Implement Ollama integration with qwen2.5:3b default
+- [x] Implement Ollama integration with qwen2.5:3b default
 - [x] Implement `blue index --all` for bootstrap
 - [x] Implement `blue index --diff` for staged files
 - [x] Implement `blue index --file` for single-file updates
 - [x] Implement `blue index --install-hook` for git hook setup
 - [x] Implement `blue index --refresh` for stale entry updates
 - [x] Implement `blue index status` for freshness reporting
-- [ ] Add large file handling (>1000 lines warning)
+- [x] Add large file handling (>1000 lines warning)
 - [x] Implement `blue search` with FTS5 backend
 - [x] Implement `blue impact` for dependency queries
 - [x] Add MCP tools (5 tools)
