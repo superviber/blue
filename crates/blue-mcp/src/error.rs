@@ -21,6 +21,12 @@ pub enum ServerError {
 
     #[error("State load failed: {0}")]
     StateLoadFailed(String),
+
+    #[error("Command failed: {0}")]
+    CommandFailed(String),
+
+    #[error("Not found: {0}")]
+    NotFound(String),
 }
 
 impl ServerError {
@@ -33,6 +39,8 @@ impl ServerError {
             ServerError::ToolNotFound(_) => -32601,
             ServerError::BlueNotDetected => -32000,
             ServerError::StateLoadFailed(_) => -32001,
+            ServerError::CommandFailed(_) => -32002,
+            ServerError::NotFound(_) => -32003,
         }
     }
 }

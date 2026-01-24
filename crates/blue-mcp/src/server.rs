@@ -469,6 +469,134 @@ impl BlueServer {
                         },
                         "required": ["title"]
                     }
+                },
+                {
+                    "name": "blue_pr_create",
+                    "description": "Create a PR with enforced base branch (develop, not main).",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "cwd": {
+                                "type": "string",
+                                "description": "Current working directory"
+                            },
+                            "title": {
+                                "type": "string",
+                                "description": "PR title"
+                            },
+                            "base": {
+                                "type": "string",
+                                "description": "Base branch (default: develop)"
+                            },
+                            "body": {
+                                "type": "string",
+                                "description": "PR body (markdown)"
+                            },
+                            "draft": {
+                                "type": "boolean",
+                                "description": "Create as draft PR"
+                            }
+                        },
+                        "required": ["title"]
+                    }
+                },
+                {
+                    "name": "blue_pr_verify",
+                    "description": "Verify test plan checkboxes in a PR.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "cwd": {
+                                "type": "string",
+                                "description": "Current working directory"
+                            },
+                            "pr_number": {
+                                "type": "number",
+                                "description": "PR number (auto-detect from branch if not provided)"
+                            }
+                        }
+                    }
+                },
+                {
+                    "name": "blue_pr_check_item",
+                    "description": "Mark a test plan item as verified in the PR.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "cwd": {
+                                "type": "string",
+                                "description": "Current working directory"
+                            },
+                            "pr_number": {
+                                "type": "number",
+                                "description": "PR number"
+                            },
+                            "item": {
+                                "type": "string",
+                                "description": "Item index (1-based) or substring to match"
+                            },
+                            "verified_by": {
+                                "type": "string",
+                                "description": "How the item was verified"
+                            }
+                        },
+                        "required": ["item"]
+                    }
+                },
+                {
+                    "name": "blue_pr_check_approvals",
+                    "description": "Check if PR has been approved by reviewers.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "cwd": {
+                                "type": "string",
+                                "description": "Current working directory"
+                            },
+                            "pr_number": {
+                                "type": "number",
+                                "description": "PR number"
+                            }
+                        }
+                    }
+                },
+                {
+                    "name": "blue_pr_merge",
+                    "description": "Squash-merge a PR after verification and approval.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "cwd": {
+                                "type": "string",
+                                "description": "Current working directory"
+                            },
+                            "pr_number": {
+                                "type": "number",
+                                "description": "PR number"
+                            },
+                            "squash": {
+                                "type": "boolean",
+                                "description": "Use squash merge (default: true)"
+                            }
+                        }
+                    }
+                },
+                {
+                    "name": "blue_release_create",
+                    "description": "Create a release with semantic versioning.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "cwd": {
+                                "type": "string",
+                                "description": "Current working directory"
+                            },
+                            "version": {
+                                "type": "string",
+                                "description": "Override suggested version (e.g., '2.1.0')"
+                            }
+                        }
+                    }
                 }
             ]
         }))
@@ -506,6 +634,13 @@ impl BlueServer {
             "blue_worktree_create" => self.handle_worktree_create(&call.arguments),
             "blue_worktree_list" => self.handle_worktree_list(&call.arguments),
             "blue_worktree_remove" => self.handle_worktree_remove(&call.arguments),
+            // Phase 3: PR and Release handlers
+            "blue_pr_create" => self.handle_pr_create(&call.arguments),
+            "blue_pr_verify" => self.handle_pr_verify(&call.arguments),
+            "blue_pr_check_item" => self.handle_pr_check_item(&call.arguments),
+            "blue_pr_check_approvals" => self.handle_pr_check_approvals(&call.arguments),
+            "blue_pr_merge" => self.handle_pr_merge(&call.arguments),
+            "blue_release_create" => self.handle_release_create(&call.arguments),
             _ => Err(ServerError::ToolNotFound(call.name)),
         }?;
 
@@ -934,6 +1069,44 @@ impl BlueServer {
         let args = args.as_ref().ok_or(ServerError::InvalidParams)?;
         let state = self.ensure_state()?;
         crate::handlers::worktree::handle_remove(state, args)
+    }
+
+    // Phase 3: PR and Release handlers
+
+    fn handle_pr_create(&mut self, args: &Option<Value>) -> Result<Value, ServerError> {
+        let args = args.as_ref().ok_or(ServerError::InvalidParams)?;
+        let state = self.ensure_state()?;
+        crate::handlers::pr::handle_create(state, args)
+    }
+
+    fn handle_pr_verify(&mut self, args: &Option<Value>) -> Result<Value, ServerError> {
+        let args = args.as_ref().ok_or(ServerError::InvalidParams)?;
+        let state = self.ensure_state()?;
+        crate::handlers::pr::handle_verify(state, args)
+    }
+
+    fn handle_pr_check_item(&mut self, args: &Option<Value>) -> Result<Value, ServerError> {
+        let args = args.as_ref().ok_or(ServerError::InvalidParams)?;
+        let state = self.ensure_state()?;
+        crate::handlers::pr::handle_check_item(state, args)
+    }
+
+    fn handle_pr_check_approvals(&mut self, args: &Option<Value>) -> Result<Value, ServerError> {
+        let args = args.as_ref().ok_or(ServerError::InvalidParams)?;
+        let state = self.ensure_state()?;
+        crate::handlers::pr::handle_check_approvals(state, args)
+    }
+
+    fn handle_pr_merge(&mut self, args: &Option<Value>) -> Result<Value, ServerError> {
+        let args = args.as_ref().ok_or(ServerError::InvalidParams)?;
+        let state = self.ensure_state()?;
+        crate::handlers::pr::handle_merge(state, args)
+    }
+
+    fn handle_release_create(&mut self, args: &Option<Value>) -> Result<Value, ServerError> {
+        let args = args.as_ref().ok_or(ServerError::InvalidParams)?;
+        let state = self.ensure_state()?;
+        crate::handlers::release::handle_create(state, args)
     }
 }
 
