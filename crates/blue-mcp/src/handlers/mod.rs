@@ -9,4 +9,5 @@ pub mod release;
 pub mod reminder;
 pub mod session;
 pub mod spike;
+pub mod staging;
 pub mod worktree;

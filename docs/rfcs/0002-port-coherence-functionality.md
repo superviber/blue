@@ -231,11 +231,21 @@ blue/
 - [x] Blue's voice in all error messages
 - [x] 21 tests passing
 
-### Phase 5: Pending
+### Phase 5: Staging Locks - COMPLETE
 
-Remaining tools to port:
-- Staging environment tools
-- Code search/indexing
+- [x] store.rs - Added staging_locks and staging_lock_queue tables
+- [x] handlers/staging.rs - Lock/unlock/status/cleanup for multi-agent coordination
+- [x] 4 new MCP tools: blue_staging_lock, blue_staging_unlock,
+      blue_staging_status, blue_staging_cleanup
+- [x] Total: 32 MCP tools
+- [x] Blue's voice in all error messages
+- [x] 24 tests passing
+
+### Phase 6: Pending (Future)
+
+Remaining tools to port (if needed):
+- Code search/indexing (requires tree-sitter)
+- IaC detection and staging deployment tracking
 
 ## Test Plan
 

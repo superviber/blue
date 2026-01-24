@@ -22,6 +22,6 @@ pub mod workflow;
 pub use documents::*;
 pub use repo::{detect_blue, BlueHome, RepoError, WorktreeInfo};
 pub use state::{ItemType, ProjectState, StateError, StatusSummary, WorkItem};
-pub use store::{DocType, Document, DocumentStore, LinkType, Reminder, ReminderStatus, SearchResult, Session, SessionType, StoreError, Task as StoreTask, TaskProgress, Worktree};
+pub use store::{DocType, Document, DocumentStore, LinkType, Reminder, ReminderStatus, SearchResult, Session, SessionType, StagingLock, StagingLockQueueEntry, StagingLockResult, StoreError, Task as StoreTask, TaskProgress, Worktree};
 pub use voice::*;
 pub use workflow::{PrdStatus, RfcStatus, SpikeOutcome as WorkflowSpikeOutcome, SpikeStatus, WorkflowError};

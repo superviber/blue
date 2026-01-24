@@ -749,6 +749,88 @@ impl BlueServer {
                             }
                         }
                     }
+                },
+                {
+                    "name": "blue_staging_lock",
+                    "description": "Acquire exclusive access to a staging resource.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "cwd": {
+                                "type": "string",
+                                "description": "Current working directory"
+                            },
+                            "resource": {
+                                "type": "string",
+                                "description": "Resource to lock (e.g., 'migration', 'staging-db')"
+                            },
+                            "locked_by": {
+                                "type": "string",
+                                "description": "Identifier for lock holder (RFC title or PR number)"
+                            },
+                            "agent_id": {
+                                "type": "string",
+                                "description": "Blue agent ID (from .env.isolated)"
+                            },
+                            "duration_minutes": {
+                                "type": "number",
+                                "description": "Lock duration in minutes (default 30)"
+                            }
+                        },
+                        "required": ["resource", "locked_by"]
+                    }
+                },
+                {
+                    "name": "blue_staging_unlock",
+                    "description": "Release a staging lock.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "cwd": {
+                                "type": "string",
+                                "description": "Current working directory"
+                            },
+                            "resource": {
+                                "type": "string",
+                                "description": "Resource to unlock"
+                            },
+                            "locked_by": {
+                                "type": "string",
+                                "description": "Identifier that acquired the lock"
+                            }
+                        },
+                        "required": ["resource", "locked_by"]
+                    }
+                },
+                {
+                    "name": "blue_staging_status",
+                    "description": "Check staging lock status.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "cwd": {
+                                "type": "string",
+                                "description": "Current working directory"
+                            },
+                            "resource": {
+                                "type": "string",
+                                "description": "Specific resource to check (omit for all locks)"
+                            }
+                        }
+                    }
+                },
+                {
+                    "name": "blue_staging_cleanup",
+                    "description": "Clean up expired staging resources.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "cwd": {
+                                "type": "string",
+                                "description": "Current working directory"
+                            }
+                        }
+                    }
                 }
             ]
         }))
@@ -800,6 +882,11 @@ impl BlueServer {
             "blue_reminder_list" => self.handle_reminder_list(&call.arguments),
             "blue_reminder_snooze" => self.handle_reminder_snooze(&call.arguments),
             "blue_reminder_clear" => self.handle_reminder_clear(&call.arguments),
+            // Phase 5: Staging handlers
+            "blue_staging_lock" => self.handle_staging_lock(&call.arguments),
+            "blue_staging_unlock" => self.handle_staging_unlock(&call.arguments),
+            "blue_staging_status" => self.handle_staging_status(&call.arguments),
+            "blue_staging_cleanup" => self.handle_staging_cleanup(&call.arguments),
             _ => Err(ServerError::ToolNotFound(call.name)),
         }?;
 
@@ -1306,6 +1393,34 @@ impl BlueServer {
         let args = args.as_ref().ok_or(ServerError::InvalidParams)?;
         let state = self.ensure_state()?;
         crate::handlers::reminder::handle_clear(state, args)
+    }
+
+    // Phase 5: Staging handlers
+
+    fn handle_staging_lock(&mut self, args: &Option<Value>) -> Result<Value, ServerError> {
+        let args = args.as_ref().ok_or(ServerError::InvalidParams)?;
+        let state = self.ensure_state()?;
+        crate::handlers::staging::handle_lock(state, args)
+    }
+
+    fn handle_staging_unlock(&mut self, args: &Option<Value>) -> Result<Value, ServerError> {
+        let args = args.as_ref().ok_or(ServerError::InvalidParams)?;
+        let state = self.ensure_state()?;
+        crate::handlers::staging::handle_unlock(state, args)
+    }
+
+    fn handle_staging_status(&mut self, args: &Option<Value>) -> Result<Value, ServerError> {
+        let empty = json!({});
+        let args = args.as_ref().unwrap_or(&empty);
+        let state = self.ensure_state()?;
+        crate::handlers::staging::handle_status(state, args)
+    }
+
+    fn handle_staging_cleanup(&mut self, args: &Option<Value>) -> Result<Value, ServerError> {
+        let empty = json!({});
+        let args = args.as_ref().unwrap_or(&empty);
+        let state = self.ensure_state()?;
+        crate::handlers::staging::handle_cleanup(state, args)
     }
 }
 

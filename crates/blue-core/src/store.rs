@@ -103,6 +103,27 @@ const SCHEMA: &str = r#"
 
     CREATE INDEX IF NOT EXISTS idx_reminders_status ON reminders(status);
     CREATE INDEX IF NOT EXISTS idx_reminders_due ON reminders(due_date) WHERE status = 'pending';
+
+    CREATE TABLE IF NOT EXISTS staging_locks (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        resource TEXT NOT NULL UNIQUE,
+        locked_by TEXT NOT NULL,
+        agent_id TEXT,
+        locked_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS staging_lock_queue (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        resource TEXT NOT NULL,
+        requester TEXT NOT NULL,
+        agent_id TEXT,
+        requested_at TEXT NOT NULL,
+        FOREIGN KEY (resource) REFERENCES staging_locks(resource) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_staging_locks_resource ON staging_locks(resource);
+    CREATE INDEX IF NOT EXISTS idx_staging_queue_resource ON staging_lock_queue(resource);
 "#;
 
 /// FTS5 schema for full-text search
@@ -364,6 +385,40 @@ impl Reminder {
             resolution: None,
         }
     }
+}
+
+/// A staging resource lock
+#[derive(Debug, Clone)]
+pub struct StagingLock {
+    pub id: Option<i64>,
+    pub resource: String,
+    pub locked_by: String,
+    pub agent_id: Option<String>,
+    pub locked_at: String,
+    pub expires_at: String,
+}
+
+/// A queued request for a staging lock
+#[derive(Debug, Clone)]
+pub struct StagingLockQueueEntry {
+    pub id: Option<i64>,
+    pub resource: String,
+    pub requester: String,
+    pub agent_id: Option<String>,
+    pub requested_at: String,
+}
+
+/// Result of attempting to acquire a staging lock
+#[derive(Debug)]
+pub enum StagingLockResult {
+    /// Lock was acquired
+    Acquired { expires_at: String },
+    /// Lock is held by someone else, added to queue
+    Queued {
+        position: usize,
+        current_holder: String,
+        expires_at: String,
+    },
 }
 
 /// Store errors - in Blue's voice
@@ -1366,6 +1421,215 @@ impl DocumentStore {
                 return Err(StoreError::NotFound(format!("reminder #{}", id)));
             }
             Ok(())
+        })
+    }
+
+    // ==================== Staging Lock Operations ====================
+
+    /// Acquire a staging lock or join queue
+    pub fn acquire_staging_lock(
+        &self,
+        resource: &str,
+        locked_by: &str,
+        agent_id: Option<&str>,
+        duration_minutes: i64,
+    ) -> Result<StagingLockResult, StoreError> {
+        self.with_retry(|| {
+            let now = chrono::Utc::now();
+            let now_str = now.to_rfc3339();
+            let expires_at = now + chrono::Duration::minutes(duration_minutes);
+            let expires_str = expires_at.to_rfc3339();
+
+            // First, clean up expired locks
+            self.conn.execute(
+                "DELETE FROM staging_locks WHERE expires_at < ?1",
+                params![now_str],
+            )?;
+
+            // Check if lock exists
+            let existing: Option<(String, String)> = self.conn
+                .query_row(
+                    "SELECT locked_by, expires_at FROM staging_locks WHERE resource = ?1",
+                    params![resource],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()?;
+
+            match existing {
+                Some((holder, holder_expires)) => {
+                    // Lock exists, add to queue
+                    self.conn.execute(
+                        "INSERT INTO staging_lock_queue (resource, requester, agent_id, requested_at)
+                         VALUES (?1, ?2, ?3, ?4)",
+                        params![resource, locked_by, agent_id, now_str],
+                    )?;
+
+                    // Get queue position
+                    let position: i64 = self.conn.query_row(
+                        "SELECT COUNT(*) FROM staging_lock_queue WHERE resource = ?1",
+                        params![resource],
+                        |row| row.get(0),
+                    )?;
+
+                    Ok(StagingLockResult::Queued {
+                        position: position as usize,
+                        current_holder: holder,
+                        expires_at: holder_expires,
+                    })
+                }
+                None => {
+                    // No lock, acquire it
+                    self.conn.execute(
+                        "INSERT INTO staging_locks (resource, locked_by, agent_id, locked_at, expires_at)
+                         VALUES (?1, ?2, ?3, ?4, ?5)",
+                        params![resource, locked_by, agent_id, now_str, expires_str],
+                    )?;
+
+                    Ok(StagingLockResult::Acquired {
+                        expires_at: expires_str,
+                    })
+                }
+            }
+        })
+    }
+
+    /// Release a staging lock
+    pub fn release_staging_lock(&self, resource: &str, locked_by: &str) -> Result<Option<String>, StoreError> {
+        self.with_retry(|| {
+            // Verify the lock is held by the requester
+            let holder: Option<String> = self.conn
+                .query_row(
+                    "SELECT locked_by FROM staging_locks WHERE resource = ?1",
+                    params![resource],
+                    |row| row.get(0),
+                )
+                .optional()?;
+
+            match holder {
+                Some(h) if h == locked_by => {
+                    // Get next in queue BEFORE deleting lock (CASCADE would remove queue entries)
+                    let next: Option<String> = self.conn
+                        .query_row(
+                            "SELECT requester FROM staging_lock_queue WHERE resource = ?1 ORDER BY requested_at ASC LIMIT 1",
+                            params![resource],
+                            |row| row.get(0),
+                        )
+                        .optional()?;
+
+                    // Release the lock (CASCADE will clean up queue)
+                    self.conn.execute(
+                        "DELETE FROM staging_locks WHERE resource = ?1",
+                        params![resource],
+                    )?;
+
+                    Ok(next)
+                }
+                Some(_) => Err(StoreError::InvalidOperation(format!(
+                    "Lock for '{}' is not held by '{}'",
+                    resource, locked_by
+                ))),
+                None => Err(StoreError::NotFound(format!("lock for '{}'", resource))),
+            }
+        })
+    }
+
+    /// Get current staging lock for a resource
+    pub fn get_staging_lock(&self, resource: &str) -> Result<Option<StagingLock>, StoreError> {
+        // First clean up expired locks
+        let now = chrono::Utc::now().to_rfc3339();
+        self.conn.execute(
+            "DELETE FROM staging_locks WHERE expires_at < ?1",
+            params![now],
+        )?;
+
+        self.conn
+            .query_row(
+                "SELECT id, resource, locked_by, agent_id, locked_at, expires_at
+                 FROM staging_locks WHERE resource = ?1",
+                params![resource],
+                |row| {
+                    Ok(StagingLock {
+                        id: Some(row.get(0)?),
+                        resource: row.get(1)?,
+                        locked_by: row.get(2)?,
+                        agent_id: row.get(3)?,
+                        locked_at: row.get(4)?,
+                        expires_at: row.get(5)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(StoreError::Database)
+    }
+
+    /// Get queue for a staging lock
+    pub fn get_staging_lock_queue(&self, resource: &str) -> Result<Vec<StagingLockQueueEntry>, StoreError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, resource, requester, agent_id, requested_at
+             FROM staging_lock_queue WHERE resource = ?1 ORDER BY requested_at ASC",
+        )?;
+
+        let rows = stmt.query_map(params![resource], |row| {
+            Ok(StagingLockQueueEntry {
+                id: Some(row.get(0)?),
+                resource: row.get(1)?,
+                requester: row.get(2)?,
+                agent_id: row.get(3)?,
+                requested_at: row.get(4)?,
+            })
+        })?;
+
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(StoreError::Database)
+    }
+
+    /// List all active staging locks
+    pub fn list_staging_locks(&self) -> Result<Vec<StagingLock>, StoreError> {
+        // First clean up expired locks
+        let now = chrono::Utc::now().to_rfc3339();
+        self.conn.execute(
+            "DELETE FROM staging_locks WHERE expires_at < ?1",
+            params![now],
+        )?;
+
+        let mut stmt = self.conn.prepare(
+            "SELECT id, resource, locked_by, agent_id, locked_at, expires_at
+             FROM staging_locks ORDER BY locked_at DESC",
+        )?;
+
+        let rows = stmt.query_map([], |row| {
+            Ok(StagingLock {
+                id: Some(row.get(0)?),
+                resource: row.get(1)?,
+                locked_by: row.get(2)?,
+                agent_id: row.get(3)?,
+                locked_at: row.get(4)?,
+                expires_at: row.get(5)?,
+            })
+        })?;
+
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(StoreError::Database)
+    }
+
+    /// Clean up expired staging locks and orphaned queue entries
+    pub fn cleanup_expired_staging(&self) -> Result<(usize, usize), StoreError> {
+        self.with_retry(|| {
+            let now = chrono::Utc::now().to_rfc3339();
+
+            // Clean expired locks
+            let locks_cleaned = self.conn.execute(
+                "DELETE FROM staging_locks WHERE expires_at < ?1",
+                params![now],
+            )?;
+
+            // Clean orphaned queue entries (for resources with no lock)
+            let queue_cleaned = self.conn.execute(
+                "DELETE FROM staging_lock_queue WHERE resource NOT IN (SELECT resource FROM staging_locks)",
+                [],
+            )?;
+
+            Ok((locks_cleaned, queue_cleaned))
         })
     }
 }
