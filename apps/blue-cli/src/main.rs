@@ -75,6 +75,17 @@ enum Commands {
         #[command(subcommand)]
         command: SessionCommands,
     },
+
+    /// Launch Goose AI agent with Blue extension
+    Agent {
+        /// Model to use (default: claude-sonnet-4-20250514)
+        #[arg(long, short)]
+        model: Option<String>,
+
+        /// Additional Goose arguments
+        #[arg(trailing_var_arg = true)]
+        args: Vec<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -390,6 +401,9 @@ async fn main() -> Result<()> {
         }
         Some(Commands::Migrate { from }) => {
             println!("Coming home from {}.", from);
+        }
+        Some(Commands::Agent { model, args }) => {
+            handle_agent_command(model, args).await?;
         }
     }
 
@@ -1116,4 +1130,72 @@ async fn handle_session_command(command: SessionCommands) -> Result<()> {
     }
 
     Ok(())
+}
+
+async fn handle_agent_command(model: Option<String>, extra_args: Vec<String>) -> Result<()> {
+    use std::process::Command;
+
+    // Check if Goose is installed
+    let goose_check = Command::new("goose")
+        .arg("--version")
+        .output();
+
+    match goose_check {
+        Err(_) => {
+            println!("Goose not found. Install it first:");
+            println!("  pipx install goose-ai");
+            println!("  # or");
+            println!("  brew install goose");
+            println!("\nSee https://github.com/block/goose for more options.");
+            return Ok(());
+        }
+        Ok(output) if !output.status.success() => {
+            println!("Goose check failed. Ensure it's properly installed.");
+            return Ok(());
+        }
+        Ok(_) => {}
+    }
+
+    // Get the path to the blue binary
+    let blue_binary = std::env::current_exe()?;
+
+    // Build the extension command
+    let extension_cmd = format!("{} mcp", blue_binary.display());
+
+    println!("Starting Goose with Blue extension...");
+    println!("  Extension: {}", extension_cmd);
+
+    // Build goose command
+    let mut cmd = Command::new("goose");
+    cmd.arg("session");
+    cmd.arg("--with-extension").arg(&extension_cmd);
+
+    // Add model if specified
+    if let Some(m) = model {
+        cmd.arg("--model").arg(m);
+    }
+
+    // Add any extra arguments
+    for arg in extra_args {
+        cmd.arg(arg);
+    }
+
+    // Execute goose, replacing current process
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        let err = cmd.exec();
+        // exec() only returns if there was an error
+        anyhow::bail!("Failed to exec goose: {}", err);
+    }
+
+    #[cfg(not(unix))]
+    {
+        // On non-Unix, spawn and wait
+        let status = cmd.status()?;
+        if !status.success() {
+            anyhow::bail!("Goose exited with status: {}", status);
+        }
+        Ok(())
+    }
 }
