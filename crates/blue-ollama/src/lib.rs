@@ -668,4 +668,66 @@ mod tests {
         assert_eq!(cloned.name, info.name);
         assert_eq!(cloned.size, info.size);
     }
+
+    // Integration tests - require running Ollama server
+    // Run with: cargo test -p blue-ollama -- --ignored
+
+    #[test]
+    #[ignore]
+    fn integration_health_check() {
+        let config = LocalLlmConfig {
+            use_external: true,
+            ..Default::default()
+        };
+        let ollama = EmbeddedOllama::new(&config);
+        match ollama.health_check() {
+            HealthStatus::Healthy { version, .. } => {
+                println!("✓ Ollama healthy: v{}", version);
+            }
+            HealthStatus::Unhealthy { error } => {
+                panic!("Ollama unhealthy: {}", error);
+            }
+            HealthStatus::NotRunning => {
+                panic!("Ollama not running - start with 'ollama serve'");
+            }
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn integration_list_models() {
+        let config = LocalLlmConfig {
+            use_external: true,
+            ..Default::default()
+        };
+        let ollama = EmbeddedOllama::new(&config);
+        let models = ollama.list_models().expect("Failed to list models");
+        println!("Found {} models:", models.len());
+        for m in &models {
+            println!("  - {} ({:.1} GB)", m.name, m.size as f64 / 1e9);
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn integration_generate() {
+        let config = LocalLlmConfig {
+            use_external: true,
+            model: "qwen2.5:0.5b".to_string(),
+            ..Default::default()
+        };
+        let ollama = EmbeddedOllama::new(&config);
+
+        let options = CompletionOptions {
+            max_tokens: 10,
+            temperature: 0.1,
+            stop_sequences: vec![],
+        };
+
+        let result = ollama.generate("qwen2.5:0.5b", "2+2=", &options)
+            .expect("Failed to generate");
+
+        println!("Response: {}", result.text);
+        assert!(!result.text.is_empty());
+    }
 }
