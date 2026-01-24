@@ -24,7 +24,7 @@ pub mod voice;
 pub mod workflow;
 
 pub use documents::*;
-pub use llm::{CompletionOptions, CompletionResult, LlmBackendChoice, LlmConfig, LlmError, LlmProvider, LlmProviderChoice, LocalLlmConfig, ApiLlmConfig, MockLlm};
+pub use llm::{CompletionOptions, CompletionResult, LlmBackendChoice, LlmConfig, LlmError, LlmManager, LlmProvider, LlmProviderChoice, LocalLlmConfig, ApiLlmConfig, KeywordLlm, MockLlm, ProviderStatus};
 pub use repo::{detect_blue, BlueHome, RepoError, WorktreeInfo};
 pub use state::{ItemType, ProjectState, StateError, StatusSummary, WorkItem};
 pub use store::{DocType, Document, DocumentStore, LinkType, Reminder, ReminderStatus, SearchResult, Session, SessionType, StagingLock, StagingLockQueueEntry, StagingLockResult, StoreError, Task as StoreTask, TaskProgress, Worktree};

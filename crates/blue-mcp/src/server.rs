@@ -1702,6 +1702,14 @@ impl BlueServer {
                     }
                 },
                 {
+                    "name": "blue_llm_providers",
+                    "description": "Show LLM provider fallback chain status. Returns availability of: Ollama (local) → API (Anthropic/OpenAI) → Keywords (always available).",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {}
+                    }
+                },
+                {
                     "name": "blue_model_list",
                     "description": "List available models in the Ollama instance.",
                     "inputSchema": {
@@ -1862,6 +1870,7 @@ impl BlueServer {
             "blue_llm_start" => crate::handlers::llm::handle_start(&call.arguments.unwrap_or_default()),
             "blue_llm_stop" => crate::handlers::llm::handle_stop(),
             "blue_llm_status" => crate::handlers::llm::handle_status(),
+            "blue_llm_providers" => crate::handlers::llm::handle_providers(),
             "blue_model_list" => crate::handlers::llm::handle_model_list(),
             "blue_model_pull" => crate::handlers::llm::handle_model_pull(&call.arguments.unwrap_or_default()),
             "blue_model_remove" => crate::handlers::llm::handle_model_remove(&call.arguments.unwrap_or_default()),

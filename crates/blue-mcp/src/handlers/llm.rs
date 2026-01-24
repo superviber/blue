@@ -1,12 +1,12 @@
 //! LLM tool handlers
 //!
 //! Implements RFC 0005: Local LLM Integration.
-//! Provides MCP tools for model management.
+//! Provides MCP tools for model management with graceful degradation.
 
 use serde_json::{json, Value};
 use std::sync::{Arc, Mutex, OnceLock};
 
-use blue_core::{LocalLlmConfig, LlmProvider};
+use blue_core::{KeywordLlm, LlmConfig, LlmManager, LocalLlmConfig, LlmProvider};
 use blue_ollama::{EmbeddedOllama, HealthStatus, OllamaLlm};
 
 use crate::error::ServerError;
@@ -270,6 +270,75 @@ pub fn handle_model_remove(args: &Value) -> Result<Value, ServerError> {
     ))
 }
 
+/// Get LLM provider chain status (graceful degradation)
+pub fn handle_providers() -> Result<Value, ServerError> {
+    let config = LlmConfig::default();
+    let mut manager = LlmManager::new(config);
+
+    // Check Ollama availability
+    let ollama_config = LocalLlmConfig {
+        use_external: true,
+        ..Default::default()
+    };
+    let ollama = EmbeddedOllama::new(&ollama_config);
+    let ollama_available = ollama.is_ollama_running();
+    let ollama_version = if ollama_available {
+        match ollama.health_check() {
+            HealthStatus::Healthy { version, .. } => Some(version),
+            _ => None,
+        }
+    } else {
+        None
+    };
+
+    // Check API availability (by checking for API key)
+    let anthropic_key = std::env::var("ANTHROPIC_API_KEY").ok();
+    let openai_key = std::env::var("OPENAI_API_KEY").ok();
+    let api_available = anthropic_key.is_some() || openai_key.is_some();
+    let api_provider = if anthropic_key.is_some() {
+        Some("anthropic")
+    } else if openai_key.is_some() {
+        Some("openai")
+    } else {
+        None
+    };
+
+    // Keywords always available
+    manager.add_provider(Box::new(KeywordLlm::new()));
+
+    let active = if ollama_available {
+        "ollama"
+    } else if api_available {
+        api_provider.unwrap_or("api")
+    } else {
+        "keywords"
+    };
+
+    Ok(json!({
+        "active_provider": active,
+        "fallback_chain": [
+            {
+                "name": "ollama",
+                "available": ollama_available,
+                "version": ollama_version,
+                "priority": 1
+            },
+            {
+                "name": api_provider.unwrap_or("api"),
+                "available": api_available,
+                "configured": api_provider.is_some(),
+                "priority": 2
+            },
+            {
+                "name": "keywords",
+                "available": true,
+                "priority": 3
+            }
+        ],
+        "message": format!("Active provider: {}. Fallback: ollama → api → keywords", active)
+    }))
+}
+
 /// Warm up a model (load into memory)
 pub fn handle_model_warmup(args: &Value) -> Result<Value, ServerError> {
     let name = args
@@ -353,5 +422,23 @@ mod tests {
     fn test_model_remove_requires_name() {
         let result = handle_model_remove(&json!({}));
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_providers_always_has_keywords() {
+        let result = handle_providers();
+        assert!(result.is_ok());
+        let value = result.unwrap();
+
+        // Should always have an active provider
+        assert!(value.get("active_provider").is_some());
+
+        // Should have fallback chain
+        let chain = value.get("fallback_chain").unwrap().as_array().unwrap();
+        assert_eq!(chain.len(), 3);
+
+        // Keywords should always be available
+        let keywords = chain.iter().find(|p| p.get("name").unwrap() == "keywords").unwrap();
+        assert_eq!(keywords.get("available").unwrap(), true);
     }
 }

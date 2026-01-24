@@ -254,6 +254,183 @@ impl LlmProvider for MockLlm {
     }
 }
 
+/// Keyword-based fallback "LLM"
+///
+/// Uses simple keyword matching when no real LLM is available.
+/// This provides basic functionality for tasks like ADR relevance matching.
+pub struct KeywordLlm;
+
+impl KeywordLlm {
+    pub fn new() -> Self {
+        Self
+    }
+
+    /// Extract keywords from text (simple word tokenization)
+    fn extract_keywords(text: &str) -> Vec<String> {
+        text.to_lowercase()
+            .split(|c: char| !c.is_alphanumeric())
+            .filter(|w| w.len() > 2)
+            .map(String::from)
+            .collect()
+    }
+
+    /// Calculate keyword overlap score between two texts
+    pub fn keyword_score(text1: &str, text2: &str) -> f64 {
+        let words1: std::collections::HashSet<_> = Self::extract_keywords(text1).into_iter().collect();
+        let words2: std::collections::HashSet<_> = Self::extract_keywords(text2).into_iter().collect();
+
+        if words1.is_empty() || words2.is_empty() {
+            return 0.0;
+        }
+
+        let intersection = words1.intersection(&words2).count();
+        let union = words1.union(&words2).count();
+
+        intersection as f64 / union as f64
+    }
+}
+
+impl Default for KeywordLlm {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl LlmProvider for KeywordLlm {
+    fn complete(&self, prompt: &str, _options: &CompletionOptions) -> Result<CompletionResult, LlmError> {
+        // KeywordLlm doesn't generate text - it's for scoring/matching only
+        // Return the prompt keywords as a simple response
+        let keywords = Self::extract_keywords(prompt);
+        Ok(CompletionResult {
+            text: keywords.join(", "),
+            prompt_tokens: None,
+            completion_tokens: None,
+            provider: "keywords".to_string(),
+        })
+    }
+
+    fn name(&self) -> &str {
+        "keywords"
+    }
+
+    fn is_ready(&self) -> bool {
+        true // Always ready - no external dependencies
+    }
+}
+
+/// LLM Manager with graceful degradation
+///
+/// Tries providers in order: Local (Ollama) → API → Keywords
+/// Falls back automatically when a provider is unavailable.
+pub struct LlmManager {
+    providers: Vec<Box<dyn LlmProvider>>,
+    config: LlmConfig,
+}
+
+impl LlmManager {
+    /// Create a new LLM manager with the given configuration
+    pub fn new(config: LlmConfig) -> Self {
+        Self {
+            providers: Vec::new(),
+            config,
+        }
+    }
+
+    /// Add a provider to the fallback chain
+    pub fn add_provider(&mut self, provider: Box<dyn LlmProvider>) {
+        self.providers.push(provider);
+    }
+
+    /// Add the keyword fallback (always available)
+    pub fn with_keyword_fallback(mut self) -> Self {
+        self.providers.push(Box::new(KeywordLlm::new()));
+        self
+    }
+
+    /// Get the first ready provider
+    pub fn active_provider(&self) -> Option<&dyn LlmProvider> {
+        self.providers.iter()
+            .find(|p| p.is_ready())
+            .map(|p| p.as_ref())
+    }
+
+    /// Get the active provider name
+    pub fn active_provider_name(&self) -> &str {
+        self.active_provider()
+            .map(|p| p.name())
+            .unwrap_or("none")
+    }
+
+    /// Check if any provider is available
+    pub fn is_available(&self) -> bool {
+        self.providers.iter().any(|p| p.is_ready())
+    }
+
+    /// Complete a prompt using the first available provider
+    pub fn complete(&self, prompt: &str, options: &CompletionOptions) -> Result<CompletionResult, LlmError> {
+        // Respect provider preference
+        match self.config.provider {
+            LlmProviderChoice::None => {
+                return Err(LlmError::NotAvailable("LLM disabled by configuration".to_string()));
+            }
+            LlmProviderChoice::Local => {
+                // Only try local providers
+                for provider in &self.providers {
+                    if provider.name() == "ollama" && provider.is_ready() {
+                        return provider.complete(prompt, options);
+                    }
+                }
+                return Err(LlmError::NotAvailable("Local LLM not available".to_string()));
+            }
+            LlmProviderChoice::Api => {
+                // Only try API providers
+                for provider in &self.providers {
+                    if (provider.name() == "anthropic" || provider.name() == "openai") && provider.is_ready() {
+                        return provider.complete(prompt, options);
+                    }
+                }
+                return Err(LlmError::NotAvailable("API LLM not available".to_string()));
+            }
+            LlmProviderChoice::Auto => {
+                // Try all providers in order
+            }
+        }
+
+        // Auto mode: try each provider in order
+        let mut last_error = None;
+        for provider in &self.providers {
+            if provider.is_ready() {
+                match provider.complete(prompt, options) {
+                    Ok(result) => return Ok(result),
+                    Err(e) => {
+                        last_error = Some(e);
+                        continue;
+                    }
+                }
+            }
+        }
+
+        Err(last_error.unwrap_or_else(|| LlmError::NotAvailable("No LLM providers available".to_string())))
+    }
+
+    /// Get status of all providers
+    pub fn status(&self) -> Vec<ProviderStatus> {
+        self.providers.iter()
+            .map(|p| ProviderStatus {
+                name: p.name().to_string(),
+                ready: p.is_ready(),
+            })
+            .collect()
+    }
+}
+
+/// Status of a provider
+#[derive(Debug, Clone)]
+pub struct ProviderStatus {
+    pub name: String,
+    pub ready: bool,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -278,5 +455,99 @@ mod tests {
         let opts = CompletionOptions::default();
         assert_eq!(opts.max_tokens, 1024);
         assert!((opts.temperature - 0.7).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn test_keyword_llm_extract_keywords() {
+        let keywords = KeywordLlm::extract_keywords("Hello, World! This is a TEST.");
+        assert!(keywords.contains(&"hello".to_string()));
+        assert!(keywords.contains(&"world".to_string()));
+        assert!(keywords.contains(&"this".to_string()));
+        assert!(keywords.contains(&"test".to_string()));
+        // Short words filtered out
+        assert!(!keywords.contains(&"is".to_string()));
+        assert!(!keywords.contains(&"a".to_string()));
+    }
+
+    #[test]
+    fn test_keyword_llm_score() {
+        // Identical texts should have score 1.0
+        let score = KeywordLlm::keyword_score("hello world", "hello world");
+        assert!((score - 1.0).abs() < 0.01);
+
+        // Completely different texts should have score 0.0
+        let score = KeywordLlm::keyword_score("hello world", "foo bar baz");
+        assert!(score < 0.01);
+
+        // Partial overlap
+        let score = KeywordLlm::keyword_score("hello world test", "hello world foo");
+        assert!(score > 0.3 && score < 0.8);
+    }
+
+    #[test]
+    fn test_keyword_llm_always_ready() {
+        let llm = KeywordLlm::new();
+        assert!(llm.is_ready());
+        assert_eq!(llm.name(), "keywords");
+    }
+
+    #[test]
+    fn test_llm_manager_with_keyword_fallback() {
+        let config = LlmConfig::default();
+        let manager = LlmManager::new(config).with_keyword_fallback();
+
+        assert!(manager.is_available());
+        assert_eq!(manager.active_provider_name(), "keywords");
+    }
+
+    #[test]
+    fn test_llm_manager_complete_with_fallback() {
+        let config = LlmConfig::default();
+        let manager = LlmManager::new(config).with_keyword_fallback();
+
+        let result = manager.complete("test prompt here", &CompletionOptions::default());
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().provider, "keywords");
+    }
+
+    #[test]
+    fn test_llm_manager_provider_order() {
+        let config = LlmConfig::default();
+        let mut manager = LlmManager::new(config);
+
+        // Add mock first, then keywords
+        manager.add_provider(Box::new(MockLlm::constant("mock response")));
+        manager.add_provider(Box::new(KeywordLlm::new()));
+
+        // Mock should be used first since it's ready
+        assert_eq!(manager.active_provider_name(), "mock");
+
+        let result = manager.complete("test", &CompletionOptions::default()).unwrap();
+        assert_eq!(result.provider, "mock");
+        assert_eq!(result.text, "mock response");
+    }
+
+    #[test]
+    fn test_llm_manager_status() {
+        let config = LlmConfig::default();
+        let mut manager = LlmManager::new(config);
+        manager.add_provider(Box::new(MockLlm::constant("test")));
+        manager.add_provider(Box::new(KeywordLlm::new()));
+
+        let status = manager.status();
+        assert_eq!(status.len(), 2);
+        assert!(status.iter().all(|s| s.ready));
+    }
+
+    #[test]
+    fn test_llm_manager_disabled() {
+        let config = LlmConfig {
+            provider: LlmProviderChoice::None,
+            ..Default::default()
+        };
+        let manager = LlmManager::new(config).with_keyword_fallback();
+
+        let result = manager.complete("test", &CompletionOptions::default());
+        assert!(result.is_err());
     }
 }
