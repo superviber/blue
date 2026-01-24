@@ -49,7 +49,7 @@ pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, Server
     let worktree_path = state.home.worktrees_path.join(title);
 
     // Try to create the git worktree
-    let repo_path = state.home.repos_path.join(&state.project);
+    let repo_path = state.home.root.clone();
     match git2::Repository::open(&repo_path) {
         Ok(repo) => {
             match blue_core::repo::create_worktree(&repo, &branch_name, &worktree_path) {
@@ -163,7 +163,7 @@ pub fn handle_cleanup(state: &ProjectState, args: &Value) -> Result<Value, Serve
     let worktree = state.store.get_worktree(doc_id).ok().flatten();
 
     // Try to open the repository
-    let repo_path = state.home.repos_path.join(&state.project);
+    let repo_path = state.home.root.clone();
     let repo = match git2::Repository::open(&repo_path) {
         Ok(r) => r,
         Err(e) => {
@@ -260,7 +260,7 @@ pub fn handle_remove(state: &ProjectState, args: &Value) -> Result<Value, Server
 
     // Check if branch is merged (unless force)
     if !force {
-        let repo_path = state.home.repos_path.join(&state.project);
+        let repo_path = state.home.root.clone();
         if let Ok(repo) = git2::Repository::open(&repo_path) {
             match blue_core::repo::is_branch_merged(&repo, &worktree.branch_name, "main") {
                 Ok(false) => {
@@ -284,7 +284,7 @@ pub fn handle_remove(state: &ProjectState, args: &Value) -> Result<Value, Server
     }
 
     // Remove from git
-    let repo_path = state.home.repos_path.join(&state.project);
+    let repo_path = state.home.root.clone();
     if let Ok(repo) = git2::Repository::open(&repo_path) {
         if let Err(e) = blue_core::repo::remove_worktree(&repo, &worktree.branch_name) {
             return Ok(json!({

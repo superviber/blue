@@ -83,7 +83,7 @@ pub fn handle_create(state: &mut ProjectState, args: &Value) -> Result<Value, Se
     let date = chrono::Local::now().format("%Y-%m-%d").to_string();
     let file_name = format!("{}-{}.md", date, to_kebab_case(title));
     let file_path = PathBuf::from("postmortems").join(&file_name);
-    let docs_path = state.home.docs_path(&state.project);
+    let docs_path = state.home.docs_path.clone();
     let pm_path = docs_path.join(&file_path);
 
     // Generate markdown content
@@ -152,7 +152,7 @@ pub fn handle_action_to_rfc(state: &mut ProjectState, args: &Value) -> Result<Va
         ServerError::CommandFailed("Post-mortem has no file path".to_string())
     })?;
 
-    let docs_path = state.home.docs_path(&state.project);
+    let docs_path = state.home.docs_path.clone();
     let pm_path = docs_path.join(pm_file_path);
     let pm_content = fs::read_to_string(&pm_path)
         .map_err(|e| ServerError::CommandFailed(format!("Failed to read post-mortem: {}", e)))?;

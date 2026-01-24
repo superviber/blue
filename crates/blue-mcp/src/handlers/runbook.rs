@@ -54,7 +54,7 @@ pub fn handle_create(state: &mut ProjectState, args: &Value) -> Result<Value, Se
     // Generate file path
     let file_name = format!("{}.md", to_kebab_case(title));
     let file_path = PathBuf::from("runbooks").join(&file_name);
-    let docs_path = state.home.docs_path(&state.project);
+    let docs_path = state.home.docs_path.clone();
     let runbook_path = docs_path.join(&file_path);
 
     // Generate markdown content
@@ -145,7 +145,7 @@ pub fn handle_update(state: &mut ProjectState, args: &Value) -> Result<Value, Se
         ServerError::CommandFailed("Runbook has no file path".to_string())
     })?;
 
-    let docs_path = state.home.docs_path(&state.project);
+    let docs_path = state.home.docs_path.clone();
     let runbook_path = docs_path.join(runbook_file_path);
     let mut content = fs::read_to_string(&runbook_path)
         .map_err(|e| ServerError::CommandFailed(format!("Failed to read runbook: {}", e)))?;

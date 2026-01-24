@@ -31,13 +31,17 @@ impl ProjectState {
     pub fn for_test() -> Self {
         use std::path::PathBuf;
         let store = DocumentStore::open_in_memory().unwrap();
+        let root = PathBuf::from("/test");
+        let blue_dir = root.join(".blue");
         Self {
             home: BlueHome {
-                root: PathBuf::from("/test"),
-                data_path: PathBuf::from("/test/.blue/data"),
-                repos_path: PathBuf::from("/test/.blue/repos"),
-                worktrees_path: PathBuf::from("/test/.blue/worktrees"),
+                root: root.clone(),
+                blue_dir: blue_dir.clone(),
+                docs_path: blue_dir.join("docs"),
+                db_path: blue_dir.join("blue.db"),
+                worktrees_path: blue_dir.join("worktrees"),
                 project_name: Some("test".to_string()),
+                migrated: false,
             },
             store,
             worktrees: Vec::new(),
@@ -47,12 +51,18 @@ impl ProjectState {
     }
 
     /// Load project state
+    ///
+    /// Note: `project` parameter is kept for API compatibility but is no longer
+    /// used for path resolution (RFC 0003 - per-repo structure)
     pub fn load(home: BlueHome, project: &str) -> Result<Self, StateError> {
-        let db_path = home.db_path(project);
-        let store = DocumentStore::open(&db_path)?;
+        // Ensure directories exist (auto-create per RFC 0003)
+        home.ensure_dirs().map_err(StateError::Io)?;
+
+        // Use db_path directly from BlueHome (no project subdirectory)
+        let store = DocumentStore::open(&home.db_path)?;
 
         // Discover worktrees
-        let worktrees = Self::discover_worktrees(&home, project);
+        let worktrees = Self::discover_worktrees(&home);
         let worktree_rfcs: HashSet<String> =
             worktrees.iter().filter_map(|wt| wt.rfc_title()).collect();
 
@@ -66,14 +76,8 @@ impl ProjectState {
     }
 
     /// Discover worktrees from the repo
-    fn discover_worktrees(home: &BlueHome, project: &str) -> Vec<WorktreeInfo> {
-        let repo_path = home.repos_path.join(project);
-
-        if let Ok(repo) = git2::Repository::open(&repo_path) {
-            return list_worktrees(&repo);
-        }
-
-        // Also try from root
+    fn discover_worktrees(home: &BlueHome) -> Vec<WorktreeInfo> {
+        // Try to open git repo from root
         if let Ok(repo) = git2::Repository::discover(&home.root) {
             return list_worktrees(&repo);
         }
@@ -83,7 +87,7 @@ impl ProjectState {
 
     /// Reload state from disk
     pub fn reload(&mut self) -> Result<(), StateError> {
-        self.worktrees = Self::discover_worktrees(&self.home, &self.project);
+        self.worktrees = Self::discover_worktrees(&self.home);
         self.worktree_rfcs = self
             .worktrees
             .iter()

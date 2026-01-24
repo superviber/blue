@@ -37,7 +37,7 @@ pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, Server
     let markdown = spike.to_markdown();
 
     // Write the file
-    let docs_path = state.home.docs_path(&state.project);
+    let docs_path = state.home.docs_path.clone();
     let spike_path = docs_path.join(&filename);
     if let Some(parent) = spike_path.parent() {
         fs::create_dir_all(parent).map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
@@ -123,7 +123,7 @@ pub fn handle_complete(state: &ProjectState, args: &Value) -> Result<Value, Serv
 
     // Update the file if it exists
     if let Some(ref file_path) = doc.file_path {
-        let docs_path = state.home.docs_path(&state.project);
+        let docs_path = state.home.docs_path.clone();
         let spike_path = docs_path.join(file_path);
 
         if spike_path.exists() {

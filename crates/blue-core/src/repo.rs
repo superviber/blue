@@ -7,29 +7,67 @@ use thiserror::Error;
 use tracing::debug;
 
 /// Blue's directory structure detection result
+///
+/// Per-repo structure (RFC 0003):
+/// ```text
+/// repo/
+/// ├── .blue/
+/// │   ├── docs/           # RFCs, spikes, runbooks, etc.
+/// │   ├── worktrees/      # Git worktrees for RFC implementation
+/// │   ├── blue.db         # SQLite database
+/// │   └── config.yaml     # Configuration
+/// └── src/...
+/// ```
 #[derive(Debug, Clone)]
 pub struct BlueHome {
-    /// Root directory containing .blue/
+    /// Root directory (git repo root) containing .blue/
     pub root: PathBuf,
-    /// Path to .blue/repos/ (markdown docs)
-    pub repos_path: PathBuf,
-    /// Path to .blue/data/ (SQLite databases)
-    pub data_path: PathBuf,
-    /// Path to .blue/worktrees/ (git worktrees)
+    /// Path to .blue/ directory
+    pub blue_dir: PathBuf,
+    /// Path to .blue/docs/
+    pub docs_path: PathBuf,
+    /// Path to .blue/blue.db
+    pub db_path: PathBuf,
+    /// Path to .blue/worktrees/
     pub worktrees_path: PathBuf,
-    /// Detected project name
+    /// Detected project name (from git remote or directory name)
     pub project_name: Option<String>,
+    /// Whether this was migrated from old structure
+    pub migrated: bool,
 }
 
 impl BlueHome {
-    /// Get the docs path for a specific project
-    pub fn docs_path(&self, project: &str) -> PathBuf {
-        self.repos_path.join(project).join("docs")
+    /// Create BlueHome from a root directory
+    pub fn new(root: PathBuf) -> Self {
+        let blue_dir = root.join(".blue");
+        Self {
+            docs_path: blue_dir.join("docs"),
+            db_path: blue_dir.join("blue.db"),
+            worktrees_path: blue_dir.join("worktrees"),
+            project_name: extract_project_name(&root),
+            migrated: false,
+            blue_dir,
+            root,
+        }
     }
 
-    /// Get the database path for a specific project
-    pub fn db_path(&self, project: &str) -> PathBuf {
-        self.data_path.join(project).join("blue.db")
+    /// Ensure all required directories exist
+    pub fn ensure_dirs(&self) -> Result<(), std::io::Error> {
+        std::fs::create_dir_all(&self.blue_dir)?;
+        std::fs::create_dir_all(&self.docs_path)?;
+        std::fs::create_dir_all(&self.worktrees_path)?;
+        Ok(())
+    }
+
+    // Legacy compatibility methods - deprecated, will be removed
+    #[deprecated(note = "Use docs_path field directly")]
+    pub fn docs_path_legacy(&self, _project: &str) -> PathBuf {
+        self.docs_path.clone()
+    }
+
+    #[deprecated(note = "Use db_path field directly")]
+    pub fn db_path_legacy(&self, _project: &str) -> PathBuf {
+        self.db_path.clone()
     }
 }
 
@@ -70,54 +108,164 @@ pub enum RepoError {
 
 /// Detect Blue's home directory structure
 ///
-/// Looks for .blue/ in the current directory or any parent.
+/// RFC 0003: Per-repo .blue/ folders
+/// - Finds git repo root for current directory
+/// - Creates .blue/ there if it doesn't exist (auto-init)
+/// - Migrates from old structure if needed
+///
 /// The structure is:
 /// ```text
-/// project/
+/// repo/
 /// ├── .blue/
-/// │   ├── repos/         # Cloned repos with docs/
-/// │   ├── data/          # SQLite databases
-/// │   └── worktrees/     # Git worktrees
-/// └── ...
+/// │   ├── docs/           # RFCs, spikes, runbooks, etc.
+/// │   ├── worktrees/      # Git worktrees
+/// │   ├── blue.db         # SQLite database
+/// │   └── config.yaml     # Configuration
+/// └── src/...
 /// ```
 pub fn detect_blue(from: &Path) -> Result<BlueHome, RepoError> {
-    let mut current = from.to_path_buf();
+    // First, try to find git repo root
+    let root = find_git_root(from).unwrap_or_else(|| {
+        debug!("No git repo found, using current directory");
+        from.to_path_buf()
+    });
 
-    loop {
-        let blue_dir = current.join(".blue");
-        if blue_dir.exists() && blue_dir.is_dir() {
-            debug!("Found Blue's home at {:?}", blue_dir);
+    let blue_dir = root.join(".blue");
 
-            return Ok(BlueHome {
-                root: current.clone(),
-                repos_path: blue_dir.join("repos"),
-                data_path: blue_dir.join("data"),
-                worktrees_path: blue_dir.join("worktrees"),
-                project_name: extract_project_name(&current),
-            });
+    // Check for new per-repo structure
+    if blue_dir.exists() && blue_dir.is_dir() {
+        // Check if this is old structure that needs migration
+        let old_repos_path = blue_dir.join("repos");
+        let old_data_path = blue_dir.join("data");
+
+        if old_repos_path.exists() || old_data_path.exists() {
+            debug!("Found old Blue structure at {:?}, needs migration", blue_dir);
+            return migrate_to_new_structure(&root);
         }
 
-        // Also check for legacy .repos/.data/.worktrees structure
-        let legacy_repos = current.join(".repos");
-        let legacy_data = current.join(".data");
-        if legacy_repos.exists() && legacy_data.exists() {
-            debug!("Found legacy Blue structure at {:?}", current);
+        debug!("Found Blue's home at {:?}", blue_dir);
+        return Ok(BlueHome::new(root));
+    }
 
-            return Ok(BlueHome {
-                root: current.clone(),
-                repos_path: legacy_repos,
-                data_path: legacy_data,
-                worktrees_path: current.join(".worktrees"),
-                project_name: extract_project_name(&current),
-            });
-        }
+    // Check for legacy .repos/.data/.worktrees at root level
+    let legacy_repos = root.join(".repos");
+    let legacy_data = root.join(".data");
+    if legacy_repos.exists() && legacy_data.exists() {
+        debug!("Found legacy Blue structure at {:?}, needs migration", root);
+        return migrate_from_legacy_structure(&root);
+    }
 
-        if !current.pop() {
-            break;
+    // Auto-create .blue/ directory (no `blue init` required per RFC 0003)
+    debug!("Creating new Blue home at {:?}", blue_dir);
+    let home = BlueHome::new(root);
+    home.ensure_dirs().map_err(RepoError::Io)?;
+    Ok(home)
+}
+
+/// Find the git repository root from a given path
+fn find_git_root(from: &Path) -> Option<PathBuf> {
+    git2::Repository::discover(from)
+        .ok()
+        .and_then(|repo| repo.workdir().map(|p| p.to_path_buf()))
+}
+
+/// Migrate from old .blue/repos/<project>/docs structure to new .blue/docs structure
+fn migrate_to_new_structure(root: &Path) -> Result<BlueHome, RepoError> {
+    let blue_dir = root.join(".blue");
+    let old_repos_path = blue_dir.join("repos");
+    let old_data_path = blue_dir.join("data");
+    let new_docs_path = blue_dir.join("docs");
+    let new_db_path = blue_dir.join("blue.db");
+
+    // Get project name to find the right subdirectory
+    let project_name = extract_project_name(root)
+        .unwrap_or_else(|| "default".to_string());
+
+    // Migrate docs: .blue/repos/<project>/docs -> .blue/docs
+    let old_project_docs = old_repos_path.join(&project_name).join("docs");
+    if old_project_docs.exists() && !new_docs_path.exists() {
+        debug!("Migrating docs from {:?} to {:?}", old_project_docs, new_docs_path);
+        std::fs::rename(&old_project_docs, &new_docs_path)
+            .map_err(RepoError::Io)?;
+    }
+
+    // Migrate database: .blue/data/<project>/blue.db -> .blue/blue.db
+    let old_project_db = old_data_path.join(&project_name).join("blue.db");
+    if old_project_db.exists() && !new_db_path.exists() {
+        debug!("Migrating database from {:?} to {:?}", old_project_db, new_db_path);
+        std::fs::rename(&old_project_db, &new_db_path)
+            .map_err(RepoError::Io)?;
+    }
+
+    // Clean up empty old directories
+    cleanup_empty_dirs(&old_repos_path);
+    cleanup_empty_dirs(&old_data_path);
+
+    let mut home = BlueHome::new(root.to_path_buf());
+    home.migrated = true;
+    home.ensure_dirs().map_err(RepoError::Io)?;
+
+    debug!("Migration complete for {:?}", root);
+    Ok(home)
+}
+
+/// Migrate from legacy .repos/.data structure at root level
+fn migrate_from_legacy_structure(root: &Path) -> Result<BlueHome, RepoError> {
+    let legacy_repos = root.join(".repos");
+    let legacy_data = root.join(".data");
+    let blue_dir = root.join(".blue");
+
+    // Create new .blue directory
+    std::fs::create_dir_all(&blue_dir).map_err(RepoError::Io)?;
+
+    let project_name = extract_project_name(root)
+        .unwrap_or_else(|| "default".to_string());
+
+    // Migrate docs
+    let old_docs = legacy_repos.join(&project_name).join("docs");
+    let new_docs = blue_dir.join("docs");
+    if old_docs.exists() && !new_docs.exists() {
+        debug!("Migrating legacy docs from {:?} to {:?}", old_docs, new_docs);
+        std::fs::rename(&old_docs, &new_docs).map_err(RepoError::Io)?;
+    }
+
+    // Migrate database
+    let old_db = legacy_data.join(&project_name).join("blue.db");
+    let new_db = blue_dir.join("blue.db");
+    if old_db.exists() && !new_db.exists() {
+        debug!("Migrating legacy database from {:?} to {:?}", old_db, new_db);
+        std::fs::rename(&old_db, &new_db).map_err(RepoError::Io)?;
+    }
+
+    // Clean up old directories
+    cleanup_empty_dirs(&legacy_repos);
+    cleanup_empty_dirs(&legacy_data);
+
+    let mut home = BlueHome::new(root.to_path_buf());
+    home.migrated = true;
+    home.ensure_dirs().map_err(RepoError::Io)?;
+
+    debug!("Legacy migration complete for {:?}", root);
+    Ok(home)
+}
+
+/// Recursively remove empty directories
+fn cleanup_empty_dirs(path: &Path) {
+    if !path.exists() || !path.is_dir() {
+        return;
+    }
+
+    // Try to remove subdirectories first
+    if let Ok(entries) = std::fs::read_dir(path) {
+        for entry in entries.flatten() {
+            if entry.path().is_dir() {
+                cleanup_empty_dirs(&entry.path());
+            }
         }
     }
 
-    Err(RepoError::NotHome)
+    // Try to remove this directory (will fail if not empty, which is fine)
+    let _ = std::fs::remove_dir(path);
 }
 
 /// Extract project name from git remote or directory name

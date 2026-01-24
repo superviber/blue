@@ -1716,7 +1716,7 @@ impl BlueServer {
 
                 // Generate filename and write file
                 let filename = format!("rfcs/{:04}-{}.md", number, title);
-                let docs_path = state.home.docs_path(&state.project);
+                let docs_path = state.home.docs_path.clone();
                 let rfc_path = docs_path.join(&filename);
                 if let Some(parent) = rfc_path.parent() {
                     fs::create_dir_all(parent)
@@ -2240,7 +2240,7 @@ impl BlueServer {
         let empty = json!({});
         let args = args.as_ref().unwrap_or(&empty);
         let state = self.ensure_state()?;
-        crate::handlers::guide::handle_guide(args, &state.home.data_path)
+        crate::handlers::guide::handle_guide(args, &state.home.blue_dir)
     }
 
     // Phase 7: Staging IaC handlers

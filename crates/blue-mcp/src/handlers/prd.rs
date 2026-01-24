@@ -40,7 +40,7 @@ pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, Server
 
     // Generate file path
     let file_name = format!("{:04}-{}.md", prd_number, to_kebab_case(title));
-    let file_path = state.home.docs_path(&state.project).join("prds").join(&file_name);
+    let file_path = state.home.docs_path.join("prds").join(&file_name);
 
     // Ensure directory exists
     if let Some(parent) = file_path.parent() {
@@ -90,7 +90,7 @@ pub fn handle_get(state: &ProjectState, args: &Value) -> Result<Value, ServerErr
     // Read file content
     let rel_path = doc.file_path.as_ref()
         .ok_or_else(|| ServerError::CommandFailed("PRD file path not set".to_string()))?;
-    let file_path = state.home.docs_path(&state.project).join(rel_path);
+    let file_path = state.home.docs_path.join(rel_path);
     let content = fs::read_to_string(&file_path)
         .map_err(|e| ServerError::CommandFailed(format!("Couldn't read PRD: {}", e)))?;
 
@@ -188,7 +188,7 @@ pub fn handle_complete(state: &ProjectState, args: &Value) -> Result<Value, Serv
     // Check acceptance criteria
     let empty_path = String::new();
     let rel_path = doc.file_path.as_ref().unwrap_or(&empty_path);
-    let file_path = state.home.docs_path(&state.project).join(rel_path);
+    let file_path = state.home.docs_path.join(rel_path);
     let content = fs::read_to_string(&file_path).unwrap_or_default();
     let criteria = parse_acceptance_criteria(&content);
     let unchecked: Vec<_> = criteria.iter().filter(|(_, c)| !c).collect();

@@ -44,7 +44,7 @@ pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, Server
     let file_path = format!("decisions/{}", file_name);
 
     // Write the file
-    let docs_path = state.home.docs_path(&state.project);
+    let docs_path = state.home.docs_path.clone();
     let decision_path = docs_path.join(&file_path);
 
     // Check if already exists
