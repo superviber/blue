@@ -1,0 +1,343 @@
+//! Runbook tool handlers
+//!
+//! Handles runbook creation and updates with RFC linking.
+
+use std::fs;
+use std::path::PathBuf;
+
+use blue_core::{DocType, Document, ProjectState};
+use serde_json::{json, Value};
+
+use crate::error::ServerError;
+
+/// Handle blue_runbook_create
+pub fn handle_create(state: &mut ProjectState, args: &Value) -> Result<Value, ServerError> {
+    let title = args
+        .get("title")
+        .and_then(|v| v.as_str())
+        .ok_or(ServerError::InvalidParams)?;
+
+    let source_rfc = args.get("source_rfc").and_then(|v| v.as_str());
+    let service_name = args.get("service_name").and_then(|v| v.as_str());
+    let owner = args.get("owner").and_then(|v| v.as_str());
+
+    let operations: Vec<String> = args
+        .get("operations")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    // Validate source RFC exists if provided
+    let source_rfc_doc = if let Some(rfc_title) = source_rfc {
+        Some(
+            state
+                .store
+                .find_document(DocType::Rfc, rfc_title)
+                .map_err(|_| {
+                    ServerError::NotFound(format!("Source RFC '{}' not found", rfc_title))
+                })?,
+        )
+    } else {
+        None
+    };
+
+    // Get next runbook number
+    let runbook_number = state
+        .store
+        .next_number(DocType::Runbook)
+        .map_err(|e| ServerError::CommandFailed(e.to_string()))?;
+
+    // Generate file path
+    let file_name = format!("{}.md", to_kebab_case(title));
+    let file_path = PathBuf::from("runbooks").join(&file_name);
+    let docs_path = state.home.docs_path(&state.project);
+    let runbook_path = docs_path.join(&file_path);
+
+    // Generate markdown content
+    let markdown = generate_runbook_markdown(title, &source_rfc_doc, service_name, owner, &operations);
+
+    // Create document in SQLite store
+    let doc = Document {
+        id: None,
+        doc_type: DocType::Runbook,
+        number: Some(runbook_number),
+        title: title.to_string(),
+        status: "active".to_string(),
+        file_path: Some(file_path.to_string_lossy().to_string()),
+        created_at: None,
+        updated_at: None,
+    };
+    state
+        .store
+        .add_document(&doc)
+        .map_err(|e| ServerError::CommandFailed(e.to_string()))?;
+
+    // Write the markdown file
+    if let Some(parent) = runbook_path.parent() {
+        fs::create_dir_all(parent).map_err(|e| ServerError::CommandFailed(e.to_string()))?;
+    }
+    fs::write(&runbook_path, &markdown).map_err(|e| ServerError::CommandFailed(e.to_string()))?;
+
+    // Update source RFC with runbook link if provided
+    if let Some(ref rfc_doc) = source_rfc_doc {
+        if let Some(ref rfc_file_path) = rfc_doc.file_path {
+            let rfc_path = docs_path.join(rfc_file_path);
+            if rfc_path.exists() {
+                if let Ok(rfc_content) = fs::read_to_string(&rfc_path) {
+                    let runbook_link = format!(
+                        "| **Runbook** | [{}](../runbooks/{}) |",
+                        title, file_name
+                    );
+
+                    // Insert after Status line if not already present
+                    if !rfc_content.contains("| **Runbook** |") {
+                        let updated_rfc = if rfc_content.contains("| **Status** | Implemented |") {
+                            rfc_content.replace(
+                                "| **Status** | Implemented |",
+                                &format!("| **Status** | Implemented |\n{}", runbook_link),
+                            )
+                        } else {
+                            rfc_content
+                        };
+                        let _ = fs::write(&rfc_path, updated_rfc);
+                    }
+                }
+            }
+        }
+    }
+
+    let hint = "Runbook created. Fill in the operation procedures and troubleshooting sections.";
+
+    Ok(json!({
+        "status": "success",
+        "message": blue_core::voice::info(
+            &format!("Runbook created: {}", title),
+            Some(hint)
+        ),
+        "title": title,
+        "file": runbook_path.display().to_string(),
+        "source_rfc": source_rfc,
+        "content": markdown,
+    }))
+}
+
+/// Handle blue_runbook_update
+pub fn handle_update(state: &mut ProjectState, args: &Value) -> Result<Value, ServerError> {
+    let title = args
+        .get("title")
+        .and_then(|v| v.as_str())
+        .ok_or(ServerError::InvalidParams)?;
+
+    let add_operation = args.get("add_operation").and_then(|v| v.as_str());
+    let add_troubleshooting = args.get("add_troubleshooting").and_then(|v| v.as_str());
+
+    // Find the runbook
+    let doc = state
+        .store
+        .find_document(DocType::Runbook, title)
+        .map_err(|_| ServerError::NotFound(format!("Runbook '{}' not found", title)))?;
+
+    let runbook_file_path = doc.file_path.as_ref().ok_or_else(|| {
+        ServerError::CommandFailed("Runbook has no file path".to_string())
+    })?;
+
+    let docs_path = state.home.docs_path(&state.project);
+    let runbook_path = docs_path.join(runbook_file_path);
+    let mut content = fs::read_to_string(&runbook_path)
+        .map_err(|e| ServerError::CommandFailed(format!("Failed to read runbook: {}", e)))?;
+
+    let mut changes = Vec::new();
+
+    // Add new operation if provided
+    if let Some(operation) = add_operation {
+        let operation_section = format!(
+            "\n### Operation: {}\n\n**When to use**: [Describe trigger condition]\n\n**Steps**:\n1. [Step 1]\n\n**Verification**:\n```bash\n# Verify success\n```\n\n**Rollback**:\n```bash\n# Rollback if needed\n```\n",
+            operation
+        );
+
+        // Insert before Troubleshooting section or at end
+        if content.contains("## Troubleshooting") {
+            content = content.replace(
+                "## Troubleshooting",
+                &format!("{}\n## Troubleshooting", operation_section),
+            );
+        } else {
+            content.push_str(&operation_section);
+        }
+        changes.push(format!("Added operation: {}", operation));
+    }
+
+    // Add troubleshooting if provided
+    if let Some(troubleshooting) = add_troubleshooting {
+        let troubleshooting_section = format!(
+            "\n### Symptom: {}\n\n**Possible causes**:\n1. [Cause 1]\n\n**Resolution**:\n1. [Step 1]\n",
+            troubleshooting
+        );
+
+        // Insert into Troubleshooting section or create one
+        if content.contains("## Troubleshooting") {
+            if content.contains("## Escalation") {
+                content = content.replace(
+                    "## Escalation",
+                    &format!("{}\n## Escalation", troubleshooting_section),
+                );
+            } else {
+                content.push_str(&troubleshooting_section);
+            }
+        } else {
+            content.push_str(&format!(
+                "\n## Troubleshooting\n{}",
+                troubleshooting_section
+            ));
+        }
+        changes.push(format!("Added troubleshooting: {}", troubleshooting));
+    }
+
+    // Write updated content
+    fs::write(&runbook_path, &content)
+        .map_err(|e| ServerError::CommandFailed(format!("Failed to write runbook: {}", e)))?;
+
+    let hint = "Runbook updated. Review the changes and fill in details.";
+
+    Ok(json!({
+        "status": "success",
+        "message": blue_core::voice::info(
+            &format!("Runbook updated: {}", title),
+            Some(hint)
+        ),
+        "title": title,
+        "file": runbook_path.display().to_string(),
+        "changes": changes,
+    }))
+}
+
+/// Generate runbook markdown content
+fn generate_runbook_markdown(
+    title: &str,
+    source_rfc: &Option<Document>,
+    service_name: Option<&str>,
+    owner: Option<&str>,
+    operations: &[String],
+) -> String {
+    let mut md = String::new();
+
+    // Title
+    md.push_str(&format!(
+        "# Runbook: {}\n\n",
+        to_title_case(title)
+    ));
+
+    // Metadata table
+    md.push_str("| | |\n|---|---|\n");
+    md.push_str("| **Status** | Active |\n");
+
+    if let Some(o) = owner {
+        md.push_str(&format!("| **Owner** | {} |\n", o));
+    }
+
+    let date = chrono::Local::now().format("%Y-%m-%d").to_string();
+    md.push_str(&format!("| **Created** | {} |\n", date));
+
+    if let Some(ref rfc_doc) = source_rfc {
+        if let Some(ref rfc_file_path) = rfc_doc.file_path {
+            md.push_str(&format!(
+                "| **Source RFC** | [{}](../rfcs/{}) |\n",
+                rfc_doc.title, rfc_file_path.replace("rfcs/", "")
+            ));
+        }
+    }
+
+    md.push_str("\n---\n\n");
+
+    // Overview
+    md.push_str("## Overview\n\n");
+    if let Some(svc) = service_name {
+        md.push_str(&format!(
+            "This runbook covers operational procedures for **{}**.\n\n",
+            svc
+        ));
+    } else {
+        md.push_str("[Describe what this runbook covers]\n\n");
+    }
+
+    // Prerequisites
+    md.push_str("## Prerequisites\n\n");
+    md.push_str("- [ ] Access to [system]\n");
+    md.push_str("- [ ] Permissions for [action]\n\n");
+
+    // Common Operations
+    md.push_str("## Common Operations\n\n");
+
+    if !operations.is_empty() {
+        for op in operations {
+            md.push_str(&format!(
+                "### Operation: {}\n\n**When to use**: [Trigger condition]\n\n**Steps**:\n1. [Step 1]\n\n**Verification**:\n```bash\n# Command to verify success\n```\n\n**Rollback**:\n```bash\n# Command to rollback if needed\n```\n\n",
+                op
+            ));
+        }
+    } else {
+        md.push_str("### Operation 1: [Name]\n\n**When to use**: [Trigger condition]\n\n**Steps**:\n1. [Step 1]\n\n**Verification**:\n```bash\n# Command to verify success\n```\n\n**Rollback**:\n```bash\n# Command to rollback if needed\n```\n\n");
+    }
+
+    // Troubleshooting
+    md.push_str("## Troubleshooting\n\n");
+    md.push_str("### Symptom: [Description]\n\n**Possible causes**:\n1. [Cause 1]\n\n**Resolution**:\n1. [Step 1]\n\n");
+
+    // Escalation
+    md.push_str("## Escalation\n\n");
+    md.push_str("| Level | Contact | When |\n");
+    md.push_str("|-------|---------|------|\n");
+    md.push_str("| L1 | [Team] | [Condition] |\n");
+    md.push_str("| L2 | [Team] | [Condition] |\n\n");
+
+    // Related Documents
+    md.push_str("## Related Documents\n\n");
+    if source_rfc.is_some() {
+        md.push_str("- Source RFC (linked above)\n");
+    }
+    md.push_str("- [Link to architecture]\n");
+    md.push_str("- [Link to monitoring dashboard]\n");
+
+    md
+}
+
+/// Convert a title to kebab-case for filenames
+fn to_kebab_case(s: &str) -> String {
+    s.to_lowercase()
+        .chars()
+        .map(|c| if c.is_alphanumeric() { c } else { '-' })
+        .collect::<String>()
+        .split('-')
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("-")
+}
+
+/// Convert slug to title case
+fn to_title_case(s: &str) -> String {
+    s.split('-')
+        .map(|word| {
+            let mut chars = word.chars();
+            match chars.next() {
+                None => String::new(),
+                Some(first) => first.to_uppercase().chain(chars).collect(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_to_kebab_case() {
+        assert_eq!(to_kebab_case("Deploy Service"), "deploy-service");
+        assert_eq!(to_kebab_case("API Gateway Runbook"), "api-gateway-runbook");
+    }
+}

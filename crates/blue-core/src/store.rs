@@ -162,6 +162,8 @@ pub enum DocType {
     Adr,
     Decision,
     Prd,
+    Postmortem,
+    Runbook,
 }
 
 impl DocType {
@@ -172,6 +174,8 @@ impl DocType {
             DocType::Adr => "adr",
             DocType::Decision => "decision",
             DocType::Prd => "prd",
+            DocType::Postmortem => "postmortem",
+            DocType::Runbook => "runbook",
         }
     }
 
@@ -182,6 +186,8 @@ impl DocType {
             "adr" => Some(DocType::Adr),
             "decision" => Some(DocType::Decision),
             "prd" => Some(DocType::Prd),
+            "postmortem" => Some(DocType::Postmortem),
+            "runbook" => Some(DocType::Runbook),
             _ => None,
         }
     }
@@ -194,6 +200,8 @@ impl DocType {
             DocType::Adr => "ADRs",
             DocType::Decision => "decisions",
             DocType::Prd => "PRDs",
+            DocType::Postmortem => "post-mortems",
+            DocType::Runbook => "runbooks",
         }
     }
 }

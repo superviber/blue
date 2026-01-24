@@ -46,6 +46,23 @@ impl BlueServer {
         self.state.as_ref().ok_or(ServerError::BlueNotDetected)
     }
 
+    fn ensure_state_mut(&mut self) -> Result<&mut ProjectState, ServerError> {
+        if self.state.is_none() {
+            let cwd = self.cwd.as_ref().ok_or(ServerError::BlueNotDetected)?;
+            let home = detect_blue(cwd).map_err(|_| ServerError::BlueNotDetected)?;
+
+            // Try to get project name from the current path
+            let project = home.project_name.clone().unwrap_or_else(|| "default".to_string());
+
+            let state = ProjectState::load(home, &project)
+                .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+
+            self.state = Some(state);
+        }
+
+        self.state.as_mut().ok_or(ServerError::BlueNotDetected)
+    }
+
     /// Handle a JSON-RPC request
     pub fn handle_request(&mut self, request: &str) -> String {
         let result = self.handle_request_inner(request);
@@ -1202,6 +1219,118 @@ impl BlueServer {
                         },
                         "required": ["task", "base_url"]
                     }
+                },
+                // Phase 9: Post-mortem tools
+                {
+                    "name": "blue_postmortem_create",
+                    "description": "Create a post-mortem document for incident tracking.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "title": {
+                                "type": "string",
+                                "description": "Post-mortem title"
+                            },
+                            "severity": {
+                                "type": "string",
+                                "description": "Severity level (P1, P2, P3, P4)"
+                            },
+                            "summary": {
+                                "type": "string",
+                                "description": "Brief incident summary"
+                            },
+                            "root_cause": {
+                                "type": "string",
+                                "description": "Root cause of the incident"
+                            },
+                            "duration": {
+                                "type": "string",
+                                "description": "Incident duration"
+                            },
+                            "impact": {
+                                "type": "array",
+                                "items": { "type": "string" },
+                                "description": "Impact items"
+                            }
+                        },
+                        "required": ["title", "severity"]
+                    }
+                },
+                {
+                    "name": "blue_postmortem_action_to_rfc",
+                    "description": "Convert a post-mortem action item into an RFC with bidirectional linking.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "postmortem_title": {
+                                "type": "string",
+                                "description": "Title of the post-mortem"
+                            },
+                            "action": {
+                                "type": "string",
+                                "description": "Action item index (1-based) or substring to match"
+                            },
+                            "rfc_title": {
+                                "type": "string",
+                                "description": "Optional RFC title (defaults to action item text)"
+                            }
+                        },
+                        "required": ["postmortem_title", "action"]
+                    }
+                },
+                // Phase 9: Runbook tools
+                {
+                    "name": "blue_runbook_create",
+                    "description": "Create a runbook document for operational procedures.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "title": {
+                                "type": "string",
+                                "description": "Runbook title"
+                            },
+                            "source_rfc": {
+                                "type": "string",
+                                "description": "Source RFC title to link"
+                            },
+                            "service_name": {
+                                "type": "string",
+                                "description": "Service or feature name"
+                            },
+                            "owner": {
+                                "type": "string",
+                                "description": "Owner team or person"
+                            },
+                            "operations": {
+                                "type": "array",
+                                "items": { "type": "string" },
+                                "description": "Initial operations to document"
+                            }
+                        },
+                        "required": ["title"]
+                    }
+                },
+                {
+                    "name": "blue_runbook_update",
+                    "description": "Update an existing runbook with new operations or troubleshooting.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "title": {
+                                "type": "string",
+                                "description": "Runbook title"
+                            },
+                            "add_operation": {
+                                "type": "string",
+                                "description": "New operation to add"
+                            },
+                            "add_troubleshooting": {
+                                "type": "string",
+                                "description": "Troubleshooting section to add"
+                            }
+                        },
+                        "required": ["title"]
+                    }
                 }
             ]
         }))
@@ -1284,6 +1413,12 @@ impl BlueServer {
             "blue_extract_dialogue" => self.handle_extract_dialogue(&call.arguments),
             // Phase 8: Playwright handler
             "blue_playwright_verify" => self.handle_playwright_verify(&call.arguments),
+            // Phase 9: Post-mortem handlers
+            "blue_postmortem_create" => self.handle_postmortem_create(&call.arguments),
+            "blue_postmortem_action_to_rfc" => self.handle_postmortem_action_to_rfc(&call.arguments),
+            // Phase 9: Runbook handlers
+            "blue_runbook_create" => self.handle_runbook_create(&call.arguments),
+            "blue_runbook_update" => self.handle_runbook_update(&call.arguments),
             _ => Err(ServerError::ToolNotFound(call.name)),
         }?;
 
@@ -1944,6 +2079,34 @@ impl BlueServer {
     fn handle_playwright_verify(&mut self, args: &Option<Value>) -> Result<Value, ServerError> {
         let args = args.as_ref().ok_or(ServerError::InvalidParams)?;
         crate::handlers::playwright::handle_verify(args)
+    }
+
+    // Phase 9: Post-mortem handlers
+
+    fn handle_postmortem_create(&mut self, args: &Option<Value>) -> Result<Value, ServerError> {
+        let args = args.as_ref().ok_or(ServerError::InvalidParams)?;
+        let state = self.ensure_state_mut()?;
+        crate::handlers::postmortem::handle_create(state, args)
+    }
+
+    fn handle_postmortem_action_to_rfc(&mut self, args: &Option<Value>) -> Result<Value, ServerError> {
+        let args = args.as_ref().ok_or(ServerError::InvalidParams)?;
+        let state = self.ensure_state_mut()?;
+        crate::handlers::postmortem::handle_action_to_rfc(state, args)
+    }
+
+    // Phase 9: Runbook handlers
+
+    fn handle_runbook_create(&mut self, args: &Option<Value>) -> Result<Value, ServerError> {
+        let args = args.as_ref().ok_or(ServerError::InvalidParams)?;
+        let state = self.ensure_state_mut()?;
+        crate::handlers::runbook::handle_create(state, args)
+    }
+
+    fn handle_runbook_update(&mut self, args: &Option<Value>) -> Result<Value, ServerError> {
+        let args = args.as_ref().ok_or(ServerError::InvalidParams)?;
+        let state = self.ensure_state_mut()?;
+        crate::handlers::runbook::handle_update(state, args)
     }
 }
 
