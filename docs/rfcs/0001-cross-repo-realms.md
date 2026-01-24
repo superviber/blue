@@ -31,7 +31,7 @@ When aperture adds a new S3 path, fungal's IAM policy must update. Currently:
 
 - Automatic code changes across repos (manual review required)
 - Public realm discovery (future scope)
-- Monorepo support (one repo = one domain for MVP)
+- Monorepo support (for MVP, each repo is a distinct participant)
 
 ---
 
@@ -42,16 +42,48 @@ When aperture adds a new S3 path, fungal's IAM policy must update. Currently:
 ```
 Index (~/.blue/index.yaml)
   └── Realm (git repo)
-        └── Domain (directory in realm)
-              └── Repo (.blue/ in code repo)
+        └── Domain (coordination context)
+              ├── Repo A (participant)
+              └── Repo B (participant)
 ```
 
 | Level | Purpose | Storage |
 |-------|---------|---------|
 | **Index** | List of realms user participates in | `~/.blue/index.yaml` |
-| **Realm** | Federation of related domains | Git repository |
-| **Domain** | Single org's presence in a realm | Directory in realm repo |
-| **Repo** | Actual code repository | `.blue/` directory |
+| **Realm** | Groups related coordination domains | Git repository |
+| **Domain** | Coordination context between repos | Directory in realm repo |
+| **Repo** | Actual code repository (can participate in multiple domains) | `.blue/` directory |
+
+**Key insight:** A domain is the *relationship* (edge), not the *thing* (node). Repos are nodes; domains are edges connecting them.
+
+```
+         ┌─────────────────────────────────────────┐
+         │           Realm: letemcook              │
+         │                                         │
+         │  ┌─────────────────────────────────┐   │
+         │  │    Domain: s3-access            │   │
+         │  │                                 │   │
+         │  │   ┌──────────┐   ┌──────────┐  │   │
+         │  │   │ aperture │◄─►│  fungal  │  │   │
+         │  │   │ (export) │   │ (import) │  │   │
+         │  │   └──────────┘   └──────────┘  │   │
+         │  │                                 │   │
+         │  └─────────────────────────────────┘   │
+         │                                         │
+         │  ┌─────────────────────────────────┐   │
+         │  │    Domain: training-pipeline    │   │
+         │  │                                 │   │
+         │  │   ┌──────────┐   ┌──────────┐  │   │
+         │  │   │  fungal  │◄─►│ ml-infra │  │   │
+         │  │   │ (export) │   │ (import) │  │   │
+         │  │   └──────────┘   └──────────┘  │   │
+         │  │                                 │   │
+         │  └─────────────────────────────────┘   │
+         │                                         │
+         └─────────────────────────────────────────┘
+```
+
+Note: `fungal` participates in both domains with different roles.
 
 ### Realm Structure
 
@@ -59,20 +91,28 @@ A realm is a git repository:
 
 ```
 realm-letemcook/
-├── realm.yaml                     # Realm metadata and governance
+├── realm.yaml                        # Realm metadata and governance
+├── repos/                            # Registry of all participating repos
+│   ├── aperture.yaml                 # Repo metadata (path, maintainers)
+│   └── fungal-image-analysis.yaml
 ├── domains/
-│   ├── aperture/
-│   │   ├── domain.yaml           # Domain metadata
-│   │   ├── exports.yaml          # What this domain provides
-│   │   └── imports.yaml          # What this domain consumes
-│   └── fungal-image-analysis/
+│   ├── s3-access/                    # A coordination context
+│   │   ├── domain.yaml               # What is being coordinated
+│   │   ├── contracts/
+│   │   │   └── s3-permissions.yaml   # The contract schema + value
+│   │   └── bindings/
+│   │       ├── aperture.yaml         # aperture exports this contract
+│   │       └── fungal.yaml           # fungal imports this contract
+│   │
+│   └── training-pipeline/            # Another coordination context
 │       ├── domain.yaml
-│       ├── exports.yaml
-│       └── imports.yaml
-├── contracts/
-│   └── s3-paths.schema.yaml      # Shared schema definitions
+│       ├── contracts/
+│       │   └── job-schema.yaml
+│       └── bindings/
+│           ├── fungal.yaml           # fungal exports here
+│           └── ml-infra.yaml         # ml-infra imports here
 └── .github/
-    └── CODEOWNERS                # Domain isolation
+    └── CODEOWNERS
 ```
 
 ### realm.yaml
@@ -83,24 +123,25 @@ version: "1.0.0"
 created_at: 2026-01-24T10:00:00Z
 
 governance:
-  # Who can add new domains?
   admission: approval  # open | approval | invite-only
   approvers:
     - eric@example.com
-
-  # Breaking change policy
   breaking_changes:
     require_approval: true
     grace_period_days: 14
 ```
 
-### domain.yaml
+### repos/{repo}.yaml
+
+Each participating repo is registered:
 
 ```yaml
+# repos/aperture.yaml
 name: aperture
-repo_path: /Users/ericg/letemcook/aperture
-# Or for remote:
-# repo_url: git@github.com:cultivarium/aperture.git
+org: cultivarium  # Optional org prefix
+path: /Users/ericg/letemcook/aperture
+# Or remote:
+# url: git@github.com:cultivarium/aperture.git
 
 maintainers:
   - eric@example.com
@@ -108,71 +149,121 @@ maintainers:
 joined_at: 2026-01-24T10:00:00Z
 ```
 
-### exports.yaml
-
 ```yaml
-exports:
-  - name: required-s3-permissions
-    version: "1.3.0"
-    description: S3 paths that aperture training code needs to access
+# repos/fungal-image-analysis.yaml
+name: fungal-image-analysis
+org: fungal-org
+path: /Users/ericg/letemcook/fungal-image-analysis
 
-    schema:
-      type: object
-      properties:
-        read:
-          type: array
-          items: { type: string }
-        write:
-          type: array
-          items: { type: string }
+maintainers:
+  - fungal-maintainer@example.com
 
-    value:
-      read:
-        - "jobs/*/masks/*"
-        - "jobs/*/*/config.json"
-        - "jobs/*/*/manifest.json"
-        - "training-runs/*"
-        - "training-metrics/*"
-      write:
-        - "jobs/*/*/manifest.json"
-        - "training-metrics/*"
-
-    changelog:
-      - version: "1.3.0"
-        date: 2026-01-24
-        changes:
-          - "Added training-metrics/* for experiment tracking"
-      - version: "1.2.0"
-        date: 2026-01-20
-        changes:
-          - "Added write permissions for manifest updates"
+joined_at: 2026-01-24T10:00:00Z
 ```
 
-### imports.yaml
+### domains/{domain}/domain.yaml
+
+Describes what is being coordinated:
 
 ```yaml
+# domains/s3-access/domain.yaml
+name: s3-access
+description: Coordinates S3 bucket access between aperture and fungal
+
+created_at: 2026-01-24T10:00:00Z
+
+# Which repos participate in this coordination
+members:
+  - aperture
+  - fungal-image-analysis
+```
+
+### domains/{domain}/contracts/{contract}.yaml
+
+The actual contract being coordinated:
+
+```yaml
+# domains/s3-access/contracts/s3-permissions.yaml
+name: s3-permissions
+version: "1.3.0"
+description: S3 paths that need cross-account access
+
+schema:
+  type: object
+  properties:
+    read:
+      type: array
+      items: { type: string }
+    write:
+      type: array
+      items: { type: string }
+
+value:
+  read:
+    - "jobs/*/masks/*"
+    - "jobs/*/*/config.json"
+    - "jobs/*/*/manifest.json"
+    - "training-runs/*"
+    - "training-metrics/*"
+  write:
+    - "jobs/*/*/manifest.json"
+    - "training-metrics/*"
+
+changelog:
+  - version: "1.3.0"
+    date: 2026-01-24
+    changes:
+      - "Added training-metrics/* for experiment tracking"
+```
+
+### domains/{domain}/bindings/{repo}.yaml
+
+How each repo relates to the contracts in this domain:
+
+```yaml
+# domains/s3-access/bindings/aperture.yaml
+repo: aperture
+role: provider  # This repo defines/exports the contract
+
+exports:
+  - contract: s3-permissions
+    source_files:
+      - models/training/s3_paths.py
+      - models/shared/data/parquet_export.py
+```
+
+```yaml
+# domains/s3-access/bindings/fungal.yaml
+repo: fungal-image-analysis
+role: consumer  # This repo implements/imports the contract
+
 imports:
-  - contract: required-s3-permissions
-    from: aperture
+  - contract: s3-permissions
     version: ">=1.0.0"
-
     binding: cdk/training_tools_access_stack.py
-
-    status: current  # current | stale | broken
+    status: current
     resolved_version: "1.3.0"
     resolved_at: 2026-01-24T12:00:00Z
 ```
 
 ### Local Configuration
 
-Each repo stores its realm membership:
+Each repo stores its realm participation:
 
 ```yaml
 # aperture/.blue/config.yaml
 realm:
   name: letemcook
-  path: ../realm-letemcook  # Relative path to realm repo
-  domain: aperture
+  path: ../realm-letemcook
+
+repo: aperture
+
+# Domains this repo participates in (populated by realm join/sync)
+domains:
+  - name: s3-access
+    role: provider
+    contracts:
+      - s3-permissions
 ```
 
 ### Index File
@@ -220,20 +311,22 @@ Blue MCP servers communicate directly for real-time session awareness.
 {
   "sessions": [
     {
-      "domain": "aperture",
+      "repo": "aperture",
       "socket": "/tmp/blue/aperture.sock",
       "pid": 12345,
       "started_at": "2026-01-24T10:00:00Z",
       "active_rfc": "training-metrics-v2",
-      "exports_modified": ["required-s3-permissions"]
+      "active_domains": ["s3-access"],
+      "exports_modified": ["s3-permissions"]
     },
     {
-      "domain": "fungal-image-analysis",
+      "repo": "fungal-image-analysis",
       "socket": "/tmp/blue/fungal.sock",
       "pid": 12346,
       "started_at": "2026-01-24T10:05:00Z",
       "active_rfc": null,
-      "imports_watching": ["required-s3-permissions"]
+      "active_domains": ["s3-access"],
+      "imports_watching": ["s3-permissions"]
     }
   ]
 }
@@ -249,8 +342,8 @@ fn notify_export_change(export_name: &str, changes: &ExportChanges) {
     let sessions = load_realm_sessions();
     for session in sessions.watching(export_name) {
         send_ipc_message(&session.socket, Message::ExportChanged {
-            from: self.domain,
-            export: export_name,
+            from_repo: self.repo.clone(),
+            contract: export_name.to_string(),
             changes: changes.clone(),
         });
     }
@@ -262,14 +355,14 @@ fn notify_export_change(export_name: &str, changes: &ExportChanges) {
 ```bash
 # In fungal-image-analysis terminal (real-time)
 $ blue status
-📊 fungal-image-analysis
+📊 fungal-image-analysis (in realm: letemcook)
 
-🔔 Live notification from aperture:
-   Export 'required-s3-permissions' changed:
+🔔 Live notification from repo 'aperture':
+   Contract 's3-permissions' in domain 's3-access' changed:
    + training-metrics/experiments/*
 
    Your import is now stale.
-   Run 'blue realm worktree' to start coordinated changes.
+   Run 'blue realm worktree --domain s3-access' to start coordinated changes.
 ```
 
 ### Unified Worktrees (Cross-Repo Branches)
@@ -300,8 +393,9 @@ Related worktree:
 name: feat/training-metrics-v2
 created_at: 2026-01-24T10:00:00Z
 source_rfc: aperture:training-metrics-v2
+domain: s3-access  # The coordination context this change affects
 
-domains:
+repos:
   - name: aperture
     path: /Users/ericg/letemcook/aperture/.worktrees/feat-training-metrics-v2
     status: active
@@ -331,7 +425,7 @@ coordination:
 # After making changes in both worktrees
 $ blue realm commit -m "feat: add experiment metrics with IAM support"
 
-Coordinated commit across realm:
+Coordinated commit across repos in domain 's3-access':
   aperture:
     ✓ Committed: abc1234
     Files: models/training/metrics_exporter.py
@@ -384,20 +478,25 @@ $ blue realm init --name letemcook
 ✓ Created realm.yaml
 ✓ Initialized git repository
 
-# 2. Add aperture to realm
+# 2. Register aperture in realm
 $ cd ../aperture
-$ blue realm join ../realm-letemcook --as aperture
-✓ Created domains/aperture/domain.yaml
-✓ Auto-detected exports: required-s3-permissions
-✓ Created domains/aperture/exports.yaml
+$ blue realm join ../realm-letemcook
+✓ Created repos/aperture.yaml
+✓ Auto-detected exports: s3-permissions
 ✓ Updated .blue/config.yaml
 
-# 3. Add fungal to realm
+# 3. Create the s3-access domain (coordination context)
+$ blue realm domain create s3-access --repos aperture,fungal-image-analysis
+✓ Created domains/s3-access/domain.yaml
+✓ Created domains/s3-access/bindings/aperture.yaml (provider)
+✓ Created domains/s3-access/bindings/fungal-image-analysis.yaml (consumer)
+
+# 4. Register fungal in realm
 $ cd ../fungal-image-analysis
-$ blue realm join ../realm-letemcook --as fungal-image-analysis
-✓ Created domains/fungal-image-analysis/domain.yaml
-✓ Detected import: required-s3-permissions from aperture
-✓ Created domains/fungal-image-analysis/imports.yaml
+$ blue realm join ../realm-letemcook
+✓ Created repos/fungal-image-analysis.yaml
+✓ Detected import: s3-permissions in domain s3-access
+✓ Updated .blue/config.yaml
 ```
 
 ### Daily Development
@@ -410,17 +509,17 @@ $ vim models/training/metrics_exporter.py
 
 # Blue status shows cross-realm impact
 $ blue status
-📊 aperture (domain in letemcook realm)
+📊 aperture (in realm: letemcook)
 
 RFCs:
   training-metrics-v2 [in-progress] 3/5 tasks
 
-⚠️  Cross-realm change detected:
-   Export 'required-s3-permissions' has local changes:
+⚠️  Cross-repo change detected:
+   Domain 's3-access' contract 's3-permissions' has local changes:
    + training-metrics/experiments/*
 
-   Consumers:
-   - fungal-image-analysis (imports >=1.0.0)
+   Affected repos:
+   - fungal-image-analysis (imports >=1.0.0 of s3-permissions)
 
    Run 'blue realm sync' to update realm
 
@@ -428,11 +527,11 @@ RFCs:
 $ blue realm sync
 📤 Syncing with realm 'letemcook'...
 
-Exports updated:
-  required-s3-permissions: 1.3.0 → 1.4.0
+Contracts updated in domain 's3-access':
+  s3-permissions: 1.3.0 → 1.4.0
   + training-metrics/experiments/*
 
-Notifying consumers:
+Notifying affected repos:
   fungal-image-analysis:
     ✓ Created GitHub issue #42
       "Update IAM policy: new S3 path training-metrics/experiments/*"
@@ -446,10 +545,10 @@ Notifying consumers:
 # Maintainer in fungal sees notification
 $ cd fungal-image-analysis
 $ blue status
-📊 fungal-image-analysis (domain in letemcook realm)
+📊 fungal-image-analysis (in realm: letemcook)
 
-⚠️  Stale imports:
-   required-s3-permissions: 1.3.0 → 1.4.0 available
+⚠️  Stale imports in domain 's3-access':
+   s3-permissions: 1.3.0 → 1.4.0 available
    Binding: cdk/training_tools_access_stack.py
 
    Changes:
@@ -463,8 +562,8 @@ $ vim cdk/training_tools_access_stack.py
 $ blue realm sync
 📤 Syncing with realm 'letemcook'...
 
-Imports resolved:
-  required-s3-permissions: now at 1.4.0
+Imports resolved in domain 's3-access':
+  s3-permissions: now at 1.4.0
 
 ✓ Realm synced (commit def5678)
 ```
@@ -485,22 +584,34 @@ blue_realm_init
 
 ### blue_realm_join
 
-Join a repository to a realm as a domain.
+Register a repository in a realm.
 
 ```
 blue_realm_join
   realm_path: Path to realm repo
-  --as: Domain name (default: repo directory name)
+  --name: Repo name in realm (default: repo directory name)
   --detect-exports: Auto-detect exports (default: true)
+```
+
+### blue_realm_domain
+
+Create or manage a coordination domain.
+
+```
+blue_realm_domain
+  create: Create a new domain
+  --name: Domain name (kebab-case)
+  --repos: Comma-separated list of participating repos
+  --contract: Initial contract name
 ```
 
 ### blue_realm_leave
 
-Remove domain from realm.
+Remove a repository from a realm.
 
 ```
 blue_realm_leave
-  --force: Leave even if other domains import from us
+  --force: Leave even if other repos depend on our exports
 ```
 
 ### blue_realm_export
@@ -517,12 +628,12 @@ blue_realm_export
 
 ### blue_realm_import
 
-Declare an import dependency.
+Declare an import dependency on a contract.
 
 ```
 blue_realm_import
   --contract: Contract name
-  --from: Source domain
+  --domain: Domain containing the contract
   --version: Version requirement (semver)
   --binding: Local file that uses this import
 ```
@@ -573,7 +684,8 @@ Create unified worktrees across affected repos.
 blue_realm_worktree
   --rfc: RFC title that drives the change
   --branch: Branch name (default: feat/{rfc-title})
-  --domains: Specific domains to include (default: all affected)
+  --domain: Domain to coordinate (default: auto-detect from exports)
+  --repos: Specific repos to include (default: all in domain)
 ```
 
 ### blue_realm_commit
@@ -583,7 +695,7 @@ Create coordinated commits across realm worktrees.
 ```
 blue_realm_commit
   -m: Commit message (applied to all repos)
-  --domains: Which domains to commit (default: all with changes)
+  --repos: Which repos to commit (default: all with changes)
   --link: Link commits in realm tracking (default: true)
 ```
 
@@ -593,7 +705,7 @@ Push coordinated branches to remotes.
 
 ```
 blue_realm_push
-  --domains: Which domains to push (default: all)
+  --repos: Which repos to push (default: all in worktree)
 ```
 
 ### blue_realm_pr
@@ -605,11 +717,6 @@ blue_realm_pr
   --title: PR title (applied to all)
   --body: PR body template
   --draft: Create as draft PRs
-```
-
-```
-blue_realm_graph
-  --format: text | mermaid | dot
 ```
 
 ---
@@ -670,13 +777,24 @@ pub struct BreakingChangePolicy {
     pub grace_period_days: u32,
 }
 
+/// A registered repository in the realm
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RealmRepo {
+    pub name: String,
+    pub org: Option<String>,
+    pub path: Option<PathBuf>,
+    pub url: Option<String>,
+    pub maintainers: Vec<String>,
+    pub joined_at: String,
+}
+
+/// A coordination context (edge between repos)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Domain {
     pub name: String,
-    pub repo_path: Option<PathBuf>,
-    pub repo_url: Option<String>,
-    pub maintainers: Vec<String>,
-    pub joined_at: String,
+    pub description: Option<String>,
+    pub members: Vec<String>,  // repo names
+    pub created_at: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -699,9 +817,9 @@ pub struct ChangelogEntry {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Import {
     pub contract: String,
-    pub from: String,
-    pub version: String,  // semver requirement
-    pub binding: String,
+    pub domain: String,    // which domain contains this contract
+    pub version: String,   // semver requirement
+    pub binding: String,   // local file that uses this
     pub status: ImportStatus,
     pub resolved_version: Option<String>,
     pub resolved_at: Option<String>,
@@ -769,7 +887,7 @@ pub fn handle_init(args: &Value) -> Result<Value, ServerError> {
 }
 ```
 
-### Phase 2: Domain Join (Week 3)
+### Phase 2: Repo Registration (Week 3)
 
 ```rust
 pub fn handle_join(args: &Value, repo_path: &Path) -> Result<Value, ServerError> {
@@ -778,7 +896,7 @@ pub fn handle_join(args: &Value, repo_path: &Path) -> Result<Value, ServerError>
         .map(PathBuf::from)
         .ok_or(ServerError::InvalidParams)?;
 
-    let domain_name = args.get("as")
+    let repo_name = args.get("name")
         .and_then(|v| v.as_str())
         .map(String::from)
         .unwrap_or_else(|| {
@@ -794,31 +912,26 @@ pub fn handle_join(args: &Value, repo_path: &Path) -> Result<Value, ServerError>
         return Err(ServerError::NotFound("Realm not found".into()));
     }
 
-    // Create domain directory
-    let domain_dir = realm_path.join("domains").join(&domain_name);
-    fs::create_dir_all(&domain_dir)?;
+    // Create repos directory if needed
+    let repos_dir = realm_path.join("repos");
+    fs::create_dir_all(&repos_dir)?;
 
-    // Create domain.yaml
-    let domain = Domain {
-        name: domain_name.clone(),
-        repo_path: Some(repo_path.to_path_buf()),
-        repo_url: None,
+    // Register repo in realm
+    let repo = RealmRepo {
+        name: repo_name.clone(),
+        org: None,
+        path: Some(repo_path.to_path_buf()),
+        url: None,
         maintainers: vec![],
         joined_at: chrono::Utc::now().to_rfc3339(),
     };
     fs::write(
-        domain_dir.join("domain.yaml"),
-        serde_yaml::to_string(&domain)?
+        repos_dir.join(format!("{}.yaml", repo_name)),
+        serde_yaml::to_string(&repo)?
     )?;
 
-    // Auto-detect exports
+    // Auto-detect exports (stored temporarily until domain is created)
     let exports = detect_exports(repo_path)?;
-    if !exports.is_empty() {
-        fs::write(
-            domain_dir.join("exports.yaml"),
-            serde_yaml::to_string(&json!({ "exports": exports }))?
-        )?;
-    }
 
     // Update repo's .blue/config.yaml
     let blue_dir = repo_path.join(".blue");
@@ -828,8 +941,9 @@ pub fn handle_join(args: &Value, repo_path: &Path) -> Result<Value, ServerError>
         "realm": {
             "name": realm_name,
             "path": realm_path.display().to_string(),
-            "domain": domain_name
-        }
+        },
+        "repo": repo_name,
+        "detected_exports": exports,
     });
     fs::write(blue_dir.join("config.yaml"), serde_yaml::to_string(&config)?)?;
 
@@ -840,14 +954,15 @@ pub fn handle_join(args: &Value, repo_path: &Path) -> Result<Value, ServerError>
         .output()?;
 
     Command::new("git")
-        .args(["commit", "-m", &format!("Add domain: {}", domain_name)])
+        .args(["commit", "-m", &format!("Register repo: {}", repo_name)])
         .current_dir(&realm_path)
         .output()?;
 
     Ok(json!({
         "status": "success",
-        "message": format!("Joined realm as '{}'", domain_name),
-        "exports_detected": exports.len()
+        "message": format!("Registered '{}' in realm", repo_name),
+        "exports_detected": exports.len(),
+        "next_step": "Run 'blue realm domain create' to create a coordination domain"
     }))
 }
 ```
@@ -864,21 +979,28 @@ fn get_realm_status(state: &ProjectState) -> Option<Value> {
     ).ok()?;
 
     let realm_path = config["realm"]["path"].as_str()?;
-    let domain_name = config["realm"]["domain"].as_str()?;
+    let repo_name = config["repo"].as_str()?;
 
-    // Check for local export changes
+    // Find domains this repo participates in
+    let domains = find_repo_domains(realm_path, repo_name).ok()?;
+
+    // Check for local export changes in each domain
     let local_exports = detect_exports(&state.repo_path).ok()?;
-    let declared_exports = load_declared_exports(realm_path, domain_name).ok()?;
+    let mut export_changes = vec![];
+    let mut stale_imports = vec![];
 
-    let export_changes = diff_exports(&local_exports, &declared_exports);
+    for domain in &domains {
+        let declared = load_domain_exports(realm_path, domain, repo_name).ok()?;
+        export_changes.extend(diff_exports(&local_exports, &declared, domain));
 
-    // Check for stale imports
-    let imports = load_imports(realm_path, domain_name).ok()?;
-    let stale_imports = check_import_staleness(realm_path, &imports);
+        let imports = load_domain_imports(realm_path, domain, repo_name).ok()?;
+        stale_imports.extend(check_import_staleness(realm_path, domain, &imports));
+    }
 
     Some(json!({
         "realm": config["realm"]["name"],
-        "domain": domain_name,
+        "repo": repo_name,
+        "domains": domains,
         "export_changes": export_changes,
         "stale_imports": stale_imports
     }))
@@ -893,17 +1015,28 @@ pub fn handle_sync(args: &Value, state: &ProjectState) -> Result<Value, ServerEr
     let notify = args.get("notify").and_then(|v| v.as_bool()).unwrap_or(true);
 
     let config = load_realm_config(&state.repo_path)?;
-    let realm_path = PathBuf::from(&config.path);
+    let realm_path = PathBuf::from(&config.realm_path);
+    let repo_name = &config.repo;
 
     // Pull latest realm state
     git_pull(&realm_path)?;
 
-    // Detect export changes
-    let local_exports = detect_exports(&state.repo_path)?;
-    let declared_exports = load_declared_exports(&realm_path, &config.domain)?;
-    let changes = diff_exports(&local_exports, &declared_exports);
+    // Find domains this repo participates in
+    let domains = find_repo_domains(&realm_path, repo_name)?;
 
-    if changes.is_empty() {
+    // Detect export changes across all domains
+    let local_exports = detect_exports(&state.repo_path)?;
+    let mut all_changes = vec![];
+
+    for domain in &domains {
+        let declared = load_domain_exports(&realm_path, domain, repo_name)?;
+        let changes = diff_exports(&local_exports, &declared);
+        if !changes.is_empty() {
+            all_changes.push((domain.clone(), changes));
+        }
+    }
+
+    if all_changes.is_empty() {
         return Ok(json!({
             "status": "success",
             "message": "No changes to sync"
@@ -913,37 +1046,39 @@ pub fn handle_sync(args: &Value, state: &ProjectState) -> Result<Value, ServerEr
     if dry_run {
         return Ok(json!({
             "status": "dry_run",
-            "changes": changes
+            "changes": all_changes
         }));
     }
 
-    // Update exports in realm
-    let new_version = bump_version(&declared_exports[0].version, &changes);
-    save_exports(&realm_path, &config.domain, &local_exports, &new_version)?;
-
-    // Commit and push
-    git_commit(&realm_path, &format!(
-        "{}: export {}@{}",
-        config.domain, local_exports[0].name, new_version
-    ))?;
-    git_push(&realm_path)?;
-
-    // Find affected consumers
-    let consumers = find_consumers(&realm_path, &local_exports[0].name)?;
-
-    // Create notifications
+    // Update exports in each affected domain
     let mut notifications = vec![];
-    if notify {
-        for consumer in &consumers {
-            let issue = create_github_issue(consumer, &changes)?;
-            notifications.push(issue);
+    for (domain, changes) in &all_changes {
+        let contract = &changes[0].contract;
+        let new_version = bump_version(&changes[0].old_version, changes);
+        save_domain_export(&realm_path, domain, repo_name, contract, &new_version)?;
+
+        // Find affected repos in this domain
+        let affected_repos = find_domain_consumers(&realm_path, domain, contract)?;
+
+        if notify {
+            for affected_repo in &affected_repos {
+                let issue = create_github_issue(affected_repo, domain, changes)?;
+                notifications.push(issue);
+            }
         }
     }
 
+    // Commit and push
+    git_commit(&realm_path, &format!(
+        "{}: sync exports from {}",
+        all_changes.iter().map(|(d, _)| d.as_str()).collect::<Vec<_>>().join(", "),
+        repo_name
+    ))?;
+    git_push(&realm_path)?;
+
     Ok(json!({
         "status": "success",
-        "message": format!("Synced {} export(s)", changes.len()),
-        "new_version": new_version,
+        "message": format!("Synced changes in {} domain(s)", all_changes.len()),
         "notifications": notifications
     }))
 }
@@ -963,29 +1098,30 @@ pub struct BlueIpcServer {
     socket_path: PathBuf,
     listener: UnixListener,
     realm: String,
-    domain: String,
+    repo: String,
 }
 
 impl BlueIpcServer {
-    pub fn start(realm: &str, domain: &str) -> Result<Self, IpcError> {
-        let socket_path = PathBuf::from(format!("/tmp/blue/{}.sock", domain));
+    pub fn start(realm: &str, repo: &str) -> Result<Self, IpcError> {
+        let socket_path = PathBuf::from(format!("/tmp/blue/{}.sock", repo));
         std::fs::create_dir_all("/tmp/blue")?;
 
         let listener = UnixListener::bind(&socket_path)?;
 
         // Register in realm session index
-        register_session(realm, domain, &socket_path)?;
+        register_session(realm, repo, &socket_path)?;
 
-        Ok(Self { socket_path, listener, realm: realm.to_string(), domain: domain.to_string() })
+        Ok(Self { socket_path, listener, realm: realm.to_string(), repo: repo.to_string() })
     }
 
-    pub fn broadcast_export_change(&self, export: &str, changes: &ExportChanges) {
+    pub fn broadcast_contract_change(&self, domain: &str, contract: &str, changes: &ContractChanges) {
         let sessions = load_realm_sessions(&self.realm);
-        for session in sessions.watching(export) {
+        for session in sessions.watching_contract(domain, contract) {
             if let Ok(mut stream) = UnixStream::connect(&session.socket) {
-                let msg = IpcMessage::ExportChanged {
-                    from: self.domain.clone(),
-                    export: export.to_string(),
+                let msg = IpcMessage::ContractChanged {
+                    from_repo: self.repo.clone(),
+                    domain: domain.to_string(),
+                    contract: contract.to_string(),
                     changes: changes.clone(),
                 };
                 serde_json::to_writer(&mut stream, &msg).ok();
@@ -996,9 +1132,9 @@ impl BlueIpcServer {
 
 #[derive(Serialize, Deserialize)]
 pub enum IpcMessage {
-    ExportChanged { from: String, export: String, changes: ExportChanges },
-    SessionStarted { domain: String, rfc: Option<String> },
-    SessionEnded { domain: String },
+    ContractChanged { from_repo: String, domain: String, contract: String, changes: ContractChanges },
+    SessionStarted { repo: String, rfc: Option<String> },
+    SessionEnded { repo: String },
     Ping,
     Pong,
 }
@@ -1009,17 +1145,18 @@ pub enum IpcMessage {
 ```rust
 // blue-core/src/realm_sessions.rs
 
-pub fn register_session(realm: &str, domain: &str, socket: &Path) -> Result<(), Error> {
+pub fn register_session(realm: &str, repo: &str, socket: &Path) -> Result<(), Error> {
     let index_path = PathBuf::from(format!("/tmp/blue/{}/sessions.json", realm));
     std::fs::create_dir_all(index_path.parent().unwrap())?;
 
     let mut sessions = load_sessions(&index_path)?;
     sessions.push(Session {
-        domain: domain.to_string(),
+        repo: repo.to_string(),
         socket: socket.to_path_buf(),
         pid: std::process::id(),
         started_at: chrono::Utc::now(),
         active_rfc: None,
+        active_domains: vec![],
         exports_modified: vec![],
         imports_watching: vec![],
     });
@@ -1027,10 +1164,10 @@ pub fn register_session(realm: &str, domain: &str, socket: &Path) -> Result<(), 
     save_sessions(&index_path, &sessions)
 }
 
-pub fn unregister_session(realm: &str, domain: &str) -> Result<(), Error> {
+pub fn unregister_session(realm: &str, repo: &str) -> Result<(), Error> {
     let index_path = PathBuf::from(format!("/tmp/blue/{}/sessions.json", realm));
     let mut sessions = load_sessions(&index_path)?;
-    sessions.retain(|s| s.domain != domain);
+    sessions.retain(|s| s.repo != repo);
     save_sessions(&index_path, &sessions)
 }
 ```
@@ -1048,29 +1185,44 @@ pub fn handle_realm_worktree(args: &Value, state: &ProjectState) -> Result<Value
         .map(String::from)
         .unwrap_or_else(|| format!("feat/{}", rfc_title));
 
-    let config = load_realm_config(&state.repo_path)?;
-    let realm_path = PathBuf::from(&config.path);
+    let domain_filter = args.get("domain").and_then(|v| v.as_str());
 
-    // Find affected domains (those that import from us)
-    let our_exports = load_declared_exports(&realm_path, &config.domain)?;
-    let affected = find_consumers(&realm_path, &our_exports)?;
+    let config = load_realm_config(&state.repo_path)?;
+    let realm_path = PathBuf::from(&config.realm_path);
+    let repo_name = &config.repo;
+
+    // Find domains this repo participates in (or use filter)
+    let domains = match domain_filter {
+        Some(d) => vec![d.to_string()],
+        None => find_repo_domains(&realm_path, repo_name)?,
+    };
+
+    // Find all repos affected by changes in these domains
+    let mut affected_repos = HashSet::new();
+    affected_repos.insert(repo_name.clone());
+
+    for domain in &domains {
+        let domain_repos = get_domain_members(&realm_path, domain)?;
+        affected_repos.extend(domain_repos);
+    }
 
     // Create worktree in our repo
     let our_worktree = create_worktree(&state.repo_path, &branch)?;
 
     // Create worktrees in affected repos
     let mut worktrees = vec![WorktreeInfo {
-        domain: config.domain.clone(),
+        repo: repo_name.clone(),
         path: our_worktree.clone(),
         status: "active".to_string(),
     }];
 
-    for domain in &affected {
-        let domain_config = load_domain_config(&realm_path, domain)?;
-        if let Some(repo_path) = &domain_config.repo_path {
+    for repo in &affected_repos {
+        if repo == repo_name { continue; }  // Skip ourselves
+        let repo_config = load_realm_repo(&realm_path, repo)?;
+        if let Some(repo_path) = &repo_config.path {
             let wt = create_worktree(repo_path, &branch)?;
             worktrees.push(WorktreeInfo {
-                domain: domain.clone(),
+                repo: repo.clone(),
                 path: wt,
                 status: "active".to_string(),
             });
@@ -1081,8 +1233,9 @@ pub fn handle_realm_worktree(args: &Value, state: &ProjectState) -> Result<Value
     let tracking = RealmWorktree {
         name: branch.clone(),
         created_at: chrono::Utc::now().to_rfc3339(),
-        source_rfc: format!("{}:{}", config.domain, rfc_title),
-        domains: worktrees.clone(),
+        source_rfc: format!("{}:{}", repo_name, rfc_title),
+        domains: domains.clone(),
+        repos: worktrees.clone(),
         commits: vec![],
     };
 
@@ -1092,6 +1245,7 @@ pub fn handle_realm_worktree(args: &Value, state: &ProjectState) -> Result<Value
         "status": "success",
         "message": format!("Created unified worktree '{}'", branch),
         "branch": branch,
+        "domains": domains,
         "worktrees": worktrees
     }))
 }
@@ -1107,20 +1261,20 @@ pub fn handle_realm_commit(args: &Value, state: &ProjectState) -> Result<Value, 
         .ok_or(ServerError::InvalidParams)?;
 
     let config = load_realm_config(&state.repo_path)?;
-    let realm_path = PathBuf::from(&config.path);
+    let realm_path = PathBuf::from(&config.realm_path);
 
-    // Find current worktree
+    // Find current worktree tracking
     let branch = get_current_branch(&state.repo_path)?;
     let tracking = load_realm_worktree(&realm_path, &branch)?;
 
     let mut commits = vec![];
 
-    // Commit in each domain that has changes
-    for wt in &tracking.domains {
+    // Commit in each repo that has changes
+    for wt in &tracking.repos {
         if has_uncommitted_changes(&wt.path)? {
             let commit = git_commit(&wt.path, message)?;
             commits.push(LinkedCommit {
-                domain: wt.domain.clone(),
+                repo: wt.repo.clone(),
                 sha: commit,
                 message: message.to_string(),
             });
@@ -1137,7 +1291,7 @@ pub fn handle_realm_commit(args: &Value, state: &ProjectState) -> Result<Value, 
 
     Ok(json!({
         "status": "success",
-        "message": format!("Committed in {} domain(s)", commits.len()),
+        "message": format!("Committed in {} repo(s)", commits.len()),
         "commits": commits
     }))
 }
@@ -1146,7 +1300,7 @@ pub fn handle_realm_commit(args: &Value, state: &ProjectState) -> Result<Value, 
 
 pub fn handle_realm_pr(args: &Value, state: &ProjectState) -> Result<Value, ServerError> {
     let config = load_realm_config(&state.repo_path)?;
-    let realm_path = PathBuf::from(&config.path);
+    let realm_path = PathBuf::from(&config.realm_path);
 
     let branch = get_current_branch(&state.repo_path)?;
     let tracking = load_realm_worktree(&realm_path, &branch)?;
@@ -1156,18 +1310,18 @@ pub fn handle_realm_pr(args: &Value, state: &ProjectState) -> Result<Value, Serv
 
     let mut prs = vec![];
 
-    // Determine merge order (domains that are imported should merge first)
-    let ordered_domains = topological_sort(&realm_path, &tracking.domains)?;
+    // Determine merge order (repos that export should merge before repos that import)
+    let ordered_repos = topological_sort_repos(&realm_path, &tracking.domains, &tracking.repos)?;
 
-    for (i, wt) in ordered_domains.iter().enumerate() {
-        let domain_config = load_domain_config(&realm_path, &wt.domain)?;
-        if let Some(repo_path) = &domain_config.repo_path {
+    for (i, wt) in ordered_repos.iter().enumerate() {
+        let repo_config = load_realm_repo(&realm_path, &wt.repo)?;
+        if let Some(repo_path) = &repo_config.path {
             // Create PR with links to other PRs
             let body = generate_pr_body(&tracking, &prs, i)?;
             let pr = create_github_pr(repo_path, &branch, title, &body)?;
 
             prs.push(LinkedPR {
-                domain: wt.domain.clone(),
+                repo: wt.repo.clone(),
                 number: pr.number,
                 url: pr.url,
                 blocked_by: if i > 0 { Some(prs[i-1].clone()) } else { None },
@@ -1179,7 +1333,7 @@ pub fn handle_realm_pr(args: &Value, state: &ProjectState) -> Result<Value, Serv
         "status": "success",
         "message": format!("Created {} linked PR(s)", prs.len()),
         "prs": prs,
-        "merge_order": ordered_domains.iter().map(|d| &d.domain).collect::<Vec<_>>()
+        "merge_order": ordered_repos.iter().map(|r| &r.repo).collect::<Vec<_>>()
     }))
 }
 ```
@@ -1198,32 +1352,33 @@ pub fn handle_realm_pr(args: &Value, state: &ProjectState) -> Result<Value, Serv
 
 ### Basic Realm Operations
 - [ ] `blue realm init` creates valid realm structure
-- [ ] `blue realm join` registers domain correctly
-- [ ] `blue realm join` auto-detects S3 path exports
-- [ ] `blue status` shows realm state
-- [ ] `blue status` detects local export changes
-- [ ] `blue status` shows stale imports
-- [ ] `blue realm sync` updates exports in realm
-- [ ] `blue realm sync` creates GitHub issues
+- [ ] `blue realm join` registers repo correctly in repos/ directory
+- [ ] `blue realm join` auto-detects potential exports
+- [ ] `blue realm domain create` creates domain with contracts and bindings
+- [ ] `blue status` shows realm state and participating domains
+- [ ] `blue status` detects local contract changes
+- [ ] `blue status` shows stale imports across domains
+- [ ] `blue realm sync` updates contracts in affected domains
+- [ ] `blue realm sync` creates GitHub issues for affected repos
 - [ ] `blue realm sync --dry-run` shows changes without committing
-- [ ] Multiple domains can coordinate through realm
+- [ ] Multiple repos can coordinate through a domain
 - [ ] Breaking changes are flagged appropriately
-- [ ] CODEOWNERS prevents cross-domain writes
+- [ ] CODEOWNERS prevents cross-repo writes to domain bindings
 
 ### Session Coordination
 - [ ] IPC socket created on Blue start
-- [ ] Session registered in realm index
-- [ ] Export changes broadcast to watching sessions
+- [ ] Session registered in realm index with repo name
+- [ ] Contract changes broadcast to watching sessions
 - [ ] Sessions cleaned up on process exit
-- [ ] `blue realm sessions` lists active sessions
+- [ ] `blue realm sessions` lists active sessions by repo
 
 ### Unified Worktrees
-- [ ] `blue realm worktree` creates worktrees in all affected repos
-- [ ] Worktree tracked in realm repo
+- [ ] `blue realm worktree` creates worktrees in all affected repos in domain
+- [ ] Worktree tracked in realm repo with domain reference
 - [ ] `blue realm commit` commits in all repos with changes
 - [ ] Commits linked in realm tracking
 - [ ] `blue realm push` pushes all branches
-- [ ] `blue realm pr` creates linked PRs with correct merge order
+- [ ] `blue realm pr` creates linked PRs with correct merge order (exporters first)
 
 ---
 
