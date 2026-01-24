@@ -30,7 +30,6 @@ When aperture adds a new S3 path, fungal's IAM policy must update. Currently:
 ## Non-Goals
 
 - Automatic code changes across repos (manual review required)
-- Real-time synchronization (pull-based is sufficient)
 - Public realm discovery (future scope)
 - Monorepo support (one repo = one domain for MVP)
 
@@ -187,6 +186,189 @@ realms:
   - name: ml-infra
     url: git@github.com:org/realm-ml-infra.git
     local_path: /Users/ericg/.blue/realms/ml-infra
+```
+
+### Session Coordination (IPC/Socket)
+
+Blue MCP servers communicate directly for real-time session awareness.
+
+**Architecture:**
+
+```
+┌─────────────────────┐     IPC Socket      ┌─────────────────────┐
+│  Blue MCP Server    │◄──────────────────►│  Blue MCP Server    │
+│  (aperture)         │                     │  (fungal)           │
+│                     │                     │                     │
+│  Socket: /tmp/blue/ │                     │  Socket: /tmp/blue/ │
+│    aperture.sock    │                     │    fungal.sock      │
+└─────────────────────┘                     └─────────────────────┘
+           │                                           │
+           └──────────────┬────────────────────────────┘
+                          │
+                          ▼
+              ┌───────────────────────┐
+              │  Realm Session Index  │
+              │  /tmp/blue/letemcook/ │
+              │    sessions.json      │
+              └───────────────────────┘
+```
+
+**Session Registration:**
+
+```json
+// /tmp/blue/letemcook/sessions.json
+{
+  "sessions": [
+    {
+      "domain": "aperture",
+      "socket": "/tmp/blue/aperture.sock",
+      "pid": 12345,
+      "started_at": "2026-01-24T10:00:00Z",
+      "active_rfc": "training-metrics-v2",
+      "exports_modified": ["required-s3-permissions"]
+    },
+    {
+      "domain": "fungal-image-analysis",
+      "socket": "/tmp/blue/fungal.sock",
+      "pid": 12346,
+      "started_at": "2026-01-24T10:05:00Z",
+      "active_rfc": null,
+      "imports_watching": ["required-s3-permissions"]
+    }
+  ]
+}
+```
+
+**Real-time Notifications:**
+
+When aperture modifies an export, it broadcasts to all sessions watching that export:
+
+```rust
+// Session broadcast
+fn notify_export_change(export_name: &str, changes: &ExportChanges) {
+    let sessions = load_realm_sessions();
+    for session in sessions.watching(export_name) {
+        send_ipc_message(&session.socket, Message::ExportChanged {
+            from: self.domain,
+            export: export_name,
+            changes: changes.clone(),
+        });
+    }
+}
+```
+
+**Receiving Notifications:**
+
+```bash
+# In fungal-image-analysis terminal (real-time)
+$ blue status
+📊 fungal-image-analysis
+
+🔔 Live notification from aperture:
+   Export 'required-s3-permissions' changed:
+   + training-metrics/experiments/*
+
+   Your import is now stale.
+   Run 'blue realm worktree' to start coordinated changes.
+```
+
+### Unified Worktrees (Cross-Repo Branches)
+
+When changes span multiple repos, create worktrees in all affected repos simultaneously with a shared branch name.
+
+**Workflow:**
+
+```bash
+# In aperture: start cross-repo change
+$ blue realm worktree --rfc training-metrics-v2
+
+Creating unified worktree 'feat/training-metrics-v2':
+  ✓ aperture: .worktrees/feat-training-metrics-v2/
+  ✓ fungal-image-analysis: .worktrees/feat-training-metrics-v2/
+
+Branch 'feat/training-metrics-v2' created in both repos.
+You are now in aperture worktree.
+
+Related worktree:
+  cd /Users/ericg/letemcook/fungal-image-analysis/.worktrees/feat-training-metrics-v2
+```
+
+**Realm Worktree Tracking:**
+
+```yaml
+# realm-letemcook/worktrees/feat-training-metrics-v2.yaml
+name: feat/training-metrics-v2
+created_at: 2026-01-24T10:00:00Z
+source_rfc: aperture:training-metrics-v2
+
+domains:
+  - name: aperture
+    path: /Users/ericg/letemcook/aperture/.worktrees/feat-training-metrics-v2
+    status: active
+    commits: 3
+
+  - name: fungal-image-analysis
+    path: /Users/ericg/letemcook/fungal-image-analysis/.worktrees/feat-training-metrics-v2
+    status: active
+    commits: 1
+
+coordination:
+  # Commits are linked across repos
+  commits:
+    - aperture: abc1234
+      fungal-image-analysis: null
+      message: "feat: add experiment metrics export"
+
+    - aperture: def5678
+      fungal-image-analysis: ghi9012
+      message: "feat: update IAM for experiment metrics"
+      linked: true  # These commits are coordinated
+```
+
+**Coordinated Commits:**
+
+```bash
+# After making changes in both worktrees
+$ blue realm commit -m "feat: add experiment metrics with IAM support"
+
+Coordinated commit across realm:
+  aperture:
+    ✓ Committed: abc1234
+    Files: models/training/metrics_exporter.py
+
+  fungal-image-analysis:
+    ✓ Committed: def5678
+    Files: cdk/training_tools_access_stack.py
+
+Commits linked in realm worktree tracking.
+
+$ blue realm push
+Pushing coordinated branches:
+  ✓ aperture: feat/training-metrics-v2 → origin
+  ✓ fungal-image-analysis: feat/training-metrics-v2 → origin
+
+Ready for coordinated PRs. Run 'blue realm pr' to create.
+```
+
+**Coordinated PRs:**
+
+```bash
+$ blue realm pr
+
+Creating coordinated pull requests:
+
+aperture:
+  ✓ PR #45: "feat: add experiment metrics export"
+    Base: main
+    Links to: fungal-image-analysis#23
+
+fungal-image-analysis:
+  ✓ PR #23: "feat: IAM policy for experiment metrics"
+    Base: main
+    Links to: aperture#45
+    Blocked by: aperture#45 (merge aperture first)
+
+PRs are linked. Merge order: aperture#45 → fungal-image-analysis#23
 ```
 
 ---
@@ -374,9 +556,81 @@ blue_realm_graph
   --format: text | mermaid | dot
 ```
 
+### blue_realm_sessions
+
+List active Blue sessions in the realm.
+
+```
+blue_realm_sessions
+  --watch: Continuously update (real-time)
+```
+
+### blue_realm_worktree
+
+Create unified worktrees across affected repos.
+
+```
+blue_realm_worktree
+  --rfc: RFC title that drives the change
+  --branch: Branch name (default: feat/{rfc-title})
+  --domains: Specific domains to include (default: all affected)
+```
+
+### blue_realm_commit
+
+Create coordinated commits across realm worktrees.
+
+```
+blue_realm_commit
+  -m: Commit message (applied to all repos)
+  --domains: Which domains to commit (default: all with changes)
+  --link: Link commits in realm tracking (default: true)
+```
+
+### blue_realm_push
+
+Push coordinated branches to remotes.
+
+```
+blue_realm_push
+  --domains: Which domains to push (default: all)
+```
+
+### blue_realm_pr
+
+Create linked pull requests across repos.
+
+```
+blue_realm_pr
+  --title: PR title (applied to all)
+  --body: PR body template
+  --draft: Create as draft PRs
+```
+
+```
+blue_realm_graph
+  --format: text | mermaid | dot
+```
+
 ---
 
 ## Implementation
+
+### Phase Overview
+
+| Phase | Scope | Duration |
+|-------|-------|----------|
+| 0 | Data model in blue-core | 1 week |
+| 1 | Realm init | 1 week |
+| 2 | Domain join | 1 week |
+| 3 | Status integration | 1 week |
+| 4 | Sync & notifications | 2 weeks |
+| 5 | **Session coordination (IPC)** | 2 weeks |
+| 6 | **Unified worktrees** | 2 weeks |
+| 7 | **Coordinated commits & PRs** | 2 weeks |
+| 8 | Polish & docs | 1 week |
+
+**Total:** 13 weeks (Phases 0-4 for basic functionality, 5-7 for full coordination)
 
 ### Phase 0: Data Model (Week 1)
 
@@ -695,17 +949,254 @@ pub fn handle_sync(args: &Value, state: &ProjectState) -> Result<Value, ServerEr
 }
 ```
 
-### Phase 5: Polish (Week 7)
+### Phase 5: Session Coordination (Weeks 8-9)
+
+**IPC Socket Infrastructure:**
+
+```rust
+// blue-core/src/ipc.rs
+
+use std::os::unix::net::{UnixListener, UnixStream};
+use std::path::PathBuf;
+
+pub struct BlueIpcServer {
+    socket_path: PathBuf,
+    listener: UnixListener,
+    realm: String,
+    domain: String,
+}
+
+impl BlueIpcServer {
+    pub fn start(realm: &str, domain: &str) -> Result<Self, IpcError> {
+        let socket_path = PathBuf::from(format!("/tmp/blue/{}.sock", domain));
+        std::fs::create_dir_all("/tmp/blue")?;
+
+        let listener = UnixListener::bind(&socket_path)?;
+
+        // Register in realm session index
+        register_session(realm, domain, &socket_path)?;
+
+        Ok(Self { socket_path, listener, realm: realm.to_string(), domain: domain.to_string() })
+    }
+
+    pub fn broadcast_export_change(&self, export: &str, changes: &ExportChanges) {
+        let sessions = load_realm_sessions(&self.realm);
+        for session in sessions.watching(export) {
+            if let Ok(mut stream) = UnixStream::connect(&session.socket) {
+                let msg = IpcMessage::ExportChanged {
+                    from: self.domain.clone(),
+                    export: export.to_string(),
+                    changes: changes.clone(),
+                };
+                serde_json::to_writer(&mut stream, &msg).ok();
+            }
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+pub enum IpcMessage {
+    ExportChanged { from: String, export: String, changes: ExportChanges },
+    SessionStarted { domain: String, rfc: Option<String> },
+    SessionEnded { domain: String },
+    Ping,
+    Pong,
+}
+```
+
+**Session Index:**
+
+```rust
+// blue-core/src/realm_sessions.rs
+
+pub fn register_session(realm: &str, domain: &str, socket: &Path) -> Result<(), Error> {
+    let index_path = PathBuf::from(format!("/tmp/blue/{}/sessions.json", realm));
+    std::fs::create_dir_all(index_path.parent().unwrap())?;
+
+    let mut sessions = load_sessions(&index_path)?;
+    sessions.push(Session {
+        domain: domain.to_string(),
+        socket: socket.to_path_buf(),
+        pid: std::process::id(),
+        started_at: chrono::Utc::now(),
+        active_rfc: None,
+        exports_modified: vec![],
+        imports_watching: vec![],
+    });
+
+    save_sessions(&index_path, &sessions)
+}
+
+pub fn unregister_session(realm: &str, domain: &str) -> Result<(), Error> {
+    let index_path = PathBuf::from(format!("/tmp/blue/{}/sessions.json", realm));
+    let mut sessions = load_sessions(&index_path)?;
+    sessions.retain(|s| s.domain != domain);
+    save_sessions(&index_path, &sessions)
+}
+```
+
+### Phase 6: Unified Worktrees (Weeks 10-11)
+
+```rust
+// handlers/realm_worktree.rs
+
+pub fn handle_realm_worktree(args: &Value, state: &ProjectState) -> Result<Value, ServerError> {
+    let rfc_title = args.get("rfc").and_then(|v| v.as_str())
+        .ok_or(ServerError::InvalidParams)?;
+
+    let branch = args.get("branch").and_then(|v| v.as_str())
+        .map(String::from)
+        .unwrap_or_else(|| format!("feat/{}", rfc_title));
+
+    let config = load_realm_config(&state.repo_path)?;
+    let realm_path = PathBuf::from(&config.path);
+
+    // Find affected domains (those that import from us)
+    let our_exports = load_declared_exports(&realm_path, &config.domain)?;
+    let affected = find_consumers(&realm_path, &our_exports)?;
+
+    // Create worktree in our repo
+    let our_worktree = create_worktree(&state.repo_path, &branch)?;
+
+    // Create worktrees in affected repos
+    let mut worktrees = vec![WorktreeInfo {
+        domain: config.domain.clone(),
+        path: our_worktree.clone(),
+        status: "active".to_string(),
+    }];
+
+    for domain in &affected {
+        let domain_config = load_domain_config(&realm_path, domain)?;
+        if let Some(repo_path) = &domain_config.repo_path {
+            let wt = create_worktree(repo_path, &branch)?;
+            worktrees.push(WorktreeInfo {
+                domain: domain.clone(),
+                path: wt,
+                status: "active".to_string(),
+            });
+        }
+    }
+
+    // Track in realm
+    let tracking = RealmWorktree {
+        name: branch.clone(),
+        created_at: chrono::Utc::now().to_rfc3339(),
+        source_rfc: format!("{}:{}", config.domain, rfc_title),
+        domains: worktrees.clone(),
+        commits: vec![],
+    };
+
+    save_realm_worktree(&realm_path, &tracking)?;
+
+    Ok(json!({
+        "status": "success",
+        "message": format!("Created unified worktree '{}'", branch),
+        "branch": branch,
+        "worktrees": worktrees
+    }))
+}
+```
+
+### Phase 7: Coordinated Commits & PRs (Weeks 12-13)
+
+```rust
+// handlers/realm_commit.rs
+
+pub fn handle_realm_commit(args: &Value, state: &ProjectState) -> Result<Value, ServerError> {
+    let message = args.get("m").and_then(|v| v.as_str())
+        .ok_or(ServerError::InvalidParams)?;
+
+    let config = load_realm_config(&state.repo_path)?;
+    let realm_path = PathBuf::from(&config.path);
+
+    // Find current worktree
+    let branch = get_current_branch(&state.repo_path)?;
+    let tracking = load_realm_worktree(&realm_path, &branch)?;
+
+    let mut commits = vec![];
+
+    // Commit in each domain that has changes
+    for wt in &tracking.domains {
+        if has_uncommitted_changes(&wt.path)? {
+            let commit = git_commit(&wt.path, message)?;
+            commits.push(LinkedCommit {
+                domain: wt.domain.clone(),
+                sha: commit,
+                message: message.to_string(),
+            });
+        }
+    }
+
+    // Update realm tracking
+    let mut tracking = tracking;
+    tracking.commits.push(CoordinatedCommit {
+        commits: commits.clone(),
+        timestamp: chrono::Utc::now().to_rfc3339(),
+    });
+    save_realm_worktree(&realm_path, &tracking)?;
+
+    Ok(json!({
+        "status": "success",
+        "message": format!("Committed in {} domain(s)", commits.len()),
+        "commits": commits
+    }))
+}
+
+// handlers/realm_pr.rs
+
+pub fn handle_realm_pr(args: &Value, state: &ProjectState) -> Result<Value, ServerError> {
+    let config = load_realm_config(&state.repo_path)?;
+    let realm_path = PathBuf::from(&config.path);
+
+    let branch = get_current_branch(&state.repo_path)?;
+    let tracking = load_realm_worktree(&realm_path, &branch)?;
+
+    let title = args.get("title").and_then(|v| v.as_str())
+        .unwrap_or(&branch);
+
+    let mut prs = vec![];
+
+    // Determine merge order (domains that are imported should merge first)
+    let ordered_domains = topological_sort(&realm_path, &tracking.domains)?;
+
+    for (i, wt) in ordered_domains.iter().enumerate() {
+        let domain_config = load_domain_config(&realm_path, &wt.domain)?;
+        if let Some(repo_path) = &domain_config.repo_path {
+            // Create PR with links to other PRs
+            let body = generate_pr_body(&tracking, &prs, i)?;
+            let pr = create_github_pr(repo_path, &branch, title, &body)?;
+
+            prs.push(LinkedPR {
+                domain: wt.domain.clone(),
+                number: pr.number,
+                url: pr.url,
+                blocked_by: if i > 0 { Some(prs[i-1].clone()) } else { None },
+            });
+        }
+    }
+
+    Ok(json!({
+        "status": "success",
+        "message": format!("Created {} linked PR(s)", prs.len()),
+        "prs": prs,
+        "merge_order": ordered_domains.iter().map(|d| &d.domain).collect::<Vec<_>>()
+    }))
+}
+```
+
+### Phase 8: Polish (Week 14)
 
 - Error handling for all edge cases
 - User-friendly messages in Blue's voice
 - Documentation
 - Tests
+- Socket cleanup on process exit
 
 ---
 
 ## Test Plan
 
+### Basic Realm Operations
 - [ ] `blue realm init` creates valid realm structure
 - [ ] `blue realm join` registers domain correctly
 - [ ] `blue realm join` auto-detects S3 path exports
@@ -719,6 +1210,21 @@ pub fn handle_sync(args: &Value, state: &ProjectState) -> Result<Value, ServerEr
 - [ ] Breaking changes are flagged appropriately
 - [ ] CODEOWNERS prevents cross-domain writes
 
+### Session Coordination
+- [ ] IPC socket created on Blue start
+- [ ] Session registered in realm index
+- [ ] Export changes broadcast to watching sessions
+- [ ] Sessions cleaned up on process exit
+- [ ] `blue realm sessions` lists active sessions
+
+### Unified Worktrees
+- [ ] `blue realm worktree` creates worktrees in all affected repos
+- [ ] Worktree tracked in realm repo
+- [ ] `blue realm commit` commits in all repos with changes
+- [ ] Commits linked in realm tracking
+- [ ] `blue realm push` pushes all branches
+- [ ] `blue realm pr` creates linked PRs with correct merge order
+
 ---
 
 ## Future Work
@@ -728,7 +1234,6 @@ pub fn handle_sync(args: &Value, state: &ProjectState) -> Result<Value, ServerEr
 3. **Cross-realm imports** - Import from domain in different realm
 4. **Public registry** - Discover realms and contracts
 5. **Infrastructure verification** - Check actual AWS state matches exports
-6. **Automatic PR creation** - Generate code changes, not just issues
 
 ---
 
