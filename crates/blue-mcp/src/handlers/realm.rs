@@ -10,12 +10,22 @@
 //! Phase 2:
 //! - session_start: Begin work session
 //! - session_stop: End session with summary
+//!
+//! Phase 3:
+//! - realm_worktree_create: Create worktrees for domain peers
+//! - realm_pr_status: Show PR readiness across repos
+//!
+//! Phase 4:
+//! - notifications_list: List notifications with state filters
+//! - Schema hash detection in realm_check
+//! - 7-day expiration cleanup
 
-use blue_core::daemon::DaemonPaths;
+use blue_core::daemon::{DaemonDb, DaemonPaths};
 use blue_core::realm::{LocalRepoConfig, RealmService};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::path::Path;
 
 use crate::error::ServerError;
@@ -116,14 +126,19 @@ pub fn handle_status(cwd: Option<&Path>) -> Result<Value, ServerError> {
         })
         .collect();
 
-    // Notifications are fetched via daemon in Phase 4
-    // For now, return empty (sync implementation)
-    let notifications: Vec<Value> = Vec::new();
+    // Fetch pending notifications (Phase 4)
+    let notifications = fetch_pending_notifications(&ctx);
 
     // Build next steps
     let mut next_steps = Vec::new();
     if domains.is_empty() {
         next_steps.push("Create a domain with 'blue realm admin domain'".to_string());
+    }
+    if !notifications.is_empty() {
+        next_steps.push(format!("{} pending notification{} to review",
+            notifications.len(),
+            if notifications.len() == 1 { "" } else { "s" }
+        ));
     }
 
     Ok(json!({
@@ -144,6 +159,11 @@ pub fn handle_check(cwd: Option<&Path>, realm_arg: Option<&str>) -> Result<Value
 
     let result = ctx.service.check_realm(realm_name).map_err(|e| {
         ServerError::CommandFailed(format!("Failed to check realm: {}", e))
+    })?;
+
+    // Load realm details for schema integrity check
+    let details = ctx.service.load_realm_details(realm_name).map_err(|e| {
+        ServerError::CommandFailed(format!("Failed to load realm details: {}", e))
     })?;
 
     let errors: Vec<Value> = result
@@ -170,8 +190,11 @@ pub fn handle_check(cwd: Option<&Path>, realm_arg: Option<&str>) -> Result<Value
         })
         .collect();
 
-    // Notifications are fetched via daemon in Phase 4
-    let notifications: Vec<Value> = Vec::new();
+    // Get schema hashes for integrity tracking (Phase 4)
+    let schema_hashes = check_schema_integrity(&details, &ctx.repo_name);
+
+    // Fetch pending notifications (Phase 4)
+    let notifications = fetch_pending_notifications(&ctx);
 
     // Build next steps
     let mut next_steps = Vec::new();
@@ -180,6 +203,12 @@ pub fn handle_check(cwd: Option<&Path>, realm_arg: Option<&str>) -> Result<Value
     }
     if result.has_warnings() {
         next_steps.push("Review warnings - they may indicate issues".to_string());
+    }
+    if !notifications.is_empty() {
+        next_steps.push(format!("{} pending notification{} to review",
+            notifications.len(),
+            if notifications.len() == 1 { "" } else { "s" }
+        ));
     }
     if result.is_ok() && !result.has_warnings() {
         next_steps.push("All checks passed. Ready to proceed.".to_string());
@@ -192,6 +221,7 @@ pub fn handle_check(cwd: Option<&Path>, realm_arg: Option<&str>) -> Result<Value
         "valid": result.is_ok(),
         "errors": errors,
         "warnings": warnings,
+        "schema_hashes": schema_hashes,
         "notifications": notifications,
         "next_steps": next_steps
     }))
@@ -874,6 +904,217 @@ fn get_pr_info(repo_path: &std::path::Path, branch_name: Option<&str>) -> Option
     }))
 }
 
+// ─── Phase 4: Notifications ─────────────────────────────────────────────────
+
+/// Handle notifications_list - list notifications with state filters
+///
+/// States: pending (not seen by current repo), seen (acknowledged), expired (7+ days old)
+pub fn handle_notifications_list(
+    cwd: Option<&Path>,
+    state_filter: Option<&str>,
+) -> Result<Value, ServerError> {
+    let cwd = cwd.ok_or(ServerError::InvalidParams)?;
+    let ctx = detect_context(Some(cwd))?;
+
+    // Open daemon database
+    let paths = DaemonPaths::new().map_err(|e| {
+        ServerError::CommandFailed(format!("Failed to get daemon paths: {}", e))
+    })?;
+
+    let db = DaemonDb::open(&paths.database).map_err(|e| {
+        ServerError::CommandFailed(format!("Failed to open daemon database: {}", e))
+    })?;
+
+    // Clean up expired notifications (7+ days old)
+    let expired_count = db.cleanup_expired_notifications(7).unwrap_or(0);
+
+    // Get notifications with state
+    let notifications = db
+        .list_notifications_with_state(&ctx.realm_name, &ctx.repo_name, state_filter)
+        .map_err(|e| {
+            ServerError::CommandFailed(format!("Failed to list notifications: {}", e))
+        })?;
+
+    // Filter to only domains the current repo participates in
+    let details = ctx.service.load_realm_details(&ctx.realm_name).map_err(|e| {
+        ServerError::CommandFailed(format!("Failed to load realm: {}", e))
+    })?;
+
+    let participating_domains: Vec<String> = details
+        .domains
+        .iter()
+        .filter(|d| d.bindings.iter().any(|b| b.repo == ctx.repo_name))
+        .map(|d| d.domain.name.clone())
+        .collect();
+
+    let filtered: Vec<Value> = notifications
+        .into_iter()
+        .filter(|(n, _)| participating_domains.contains(&n.domain))
+        .map(|(n, state)| {
+            json!({
+                "id": n.id,
+                "realm": n.realm,
+                "domain": n.domain,
+                "contract": n.contract,
+                "from_repo": n.from_repo,
+                "change_type": format!("{:?}", n.change_type),
+                "changes": n.changes,
+                "created_at": n.created_at.to_rfc3339(),
+                "state": state
+            })
+        })
+        .collect();
+
+    // Count by state
+    let pending_count = filtered.iter().filter(|n| n["state"] == "pending").count();
+    let seen_count = filtered.iter().filter(|n| n["state"] == "seen").count();
+
+    // Build next steps
+    let mut next_steps = Vec::new();
+    if pending_count > 0 {
+        next_steps.push(format!("{} pending notification{} to review", pending_count, if pending_count == 1 { "" } else { "s" }));
+    }
+    if expired_count > 0 {
+        next_steps.push(format!("Cleaned up {} expired notification{}", expired_count, if expired_count == 1 { "" } else { "s" }));
+    }
+    if pending_count == 0 && seen_count == 0 {
+        next_steps.push("No notifications. All quiet.".to_string());
+    }
+
+    Ok(json!({
+        "status": "success",
+        "realm": ctx.realm_name,
+        "current_repo": ctx.repo_name,
+        "filter": state_filter.unwrap_or("all"),
+        "notifications": filtered,
+        "summary": {
+            "total": filtered.len(),
+            "pending": pending_count,
+            "seen": seen_count,
+            "expired_cleaned": expired_count
+        },
+        "next_steps": next_steps
+    }))
+}
+
+/// Compute canonical JSON hash for schema change detection
+fn compute_schema_hash(schema: &Value) -> String {
+    // Canonical JSON: sorted keys, no whitespace
+    let canonical = canonical_json(schema);
+    let mut hasher = Sha256::new();
+    hasher.update(canonical.as_bytes());
+    let result = hasher.finalize();
+    format!("{:x}", result)
+}
+
+/// Convert JSON to canonical form (sorted keys, compact)
+fn canonical_json(value: &Value) -> String {
+    match value {
+        Value::Object(map) => {
+            let mut keys: Vec<_> = map.keys().collect();
+            keys.sort();
+            let pairs: Vec<String> = keys
+                .iter()
+                .map(|k| format!("\"{}\":{}", k, canonical_json(&map[*k])))
+                .collect();
+            format!("{{{}}}", pairs.join(","))
+        }
+        Value::Array(arr) => {
+            let items: Vec<String> = arr.iter().map(canonical_json).collect();
+            format!("[{}]", items.join(","))
+        }
+        Value::String(s) => format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\"")),
+        Value::Number(n) => n.to_string(),
+        Value::Bool(b) => b.to_string(),
+        Value::Null => "null".to_string(),
+    }
+}
+
+/// Enhanced realm_check with schema hash detection
+///
+/// Computes schema hashes for contracts. Full comparison requires stored hashes
+/// which will be added in a future iteration.
+pub fn check_schema_integrity(
+    details: &blue_core::realm::RealmDetails,
+    repo_name: &str,
+) -> Vec<Value> {
+    let mut schema_info = Vec::new();
+
+    for domain in &details.domains {
+        // Only check contracts we can access (own or import)
+        let binding = domain.bindings.iter().find(|b| b.repo == repo_name);
+        if binding.is_none() {
+            continue;
+        }
+
+        for contract in &domain.contracts {
+            // Compute hash of current schema
+            let schema_hash = compute_schema_hash(&contract.schema);
+
+            schema_info.push(json!({
+                "domain": domain.domain.name,
+                "contract": contract.name,
+                "version": contract.version,
+                "schema_hash": schema_hash,
+                "owner": contract.owner
+            }));
+        }
+    }
+
+    schema_info
+}
+
+/// Fetch pending notifications for piggybacking onto tool responses
+fn fetch_pending_notifications(ctx: &RealmContext) -> Vec<Value> {
+    let paths = match DaemonPaths::new() {
+        Ok(p) => p,
+        Err(_) => return Vec::new(),
+    };
+
+    let db = match DaemonDb::open(&paths.database) {
+        Ok(d) => d,
+        Err(_) => return Vec::new(),
+    };
+
+    // Get pending notifications
+    let notifications = match db.list_notifications_with_state(
+        &ctx.realm_name,
+        &ctx.repo_name,
+        Some("pending"),
+    ) {
+        Ok(n) => n,
+        Err(_) => return Vec::new(),
+    };
+
+    // Load realm details to filter by participating domains
+    let details = match ctx.service.load_realm_details(&ctx.realm_name) {
+        Ok(d) => d,
+        Err(_) => return Vec::new(),
+    };
+
+    let participating_domains: Vec<String> = details
+        .domains
+        .iter()
+        .filter(|d| d.bindings.iter().any(|b| b.repo == ctx.repo_name))
+        .map(|d| d.domain.name.clone())
+        .collect();
+
+    notifications
+        .into_iter()
+        .filter(|(n, _)| participating_domains.contains(&n.domain))
+        .map(|(n, state)| {
+            json!({
+                "id": n.id,
+                "domain": n.domain,
+                "contract": n.contract,
+                "from_repo": n.from_repo,
+                "change_type": format!("{:?}", n.change_type),
+                "state": state
+            })
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1011,5 +1252,72 @@ repo: test-repo
 
         let result = handle_session_stop(Some(&path));
         assert!(result.is_err());
+    }
+
+    // Phase 4: Notification and schema tests
+
+    #[test]
+    fn test_canonical_json_object() {
+        let json = json!({
+            "z": 1,
+            "a": 2,
+            "m": 3
+        });
+        let canonical = canonical_json(&json);
+        // Keys should be sorted
+        assert!(canonical.starts_with("{\"a\":2"));
+        assert!(canonical.contains("\"m\":3"));
+        assert!(canonical.ends_with("\"z\":1}"));
+    }
+
+    #[test]
+    fn test_canonical_json_nested() {
+        let json = json!({
+            "outer": {
+                "b": 2,
+                "a": 1
+            }
+        });
+        let canonical = canonical_json(&json);
+        // Nested keys should also be sorted
+        assert!(canonical.contains("\"a\":1,\"b\":2"));
+    }
+
+    #[test]
+    fn test_compute_schema_hash_deterministic() {
+        let schema1 = json!({
+            "type": "object",
+            "properties": {
+                "name": { "type": "string" }
+            }
+        });
+        let schema2 = json!({
+            "properties": {
+                "name": { "type": "string" }
+            },
+            "type": "object"
+        });
+
+        let hash1 = compute_schema_hash(&schema1);
+        let hash2 = compute_schema_hash(&schema2);
+
+        // Same content, different order should produce same hash
+        assert_eq!(hash1, hash2);
+    }
+
+    #[test]
+    fn test_compute_schema_hash_different() {
+        let schema1 = json!({
+            "type": "object"
+        });
+        let schema2 = json!({
+            "type": "array"
+        });
+
+        let hash1 = compute_schema_hash(&schema1);
+        let hash2 = compute_schema_hash(&schema2);
+
+        // Different content should produce different hash
+        assert_ne!(hash1, hash2);
     }
 }

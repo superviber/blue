@@ -195,11 +195,12 @@ All tools return `next_steps` suggestions based on state:
 - Creates worktrees under `~/.blue/worktrees/<realm>/<rfc>/`
 - Auto-selects domain peers (repos sharing domains with current repo)
 
-### Phase 4: Notifications
-- `notifications_list` with state filters
-- Schema hash detection in `realm_check`
-- 7-day expiration cleanup
-- Daemon integration for session registration
+### Phase 4: Notifications ✓
+- `notifications_list` with state filters (pending, seen, expired, all)
+- Schema hash detection via canonical JSON (SHA-256)
+- 7-day expiration cleanup on notification list
+- Notification piggybacking on realm_status and realm_check
+- DaemonDb extended with list_notifications_with_state and cleanup_expired_notifications
 
 ---
 

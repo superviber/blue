@@ -469,6 +469,56 @@ impl DaemonDb {
         Ok(())
     }
 
+    /// Delete notifications older than the specified number of days
+    pub fn cleanup_expired_notifications(&self, days: i64) -> Result<usize, DaemonDbError> {
+        let cutoff = (Utc::now() - chrono::Duration::days(days)).to_rfc3339();
+        let deleted = self.conn.execute(
+            "DELETE FROM notifications WHERE created_at < ?",
+            params![cutoff],
+        )?;
+        Ok(deleted)
+    }
+
+    /// List notifications for a realm filtered by state
+    /// State is determined by: pending (not acknowledged by current repo),
+    /// seen (acknowledged), expired (older than 7 days)
+    pub fn list_notifications_with_state(
+        &self,
+        realm: &str,
+        current_repo: &str,
+        state_filter: Option<&str>,
+    ) -> Result<Vec<(Notification, String)>, DaemonDbError> {
+        let notifications = self.list_notifications_for_realm(realm)?;
+        let now = Utc::now();
+        let expiry_days = 7;
+
+        let with_state: Vec<(Notification, String)> = notifications
+            .into_iter()
+            .map(|n| {
+                let age_days = (now - n.created_at).num_days();
+                let state = if age_days >= expiry_days {
+                    "expired"
+                } else if n.acknowledged_by.contains(&current_repo.to_string()) {
+                    "seen"
+                } else {
+                    "pending"
+                };
+                (n, state.to_string())
+            })
+            .filter(|(_, state)| {
+                match state_filter {
+                    Some("pending") => state == "pending",
+                    Some("seen") => state == "seen",
+                    Some("expired") => state == "expired",
+                    Some("all") | None => true,
+                    _ => true,
+                }
+            })
+            .collect();
+
+        Ok(with_state)
+    }
+
     fn row_to_notification(row: &rusqlite::Row) -> Result<Notification, rusqlite::Error> {
         Ok(Notification {
             id: row.get(0)?,

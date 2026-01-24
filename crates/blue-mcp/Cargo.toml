@@ -17,6 +17,7 @@ tracing.workspace = true
 chrono.workspace = true
 git2.workspace = true
 regex.workspace = true
+sha2.workspace = true
 
 [dev-dependencies]
 blue-core = { workspace = true, features = ["test-helpers"] }

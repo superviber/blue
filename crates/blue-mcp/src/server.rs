@@ -1483,6 +1483,26 @@ impl BlueServer {
                         },
                         "required": ["cwd"]
                     }
+                },
+                // Phase 4: Notifications (RFC 0002)
+                {
+                    "name": "notifications_list",
+                    "description": "List notifications with state filters. States: pending (unseen), seen (acknowledged), expired (7+ days old). Auto-cleans expired notifications.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "cwd": {
+                                "type": "string",
+                                "description": "Current working directory (must be in a realm repo)"
+                            },
+                            "state": {
+                                "type": "string",
+                                "enum": ["pending", "seen", "expired", "all"],
+                                "description": "Filter by notification state (default: all)"
+                            }
+                        },
+                        "required": ["cwd"]
+                    }
                 }
             ]
         }))
@@ -1580,6 +1600,7 @@ impl BlueServer {
             "session_stop" => self.handle_session_stop(&call.arguments),
             "realm_worktree_create" => self.handle_realm_worktree_create(&call.arguments),
             "realm_pr_status" => self.handle_realm_pr_status(&call.arguments),
+            "notifications_list" => self.handle_notifications_list(&call.arguments),
             _ => Err(ServerError::ToolNotFound(call.name)),
         }?;
 
@@ -2339,6 +2360,16 @@ impl BlueServer {
             .and_then(|a| a.get("rfc"))
             .and_then(|v| v.as_str());
         crate::handlers::realm::handle_pr_status(self.cwd.as_deref(), rfc)
+    }
+
+    // Phase 4: Notifications handler (RFC 0002)
+
+    fn handle_notifications_list(&mut self, args: &Option<Value>) -> Result<Value, ServerError> {
+        let state = args
+            .as_ref()
+            .and_then(|a| a.get("state"))
+            .and_then(|v| v.as_str());
+        crate::handlers::realm::handle_notifications_list(self.cwd.as_deref(), state)
     }
 }
 
