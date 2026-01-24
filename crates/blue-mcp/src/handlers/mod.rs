@@ -6,6 +6,7 @@ pub mod adr;
 pub mod audit; // Health check (blue_health_check)
 pub mod audit_doc; // Audit documents (blue_audit_create, etc.)
 pub mod decision;
+pub mod index; // Semantic index (RFC 0010)
 pub mod delete;
 pub mod dialogue;
 pub mod dialogue_lint;

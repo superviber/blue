@@ -1931,6 +1931,122 @@ impl BlueServer {
                             }
                         }
                     }
+                },
+                // RFC 0010: Semantic Index Tools
+                {
+                    "name": "blue_index_status",
+                    "description": "Get semantic index status. Shows indexed file count, symbol count, and prompt version.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "cwd": {
+                                "type": "string",
+                                "description": "Current working directory"
+                            }
+                        }
+                    }
+                },
+                {
+                    "name": "blue_index_search",
+                    "description": "Search the semantic index. Returns files or symbols matching the query.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "cwd": {
+                                "type": "string",
+                                "description": "Current working directory"
+                            },
+                            "query": {
+                                "type": "string",
+                                "description": "Search query"
+                            },
+                            "symbols_only": {
+                                "type": "boolean",
+                                "description": "Search symbols only (default: false, searches files)"
+                            },
+                            "limit": {
+                                "type": "number",
+                                "description": "Maximum results to return (default: 10)"
+                            }
+                        },
+                        "required": ["query"]
+                    }
+                },
+                {
+                    "name": "blue_index_impact",
+                    "description": "Analyze impact of changing a file. Shows what depends on it and its relationships.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "cwd": {
+                                "type": "string",
+                                "description": "Current working directory"
+                            },
+                            "file": {
+                                "type": "string",
+                                "description": "File path to analyze"
+                            }
+                        },
+                        "required": ["file"]
+                    }
+                },
+                {
+                    "name": "blue_index_file",
+                    "description": "Index a single file with AI-generated summary, relationships, and symbols.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "cwd": {
+                                "type": "string",
+                                "description": "Current working directory"
+                            },
+                            "file_path": {
+                                "type": "string",
+                                "description": "File path to index"
+                            },
+                            "file_hash": {
+                                "type": "string",
+                                "description": "Hash of file contents for staleness detection"
+                            },
+                            "summary": {
+                                "type": "string",
+                                "description": "One-sentence summary of what the file does"
+                            },
+                            "relationships": {
+                                "type": "string",
+                                "description": "Description of relationships to other files"
+                            },
+                            "symbols": {
+                                "type": "array",
+                                "description": "List of symbols in the file",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "name": { "type": "string" },
+                                        "kind": { "type": "string" },
+                                        "start_line": { "type": "number" },
+                                        "end_line": { "type": "number" },
+                                        "description": { "type": "string" }
+                                    },
+                                    "required": ["name", "kind"]
+                                }
+                            }
+                        },
+                        "required": ["file_path", "file_hash"]
+                    }
+                },
+                {
+                    "name": "blue_index_realm",
+                    "description": "List all indexed files in the current realm.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "cwd": {
+                                "type": "string",
+                                "description": "Current working directory"
+                            }
+                        }
+                    }
                 }
             ]
         }))
@@ -2057,6 +2173,12 @@ impl BlueServer {
             "blue_restore" => self.handle_restore(&call.arguments),
             "blue_deleted_list" => self.handle_deleted_list(&call.arguments),
             "blue_purge_deleted" => self.handle_purge_deleted(&call.arguments),
+            // RFC 0010: Semantic Index tools
+            "blue_index_status" => self.handle_index_status(),
+            "blue_index_search" => self.handle_index_search(&call.arguments),
+            "blue_index_impact" => self.handle_index_impact(&call.arguments),
+            "blue_index_file" => self.handle_index_file(&call.arguments),
+            "blue_index_realm" => self.handle_index_realm(&call.arguments),
             _ => Err(ServerError::ToolNotFound(call.name)),
         }?;
 
@@ -3087,6 +3209,38 @@ impl BlueServer {
 
         let state = self.ensure_state_mut()?;
         crate::handlers::delete::handle_purge_deleted(state, days)
+    }
+
+    // RFC 0010: Semantic Index handlers
+
+    fn handle_index_status(&mut self) -> Result<Value, ServerError> {
+        let state = self.ensure_state()?;
+        crate::handlers::index::handle_status(state)
+    }
+
+    fn handle_index_search(&mut self, args: &Option<Value>) -> Result<Value, ServerError> {
+        let args = args.as_ref().ok_or(ServerError::InvalidParams)?;
+        let state = self.ensure_state()?;
+        crate::handlers::index::handle_search(state, args)
+    }
+
+    fn handle_index_impact(&mut self, args: &Option<Value>) -> Result<Value, ServerError> {
+        let args = args.as_ref().ok_or(ServerError::InvalidParams)?;
+        let state = self.ensure_state()?;
+        crate::handlers::index::handle_impact(state, args)
+    }
+
+    fn handle_index_file(&mut self, args: &Option<Value>) -> Result<Value, ServerError> {
+        let args = args.as_ref().ok_or(ServerError::InvalidParams)?;
+        let state = self.ensure_state()?;
+        crate::handlers::index::handle_index_file(state, args)
+    }
+
+    fn handle_index_realm(&mut self, args: &Option<Value>) -> Result<Value, ServerError> {
+        let default_args = serde_json::json!({});
+        let args = args.as_ref().unwrap_or(&default_args);
+        let state = self.ensure_state()?;
+        crate::handlers::index::handle_index_realm(state, args)
     }
 }
 

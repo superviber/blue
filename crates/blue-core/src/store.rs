@@ -10,7 +10,7 @@ use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBe
 use tracing::{debug, info, warn};
 
 /// Current schema version
-const SCHEMA_VERSION: i32 = 3;
+const SCHEMA_VERSION: i32 = 4;
 
 /// Core database schema
 const SCHEMA: &str = r#"
@@ -144,6 +144,40 @@ const SCHEMA: &str = r#"
 
     CREATE INDEX IF NOT EXISTS idx_staging_deployments_status ON staging_deployments(status);
     CREATE INDEX IF NOT EXISTS idx_staging_deployments_expires ON staging_deployments(ttl_expires_at);
+
+    -- Semantic index for files (RFC 0010)
+    CREATE TABLE IF NOT EXISTS file_index (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        realm TEXT NOT NULL,
+        repo TEXT NOT NULL,
+        file_path TEXT NOT NULL,
+        file_hash TEXT NOT NULL,
+        summary TEXT,
+        relationships TEXT,
+        indexed_at TEXT NOT NULL,
+        prompt_version INTEGER DEFAULT 1,
+        embedding BLOB,
+        UNIQUE(realm, repo, file_path)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_file_index_realm ON file_index(realm);
+    CREATE INDEX IF NOT EXISTS idx_file_index_repo ON file_index(realm, repo);
+    CREATE INDEX IF NOT EXISTS idx_file_index_hash ON file_index(file_hash);
+
+    -- Symbol-level index
+    CREATE TABLE IF NOT EXISTS symbol_index (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        file_id INTEGER NOT NULL,
+        name TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        start_line INTEGER,
+        end_line INTEGER,
+        description TEXT,
+        FOREIGN KEY (file_id) REFERENCES file_index(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_symbol_index_file ON symbol_index(file_id);
+    CREATE INDEX IF NOT EXISTS idx_symbol_index_name ON symbol_index(name);
 "#;
 
 /// FTS5 schema for full-text search
@@ -171,6 +205,58 @@ const FTS5_SCHEMA: &str = r#"
         VALUES ('delete', old.id, old.title, old.doc_type);
         INSERT INTO documents_fts(rowid, title, doc_type)
         VALUES (new.id, new.title, new.doc_type);
+    END;
+"#;
+
+/// FTS5 schema for semantic file index (RFC 0010)
+const FILE_INDEX_FTS5_SCHEMA: &str = r#"
+    CREATE VIRTUAL TABLE IF NOT EXISTS file_index_fts USING fts5(
+        file_path,
+        summary,
+        relationships,
+        content=file_index,
+        content_rowid=id
+    );
+
+    CREATE TRIGGER IF NOT EXISTS file_index_ai AFTER INSERT ON file_index BEGIN
+        INSERT INTO file_index_fts(rowid, file_path, summary, relationships)
+        VALUES (new.id, new.file_path, new.summary, new.relationships);
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS file_index_ad AFTER DELETE ON file_index BEGIN
+        INSERT INTO file_index_fts(file_index_fts, rowid, file_path, summary, relationships)
+        VALUES ('delete', old.id, old.file_path, old.summary, old.relationships);
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS file_index_au AFTER UPDATE ON file_index BEGIN
+        INSERT INTO file_index_fts(file_index_fts, rowid, file_path, summary, relationships)
+        VALUES ('delete', old.id, old.file_path, old.summary, old.relationships);
+        INSERT INTO file_index_fts(rowid, file_path, summary, relationships)
+        VALUES (new.id, new.file_path, new.summary, new.relationships);
+    END;
+
+    CREATE VIRTUAL TABLE IF NOT EXISTS symbol_index_fts USING fts5(
+        name,
+        description,
+        content=symbol_index,
+        content_rowid=id
+    );
+
+    CREATE TRIGGER IF NOT EXISTS symbol_index_ai AFTER INSERT ON symbol_index BEGIN
+        INSERT INTO symbol_index_fts(rowid, name, description)
+        VALUES (new.id, new.name, new.description);
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS symbol_index_ad AFTER DELETE ON symbol_index BEGIN
+        INSERT INTO symbol_index_fts(symbol_index_fts, rowid, name, description)
+        VALUES ('delete', old.id, old.name, old.description);
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS symbol_index_au AFTER UPDATE ON symbol_index BEGIN
+        INSERT INTO symbol_index_fts(symbol_index_fts, rowid, name, description)
+        VALUES ('delete', old.id, old.name, old.description);
+        INSERT INTO symbol_index_fts(rowid, name, description)
+        VALUES (new.id, new.name, new.description);
     END;
 "#;
 
@@ -506,6 +592,72 @@ pub struct ExpiredDeploymentInfo {
     pub stacks: Option<String>,
 }
 
+// ==================== Semantic Index Types (RFC 0010) ====================
+
+/// Current prompt version for indexing
+pub const INDEX_PROMPT_VERSION: i32 = 1;
+
+/// An indexed file entry
+#[derive(Debug, Clone)]
+pub struct FileIndexEntry {
+    pub id: Option<i64>,
+    pub realm: String,
+    pub repo: String,
+    pub file_path: String,
+    pub file_hash: String,
+    pub summary: Option<String>,
+    pub relationships: Option<String>,
+    pub indexed_at: Option<String>,
+    pub prompt_version: i32,
+}
+
+impl FileIndexEntry {
+    pub fn new(realm: &str, repo: &str, file_path: &str, file_hash: &str) -> Self {
+        Self {
+            id: None,
+            realm: realm.to_string(),
+            repo: repo.to_string(),
+            file_path: file_path.to_string(),
+            file_hash: file_hash.to_string(),
+            summary: None,
+            relationships: None,
+            indexed_at: None,
+            prompt_version: INDEX_PROMPT_VERSION,
+        }
+    }
+}
+
+/// A symbol within an indexed file
+#[derive(Debug, Clone)]
+pub struct SymbolIndexEntry {
+    pub id: Option<i64>,
+    pub file_id: i64,
+    pub name: String,
+    pub kind: String,
+    pub start_line: Option<i32>,
+    pub end_line: Option<i32>,
+    pub description: Option<String>,
+}
+
+/// Index status summary
+#[derive(Debug, Clone)]
+pub struct IndexStatus {
+    pub total_files: usize,
+    pub indexed_files: usize,
+    pub stale_files: usize,
+    pub unindexed_files: usize,
+    pub stale_paths: Vec<String>,
+    pub unindexed_paths: Vec<String>,
+}
+
+/// Search result from the semantic index
+#[derive(Debug, Clone)]
+pub struct IndexSearchResult {
+    pub file_entry: FileIndexEntry,
+    pub score: f64,
+    pub matched_symbols: Vec<SymbolIndexEntry>,
+}
+
 /// Store errors - in Blue's voice
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
@@ -609,6 +761,7 @@ impl DocumentStore {
                 debug!("Setting up Blue's database (version {})", SCHEMA_VERSION);
                 self.conn.execute_batch(SCHEMA)?;
                 self.conn.execute_batch(FTS5_SCHEMA)?;
+                self.conn.execute_batch(FILE_INDEX_FTS5_SCHEMA)?;
                 self.conn.execute(
                     "INSERT INTO schema_version (version) VALUES (?1)",
                     params![SCHEMA_VERSION],
@@ -654,6 +807,69 @@ impl DocumentStore {
                     [],
                 )?;
             }
+        }
+
+        // Migration from v3 to v4: Add semantic index tables (RFC 0010)
+        if from_version < 4 {
+            debug!("Adding semantic index tables (RFC 0010)");
+
+            // Create file_index table
+            self.conn.execute(
+                "CREATE TABLE IF NOT EXISTS file_index (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    realm TEXT NOT NULL,
+                    repo TEXT NOT NULL,
+                    file_path TEXT NOT NULL,
+                    file_hash TEXT NOT NULL,
+                    summary TEXT,
+                    relationships TEXT,
+                    indexed_at TEXT NOT NULL,
+                    prompt_version INTEGER DEFAULT 1,
+                    embedding BLOB,
+                    UNIQUE(realm, repo, file_path)
+                )",
+                [],
+            )?;
+
+            self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_file_index_realm ON file_index(realm)",
+                [],
+            )?;
+            self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_file_index_repo ON file_index(realm, repo)",
+                [],
+            )?;
+            self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_file_index_hash ON file_index(file_hash)",
+                [],
+            )?;
+
+            // Create symbol_index table
+            self.conn.execute(
+                "CREATE TABLE IF NOT EXISTS symbol_index (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    file_id INTEGER NOT NULL,
+                    name TEXT NOT NULL,
+                    kind TEXT NOT NULL,
+                    start_line INTEGER,
+                    end_line INTEGER,
+                    description TEXT,
+                    FOREIGN KEY (file_id) REFERENCES file_index(id) ON DELETE CASCADE
+                )",
+                [],
+            )?;
+
+            self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_symbol_index_file ON symbol_index(file_id)",
+                [],
+            )?;
+            self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_symbol_index_name ON symbol_index(name)",
+                [],
+            )?;
+
+            // Create FTS5 tables for semantic search
+            self.conn.execute_batch(FILE_INDEX_FTS5_SCHEMA)?;
         }
 
         // Update schema version
@@ -2124,6 +2340,297 @@ impl DocumentStore {
             deployments_marked_expired: deployments_marked,
             expired_deployments_pending_destroy: expired_deployments,
         })
+    }
+
+    // ==================== Semantic Index Operations (RFC 0010) ====================
+
+    /// Upsert a file index entry
+    pub fn upsert_file_index(&self, entry: &FileIndexEntry) -> Result<i64, StoreError> {
+        self.with_retry(|| {
+            let now = chrono::Utc::now().to_rfc3339();
+
+            self.conn.execute(
+                "INSERT INTO file_index (realm, repo, file_path, file_hash, summary, relationships, indexed_at, prompt_version)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                 ON CONFLICT(realm, repo, file_path) DO UPDATE SET
+                     file_hash = excluded.file_hash,
+                     summary = excluded.summary,
+                     relationships = excluded.relationships,
+                     indexed_at = excluded.indexed_at,
+                     prompt_version = excluded.prompt_version",
+                params![
+                    entry.realm,
+                    entry.repo,
+                    entry.file_path,
+                    entry.file_hash,
+                    entry.summary,
+                    entry.relationships,
+                    now,
+                    entry.prompt_version,
+                ],
+            )?;
+
+            // Get the ID (either new or existing)
+            let id: i64 = self.conn.query_row(
+                "SELECT id FROM file_index WHERE realm = ?1 AND repo = ?2 AND file_path = ?3",
+                params![entry.realm, entry.repo, entry.file_path],
+                |row| row.get(0),
+            )?;
+
+            Ok(id)
+        })
+    }
+
+    /// Get a file index entry
+    pub fn get_file_index(&self, realm: &str, repo: &str, file_path: &str) -> Result<Option<FileIndexEntry>, StoreError> {
+        self.conn
+            .query_row(
+                "SELECT id, realm, repo, file_path, file_hash, summary, relationships, indexed_at, prompt_version
+                 FROM file_index WHERE realm = ?1 AND repo = ?2 AND file_path = ?3",
+                params![realm, repo, file_path],
+                |row| {
+                    Ok(FileIndexEntry {
+                        id: Some(row.get(0)?),
+                        realm: row.get(1)?,
+                        repo: row.get(2)?,
+                        file_path: row.get(3)?,
+                        file_hash: row.get(4)?,
+                        summary: row.get(5)?,
+                        relationships: row.get(6)?,
+                        indexed_at: row.get(7)?,
+                        prompt_version: row.get(8)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(StoreError::Database)
+    }
+
+    /// Delete a file index entry and its symbols
+    pub fn delete_file_index(&self, realm: &str, repo: &str, file_path: &str) -> Result<(), StoreError> {
+        self.with_retry(|| {
+            self.conn.execute(
+                "DELETE FROM file_index WHERE realm = ?1 AND repo = ?2 AND file_path = ?3",
+                params![realm, repo, file_path],
+            )?;
+            Ok(())
+        })
+    }
+
+    /// Add symbols for a file (replaces existing)
+    pub fn set_file_symbols(&self, file_id: i64, symbols: &[SymbolIndexEntry]) -> Result<(), StoreError> {
+        self.with_retry(|| {
+            // Delete existing symbols
+            self.conn.execute(
+                "DELETE FROM symbol_index WHERE file_id = ?1",
+                params![file_id],
+            )?;
+
+            // Insert new symbols
+            for symbol in symbols {
+                self.conn.execute(
+                    "INSERT INTO symbol_index (file_id, name, kind, start_line, end_line, description)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    params![
+                        file_id,
+                        symbol.name,
+                        symbol.kind,
+                        symbol.start_line,
+                        symbol.end_line,
+                        symbol.description,
+                    ],
+                )?;
+            }
+
+            Ok(())
+        })
+    }
+
+    /// Get symbols for a file
+    pub fn get_file_symbols(&self, file_id: i64) -> Result<Vec<SymbolIndexEntry>, StoreError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, file_id, name, kind, start_line, end_line, description
+             FROM symbol_index WHERE file_id = ?1 ORDER BY start_line",
+        )?;
+
+        let rows = stmt.query_map(params![file_id], |row| {
+            Ok(SymbolIndexEntry {
+                id: Some(row.get(0)?),
+                file_id: row.get(1)?,
+                name: row.get(2)?,
+                kind: row.get(3)?,
+                start_line: row.get(4)?,
+                end_line: row.get(5)?,
+                description: row.get(6)?,
+            })
+        })?;
+
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(StoreError::Database)
+    }
+
+    /// List all indexed files in a realm/repo
+    pub fn list_file_index(&self, realm: &str, repo: Option<&str>) -> Result<Vec<FileIndexEntry>, StoreError> {
+        let query = match repo {
+            Some(_) => "SELECT id, realm, repo, file_path, file_hash, summary, relationships, indexed_at, prompt_version
+                        FROM file_index WHERE realm = ?1 AND repo = ?2 ORDER BY file_path",
+            None => "SELECT id, realm, repo, file_path, file_hash, summary, relationships, indexed_at, prompt_version
+                     FROM file_index WHERE realm = ?1 ORDER BY repo, file_path",
+        };
+
+        let mut stmt = self.conn.prepare(query)?;
+
+        let rows = match repo {
+            Some(r) => stmt.query_map(params![realm, r], Self::map_file_index_entry)?,
+            None => stmt.query_map(params![realm], Self::map_file_index_entry)?,
+        };
+
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(StoreError::Database)
+    }
+
+    /// Helper to map a row to FileIndexEntry
+    fn map_file_index_entry(row: &rusqlite::Row) -> rusqlite::Result<FileIndexEntry> {
+        Ok(FileIndexEntry {
+            id: Some(row.get(0)?),
+            realm: row.get(1)?,
+            repo: row.get(2)?,
+            file_path: row.get(3)?,
+            file_hash: row.get(4)?,
+            summary: row.get(5)?,
+            relationships: row.get(6)?,
+            indexed_at: row.get(7)?,
+            prompt_version: row.get(8)?,
+        })
+    }
+
+    /// Search the file index using FTS5
+    pub fn search_file_index(
+        &self,
+        realm: &str,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<IndexSearchResult>, StoreError> {
+        let escaped = query.replace('"', "\"\"");
+        let fts_query = format!("\"{}\"*", escaped);
+
+        let mut stmt = self.conn.prepare(
+            "SELECT f.id, f.realm, f.repo, f.file_path, f.file_hash, f.summary, f.relationships,
+                    f.indexed_at, f.prompt_version, bm25(file_index_fts) as score
+             FROM file_index_fts fts
+             JOIN file_index f ON f.id = fts.rowid
+             WHERE file_index_fts MATCH ?1 AND f.realm = ?2
+             ORDER BY score
+             LIMIT ?3",
+        )?;
+
+        let rows = stmt.query_map(params![fts_query, realm, limit as i32], |row| {
+            Ok(IndexSearchResult {
+                file_entry: FileIndexEntry {
+                    id: Some(row.get(0)?),
+                    realm: row.get(1)?,
+                    repo: row.get(2)?,
+                    file_path: row.get(3)?,
+                    file_hash: row.get(4)?,
+                    summary: row.get(5)?,
+                    relationships: row.get(6)?,
+                    indexed_at: row.get(7)?,
+                    prompt_version: row.get(8)?,
+                },
+                score: row.get(9)?,
+                matched_symbols: vec![],
+            })
+        })?;
+
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(StoreError::Database)
+    }
+
+    /// Search symbols using FTS5
+    pub fn search_symbols(
+        &self,
+        realm: &str,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<(SymbolIndexEntry, FileIndexEntry)>, StoreError> {
+        let escaped = query.replace('"', "\"\"");
+        let fts_query = format!("\"{}\"*", escaped);
+
+        let mut stmt = self.conn.prepare(
+            "SELECT s.id, s.file_id, s.name, s.kind, s.start_line, s.end_line, s.description,
+                    f.id, f.realm, f.repo, f.file_path, f.file_hash, f.summary, f.relationships,
+                    f.indexed_at, f.prompt_version
+             FROM symbol_index_fts sfts
+             JOIN symbol_index s ON s.id = sfts.rowid
+             JOIN file_index f ON f.id = s.file_id
+             WHERE symbol_index_fts MATCH ?1 AND f.realm = ?2
+             ORDER BY bm25(symbol_index_fts)
+             LIMIT ?3",
+        )?;
+
+        let rows = stmt.query_map(params![fts_query, realm, limit as i32], |row| {
+            Ok((
+                SymbolIndexEntry {
+                    id: Some(row.get(0)?),
+                    file_id: row.get(1)?,
+                    name: row.get(2)?,
+                    kind: row.get(3)?,
+                    start_line: row.get(4)?,
+                    end_line: row.get(5)?,
+                    description: row.get(6)?,
+                },
+                FileIndexEntry {
+                    id: Some(row.get(7)?),
+                    realm: row.get(8)?,
+                    repo: row.get(9)?,
+                    file_path: row.get(10)?,
+                    file_hash: row.get(11)?,
+                    summary: row.get(12)?,
+                    relationships: row.get(13)?,
+                    indexed_at: row.get(14)?,
+                    prompt_version: row.get(15)?,
+                },
+            ))
+        })?;
+
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(StoreError::Database)
+    }
+
+    /// Get index statistics for a realm
+    pub fn get_index_stats(&self, realm: &str) -> Result<(usize, usize), StoreError> {
+        let file_count: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM file_index WHERE realm = ?1",
+            params![realm],
+            |row| row.get(0),
+        )?;
+
+        let symbol_count: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM symbol_index s
+             JOIN file_index f ON f.id = s.file_id
+             WHERE f.realm = ?1",
+            params![realm],
+            |row| row.get(0),
+        )?;
+
+        Ok((file_count as usize, symbol_count as usize))
+    }
+
+    /// Check if a file needs re-indexing (hash mismatch or prompt version outdated)
+    pub fn is_file_stale(&self, realm: &str, repo: &str, file_path: &str, current_hash: &str) -> Result<bool, StoreError> {
+        let result: Option<(String, i32)> = self.conn
+            .query_row(
+                "SELECT file_hash, prompt_version FROM file_index
+                 WHERE realm = ?1 AND repo = ?2 AND file_path = ?3",
+                params![realm, repo, file_path],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+
+        match result {
+            Some((hash, version)) => Ok(hash != current_hash || version < INDEX_PROMPT_VERSION),
+            None => Ok(true), // Not indexed = stale
+        }
     }
 }
 

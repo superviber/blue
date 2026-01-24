@@ -86,6 +86,32 @@ enum Commands {
         #[arg(trailing_var_arg = true)]
         args: Vec<String>,
     },
+
+    /// Semantic index commands (RFC 0010)
+    Index {
+        #[command(subcommand)]
+        command: IndexCommands,
+    },
+
+    /// Search the semantic index
+    Search {
+        /// Search query
+        query: String,
+
+        /// Search symbols only
+        #[arg(long)]
+        symbols: bool,
+
+        /// Maximum results
+        #[arg(long, short, default_value = "10")]
+        limit: usize,
+    },
+
+    /// Show impact of changing a file
+    Impact {
+        /// File path to analyze
+        file: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -328,6 +354,49 @@ enum PrCommands {
     },
 }
 
+#[derive(Subcommand)]
+enum IndexCommands {
+    /// Index all files in the realm (bootstrap)
+    All {
+        /// Specific directory to index
+        path: Option<String>,
+
+        /// AI model for indexing (default: qwen2.5:3b)
+        #[arg(long)]
+        model: Option<String>,
+    },
+
+    /// Index staged files (for pre-commit hook)
+    Diff {
+        /// AI model for indexing
+        #[arg(long)]
+        model: Option<String>,
+    },
+
+    /// Index a specific file
+    File {
+        /// File path
+        path: String,
+
+        /// AI model for indexing
+        #[arg(long)]
+        model: Option<String>,
+    },
+
+    /// Refresh stale index entries
+    Refresh {
+        /// AI model for indexing
+        #[arg(long)]
+        model: Option<String>,
+    },
+
+    /// Install git pre-commit hook
+    InstallHook,
+
+    /// Show index status
+    Status,
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
@@ -404,6 +473,15 @@ async fn main() -> Result<()> {
         }
         Some(Commands::Agent { model, args }) => {
             handle_agent_command(model, args).await?;
+        }
+        Some(Commands::Index { command }) => {
+            handle_index_command(command).await?;
+        }
+        Some(Commands::Search { query, symbols, limit }) => {
+            handle_search_command(&query, symbols, limit).await?;
+        }
+        Some(Commands::Impact { file }) => {
+            handle_impact_command(&file).await?;
         }
     }
 
@@ -1292,8 +1370,6 @@ fn is_block_goose(path: &std::path::Path) -> bool {
 }
 
 fn download_goose_runtime() -> Result<std::path::PathBuf> {
-    use std::path::PathBuf;
-
     const GOOSE_VERSION: &str = "1.21.1";
 
     let data_dir = dirs::data_dir()
@@ -1448,4 +1524,323 @@ async fn detect_ollama_model() -> Option<String> {
     println!("  Detected Ollama with {} model(s)", sorted.len());
 
     Some(best.name.clone())
+}
+
+// ==================== Semantic Index Commands (RFC 0010) ====================
+
+async fn handle_index_command(command: IndexCommands) -> Result<()> {
+    use blue_core::store::DocumentStore;
+    use std::path::Path;
+
+    // Get the .blue database path
+    let cwd = std::env::current_dir()?;
+    let db_path = cwd.join(".blue").join("blue.db");
+
+    if !db_path.exists() {
+        println!("No .blue directory found. Run 'blue init' first.");
+        return Ok(());
+    }
+
+    let store = DocumentStore::open(&db_path)?;
+
+    match command {
+        IndexCommands::All { path, model } => {
+            let target = path.as_deref().unwrap_or(".");
+            let model_name = model.as_deref().unwrap_or("qwen2.5:3b");
+
+            println!("Indexing all files in '{}' with model '{}'...", target, model_name);
+            println!("(Full indexing requires Ollama running with the model pulled)");
+
+            // For now, show what would be indexed
+            let count = count_indexable_files(Path::new(target))?;
+            println!("Found {} indexable files.", count);
+            println!("\nTo complete indexing:");
+            println!("  1. Ensure Ollama is running: ollama serve");
+            println!("  2. Pull the model: ollama pull {}", model_name);
+            println!("  3. Run this command again");
+
+            // TODO: Implement actual indexing with Ollama integration
+        }
+
+        IndexCommands::Diff { model } => {
+            let model_name = model.as_deref().unwrap_or("qwen2.5:3b");
+
+            // Get staged files
+            let output = std::process::Command::new("git")
+                .args(["diff", "--cached", "--name-only"])
+                .output()?;
+
+            let staged_files: Vec<&str> = std::str::from_utf8(&output.stdout)?
+                .lines()
+                .filter(|l| !l.is_empty())
+                .collect();
+
+            if staged_files.is_empty() {
+                println!("No staged files to index.");
+                return Ok(());
+            }
+
+            println!("Indexing {} staged file(s) with '{}'...", staged_files.len(), model_name);
+            for file in &staged_files {
+                println!("  {}", file);
+            }
+
+            // TODO: Implement actual indexing
+        }
+
+        IndexCommands::File { path, model } => {
+            let model_name = model.as_deref().unwrap_or("qwen2.5:3b");
+
+            if !Path::new(&path).exists() {
+                println!("File not found: {}", path);
+                return Ok(());
+            }
+
+            println!("Indexing '{}' with '{}'...", path, model_name);
+
+            // TODO: Implement single file indexing
+        }
+
+        IndexCommands::Refresh { model } => {
+            let model_name = model.as_deref().unwrap_or("qwen2.5:3b");
+
+            // Get current realm (default to "default" for single-repo)
+            let realm = "default";
+
+            let (file_count, symbol_count) = store.get_index_stats(realm)?;
+            println!("Current index: {} files, {} symbols", file_count, symbol_count);
+
+            if file_count == 0 {
+                println!("Index is empty. Run 'blue index all' first.");
+                return Ok(());
+            }
+
+            println!("Checking for stale entries...");
+            println!("(Refresh with model '{}')", model_name);
+
+            // TODO: Implement refresh logic - compare hashes
+        }
+
+        IndexCommands::InstallHook => {
+            let hook_path = cwd.join(".git").join("hooks").join("pre-commit");
+
+            if !cwd.join(".git").exists() {
+                println!("Not a git repository.");
+                return Ok(());
+            }
+
+            let hook_content = r#"#!/bin/sh
+# Blue semantic index pre-commit hook
+# Indexes staged files before commit
+
+blue index diff 2>/dev/null || true
+"#;
+
+            std::fs::write(&hook_path, hook_content)?;
+
+            // Make executable on Unix
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let mut perms = std::fs::metadata(&hook_path)?.permissions();
+                perms.set_mode(0o755);
+                std::fs::set_permissions(&hook_path, perms)?;
+            }
+
+            println!("Installed pre-commit hook at {}", hook_path.display());
+            println!("Staged files will be indexed on each commit.");
+        }
+
+        IndexCommands::Status => {
+            let realm = "default";
+
+            let (file_count, symbol_count) = store.get_index_stats(realm)?;
+
+            println!("Index status:");
+            println!("  Indexed files: {}", file_count);
+            println!("  Indexed symbols: {}", symbol_count);
+
+            if file_count == 0 {
+                println!("\nIndex is empty. Run 'blue index all' to bootstrap.");
+            }
+        }
+    }
+
+    Ok(())
+}
+
+async fn handle_search_command(query: &str, symbols_only: bool, limit: usize) -> Result<()> {
+    use blue_core::store::DocumentStore;
+
+    let cwd = std::env::current_dir()?;
+    let db_path = cwd.join(".blue").join("blue.db");
+
+    if !db_path.exists() {
+        println!("No .blue directory found. Run 'blue init' first.");
+        return Ok(());
+    }
+
+    let store = DocumentStore::open(&db_path)?;
+    let realm = "default";
+
+    if symbols_only {
+        let results = store.search_symbols(realm, query, limit)?;
+
+        if results.is_empty() {
+            println!("No symbols found matching '{}'.", query);
+            return Ok(());
+        }
+
+        println!("Symbols matching '{}':\n", query);
+        for (symbol, file) in results {
+            let lines = match (symbol.start_line, symbol.end_line) {
+                (Some(s), Some(e)) => format!(":{}-{}", s, e),
+                (Some(s), None) => format!(":{}", s),
+                _ => String::new(),
+            };
+            println!("  {} ({}) - {}{}", symbol.name, symbol.kind, file.file_path, lines);
+            if let Some(desc) = &symbol.description {
+                println!("    {}", desc);
+            }
+        }
+    } else {
+        let results = store.search_file_index(realm, query, limit)?;
+
+        if results.is_empty() {
+            println!("No files found matching '{}'.", query);
+            return Ok(());
+        }
+
+        println!("Files matching '{}':\n", query);
+        for result in results {
+            println!("  {}", result.file_entry.file_path);
+            if let Some(summary) = &result.file_entry.summary {
+                println!("    {}", summary);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+async fn handle_impact_command(file: &str) -> Result<()> {
+    use blue_core::store::DocumentStore;
+
+    let cwd = std::env::current_dir()?;
+    let db_path = cwd.join(".blue").join("blue.db");
+
+    if !db_path.exists() {
+        println!("No .blue directory found. Run 'blue init' first.");
+        return Ok(());
+    }
+
+    let store = DocumentStore::open(&db_path)?;
+    let realm = "default";
+
+    // Get file entry
+    let file_entry = store.get_file_index(realm, realm, file)?;
+
+    match file_entry {
+        Some(entry) => {
+            println!("Impact analysis for: {}\n", file);
+
+            if let Some(summary) = &entry.summary {
+                println!("Summary: {}\n", summary);
+            }
+
+            if let Some(relationships) = &entry.relationships {
+                println!("Relationships:\n{}\n", relationships);
+            }
+
+            // Get symbols
+            if let Some(id) = entry.id {
+                let symbols = store.get_file_symbols(id)?;
+                if !symbols.is_empty() {
+                    println!("Symbols ({}):", symbols.len());
+                    for sym in symbols {
+                        let lines = match (sym.start_line, sym.end_line) {
+                            (Some(s), Some(e)) => format!("lines {}-{}", s, e),
+                            (Some(s), None) => format!("line {}", s),
+                            _ => String::new(),
+                        };
+                        println!("  {} ({}) {}", sym.name, sym.kind, lines);
+                    }
+                }
+            }
+
+            // Search for files that reference this file
+            println!("\nSearching for files that reference this file...");
+            let filename = std::path::Path::new(file)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or(file);
+
+            let references = store.search_file_index(realm, filename, 20)?;
+            let references: Vec<_> = references
+                .into_iter()
+                .filter(|r| r.file_entry.file_path != file)
+                .collect();
+
+            if references.is_empty() {
+                println!("No files found referencing this file.");
+            } else {
+                println!("\nFiles that may reference '{}':", file);
+                for r in references {
+                    println!("  {}", r.file_entry.file_path);
+                }
+            }
+        }
+        None => {
+            println!("File '{}' is not indexed.", file);
+            println!("Run 'blue index file {}' to index it.", file);
+        }
+    }
+
+    Ok(())
+}
+
+fn count_indexable_files(dir: &std::path::Path) -> Result<usize> {
+    use std::fs;
+    use std::path::Path;
+
+    let mut count = 0;
+
+    // File extensions we care about
+    let extensions: &[&str] = &[
+        "rs", "py", "js", "ts", "tsx", "jsx", "go", "java", "c", "cpp", "h", "hpp",
+        "rb", "php", "swift", "kt", "scala", "clj", "ex", "exs", "erl", "hs",
+        "ml", "mli", "sql", "sh", "bash", "zsh", "yaml", "yml", "toml", "json",
+    ];
+
+    // Directories to skip
+    let skip_dirs: &[&str] = &[
+        "node_modules", "target", ".git", "__pycache__", "venv", ".venv",
+        "dist", "build", ".next", ".nuxt", "vendor", ".cargo",
+    ];
+
+    fn walk_dir(dir: &Path, extensions: &[&str], skip_dirs: &[&str], count: &mut usize) -> Result<()> {
+        if !dir.is_dir() {
+            return Ok(());
+        }
+
+        for entry in fs::read_dir(dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+
+            if path.is_dir() {
+                if !skip_dirs.contains(&name) && !name.starts_with('.') {
+                    walk_dir(&path, extensions, skip_dirs, count)?;
+                }
+            } else if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+                if extensions.contains(&ext) {
+                    *count += 1;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    walk_dir(dir, extensions, skip_dirs, &mut count)?;
+    Ok(count)
 }

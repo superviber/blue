@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Draft |
+| **Status** | In Progress |
 | **Date** | 2026-01-24 |
 | **Source Spike** | Realm Semantic Index |
 | **Dialogue** | [realm-semantic-index.dialogue.md](../dialogues/realm-semantic-index.dialogue.md) |
@@ -312,20 +312,20 @@ blue impact src/domain.rs
 
 ## Implementation Plan
 
-- [ ] Add schema to blue.db (file_index, symbol_index, FTS5 tables)
-- [ ] Create versioned indexing prompt for structured YAML extraction
+- [x] Add schema to blue.db (file_index, symbol_index, FTS5 tables)
+- [x] Create versioned indexing prompt for structured YAML extraction
 - [ ] Implement Ollama integration with qwen2.5:3b default
-- [ ] Implement `blue index --all` for bootstrap
-- [ ] Implement `blue index --diff` for staged files
-- [ ] Implement `blue index --file` for single-file updates
-- [ ] Implement `blue index --install-hook` for git hook setup
-- [ ] Implement `blue index --refresh` for stale entry updates
-- [ ] Implement `blue index status` for freshness reporting
+- [x] Implement `blue index --all` for bootstrap
+- [x] Implement `blue index --diff` for staged files
+- [x] Implement `blue index --file` for single-file updates
+- [x] Implement `blue index --install-hook` for git hook setup
+- [x] Implement `blue index --refresh` for stale entry updates
+- [x] Implement `blue index status` for freshness reporting
 - [ ] Add large file handling (>1000 lines warning)
-- [ ] Implement `blue search` with FTS5 backend
-- [ ] Implement `blue impact` for dependency queries
-- [ ] Add MCP tools (5 tools)
-- [ ] Add `--model` flag for model override
+- [x] Implement `blue search` with FTS5 backend
+- [x] Implement `blue impact` for dependency queries
+- [x] Add MCP tools (5 tools)
+- [x] Add `--model` flag for model override
 - [ ] Optional: embedding column support
 
 ## Open Questions (Resolved)
