@@ -41,6 +41,9 @@ chrono = { version = "0.4", features = ["serde"] }
 # Git
 git2 = "0.19"
 
+# Regex
+regex = "1.10"
+
 # Internal
 blue-core = { path = "crates/blue-core" }
 blue-mcp = { path = "crates/blue-mcp" }

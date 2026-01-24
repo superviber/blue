@@ -1138,6 +1138,70 @@ impl BlueServer {
                             }
                         }
                     }
+                },
+                // Phase 8: Dialogue tools
+                {
+                    "name": "blue_dialogue_lint",
+                    "description": "Validate dialogue documents against the blue-dialogue-pattern. Returns weighted consistency score.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "file_path": {
+                                "type": "string",
+                                "description": "Path to the .dialogue.md file"
+                            }
+                        },
+                        "required": ["file_path"]
+                    }
+                },
+                {
+                    "name": "blue_extract_dialogue",
+                    "description": "Extract dialogue content from spawned agent JSONL outputs.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "task_id": {
+                                "type": "string",
+                                "description": "Task ID (e.g., 'a6dc70c') - resolves via symlink in /tmp/claude/.../tasks/"
+                            },
+                            "file_path": {
+                                "type": "string",
+                                "description": "Absolute path to JSONL file"
+                            }
+                        }
+                    }
+                },
+                // Phase 8: Playwright verification
+                {
+                    "name": "blue_playwright_verify",
+                    "description": "Generate a verification plan for browser-based testing using Playwright MCP.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "task": {
+                                "type": "string",
+                                "description": "Description of the verification task"
+                            },
+                            "base_url": {
+                                "type": "string",
+                                "description": "Base URL for the application (e.g., 'http://localhost:3000')"
+                            },
+                            "path": {
+                                "type": "string",
+                                "description": "Specific path to navigate to (e.g., '/login')"
+                            },
+                            "expected_outcomes": {
+                                "type": "array",
+                                "items": { "type": "string" },
+                                "description": "Expected outcomes to verify"
+                            },
+                            "allow_staging": {
+                                "type": "boolean",
+                                "description": "Allow staging URLs (default: false, only localhost allowed)"
+                            }
+                        },
+                        "required": ["task", "base_url"]
+                    }
                 }
             ]
         }))
@@ -1215,6 +1279,11 @@ impl BlueServer {
             "blue_staging_create" => self.handle_staging_create(&call.arguments),
             "blue_staging_destroy" => self.handle_staging_destroy(&call.arguments),
             "blue_staging_cost" => self.handle_staging_cost(&call.arguments),
+            // Phase 8: Dialogue handlers
+            "blue_dialogue_lint" => self.handle_dialogue_lint(&call.arguments),
+            "blue_extract_dialogue" => self.handle_extract_dialogue(&call.arguments),
+            // Phase 8: Playwright handler
+            "blue_playwright_verify" => self.handle_playwright_verify(&call.arguments),
             _ => Err(ServerError::ToolNotFound(call.name)),
         }?;
 
@@ -1858,6 +1927,23 @@ impl BlueServer {
         let args = args.as_ref().unwrap_or(&empty);
         let state = self.ensure_state()?;
         crate::handlers::staging::handle_cost(args, &state.home.root)
+    }
+
+    // Phase 8: Dialogue and Playwright handlers
+
+    fn handle_dialogue_lint(&mut self, args: &Option<Value>) -> Result<Value, ServerError> {
+        let args = args.as_ref().ok_or(ServerError::InvalidParams)?;
+        crate::handlers::dialogue_lint::handle_dialogue_lint(args)
+    }
+
+    fn handle_extract_dialogue(&mut self, args: &Option<Value>) -> Result<Value, ServerError> {
+        let args = args.as_ref().ok_or(ServerError::InvalidParams)?;
+        crate::handlers::dialogue::handle_extract_dialogue(args)
+    }
+
+    fn handle_playwright_verify(&mut self, args: &Option<Value>) -> Result<Value, ServerError> {
+        let args = args.as_ref().ok_or(ServerError::InvalidParams)?;
+        crate::handlers::playwright::handle_verify(args)
     }
 }
 

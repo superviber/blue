@@ -5,9 +5,12 @@
 pub mod adr;
 pub mod audit;
 pub mod decision;
+pub mod dialogue;
+pub mod dialogue_lint;
 pub mod env;
 pub mod guide;
 pub mod lint;
+pub mod playwright;
 pub mod pr;
 pub mod prd;
 pub mod release;
