@@ -62,7 +62,7 @@ I've successfully located 3 RFCs that are currently in draft status! Would you p
 
 ## The 14 ADRs
 
-These are in `docs/adrs/`. They're the beliefs this project is built on:
+These are in `.blue/docs/adrs/`. They're the beliefs this project is built on:
 
 0. Never Give Up - The only rule we need is never giving up
 1. Purpose - We exist to make work meaningful and workers present
@@ -85,8 +85,15 @@ These are in `docs/adrs/`. They're the beliefs this project is built on:
 
 ```
 blue/
+├── .blue/
+│   ├── docs/
+│   │   ├── adrs/       # The 14 founding beliefs
+│   │   ├── rfcs/       # Request for comments
+│   │   ├── spikes/     # Time-boxed investigations
+│   │   ├── runbooks/   # Operational procedures
+│   │   └── dialogues/  # Captured conversations
+│   └── blue.db         # SQLite database
 ├── docs/
-│   ├── adrs/           # The 14 founding beliefs
 │   ├── origins/        # Where this came from
 │   └── patterns/       # How Blue speaks
 ├── crates/
@@ -95,6 +102,23 @@ blue/
 └── apps/
     └── blue-cli/       # CLI binary
 ```
+
+## Blue MCP Tools
+
+When connected, use these tools:
+
+**Documents:**
+- `blue_rfc_create` / `blue_rfc_plan` - Create and plan RFCs
+- `blue_spike_create` / `blue_spike_complete` - Time-boxed investigations
+- `blue_adr_audit` / `blue_adr_relevant` - Check ADR adherence
+- `blue_dialogue_save` - Capture conversations
+- `blue_runbook_create` / `blue_runbook_lookup` - Operational procedures
+
+**Workflow:**
+- `blue_status` / `blue_next` - See what's happening, what's next
+- `blue_search` - Find documents across types
+
+All docs live in `.blue/docs/` per RFC 0003.
 
 ## Origins
 
