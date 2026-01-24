@@ -182,6 +182,7 @@ pub enum DocType {
     Prd,
     Postmortem,
     Runbook,
+    Dialogue,
 }
 
 impl DocType {
@@ -194,6 +195,7 @@ impl DocType {
             DocType::Prd => "prd",
             DocType::Postmortem => "postmortem",
             DocType::Runbook => "runbook",
+            DocType::Dialogue => "dialogue",
         }
     }
 
@@ -206,6 +208,7 @@ impl DocType {
             "prd" => Some(DocType::Prd),
             "postmortem" => Some(DocType::Postmortem),
             "runbook" => Some(DocType::Runbook),
+            "dialogue" => Some(DocType::Dialogue),
             _ => None,
         }
     }
@@ -220,6 +223,7 @@ impl DocType {
             DocType::Prd => "PRDs",
             DocType::Postmortem => "post-mortems",
             DocType::Runbook => "runbooks",
+            DocType::Dialogue => "dialogues",
         }
     }
 }
@@ -233,6 +237,8 @@ pub enum LinkType {
     RfcToAdr,
     /// PRD leads to RFC
     PrdToRfc,
+    /// Dialogue documents an RFC implementation
+    DialogueToRfc,
     /// Generic reference
     References,
 }
@@ -243,6 +249,7 @@ impl LinkType {
             LinkType::SpikeToRfc => "spike_to_rfc",
             LinkType::RfcToAdr => "rfc_to_adr",
             LinkType::PrdToRfc => "prd_to_rfc",
+            LinkType::DialogueToRfc => "dialogue_to_rfc",
             LinkType::References => "references",
         }
     }

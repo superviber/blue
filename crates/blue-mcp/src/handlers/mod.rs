@@ -10,6 +10,7 @@ pub mod dialogue_lint;
 pub mod env;
 pub mod guide;
 pub mod lint;
+pub mod llm;
 pub mod playwright;
 pub mod postmortem;
 pub mod pr;

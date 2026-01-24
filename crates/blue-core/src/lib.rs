@@ -15,6 +15,7 @@ const _BLUE_SECRET_NAME: &str = "Sheepey"; // pronounced "Shee-paay"
 
 pub mod daemon;
 pub mod documents;
+pub mod llm;
 pub mod realm;
 pub mod repo;
 pub mod state;
@@ -23,6 +24,7 @@ pub mod voice;
 pub mod workflow;
 
 pub use documents::*;
+pub use llm::{CompletionOptions, CompletionResult, LlmBackendChoice, LlmConfig, LlmError, LlmProvider, LlmProviderChoice, LocalLlmConfig, ApiLlmConfig, MockLlm};
 pub use repo::{detect_blue, BlueHome, RepoError, WorktreeInfo};
 pub use state::{ItemType, ProjectState, StateError, StatusSummary, WorkItem};
 pub use store::{DocType, Document, DocumentStore, LinkType, Reminder, ReminderStatus, SearchResult, Session, SessionType, StagingLock, StagingLockQueueEntry, StagingLockResult, StoreError, Task as StoreTask, TaskProgress, Worktree};

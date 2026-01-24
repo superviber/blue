@@ -405,6 +405,50 @@ impl BlueServer {
                     }
                 },
                 {
+                    "name": "blue_adr_list",
+                    "description": "List all ADRs with summaries.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {}
+                    }
+                },
+                {
+                    "name": "blue_adr_get",
+                    "description": "Get full ADR content with referenced_by information.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "number": {
+                                "type": "number",
+                                "description": "ADR number to retrieve"
+                            }
+                        },
+                        "required": ["number"]
+                    }
+                },
+                {
+                    "name": "blue_adr_relevant",
+                    "description": "Find relevant ADRs based on context. Uses keyword matching (AI matching when LLM available).",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "context": {
+                                "type": "string",
+                                "description": "Context to match against (e.g., 'testing strategy', 'deleting old code')"
+                            }
+                        },
+                        "required": ["context"]
+                    }
+                },
+                {
+                    "name": "blue_adr_audit",
+                    "description": "Scan for potential ADR violations. Only checks testable ADRs (Evidence, Single Source, No Dead Code).",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {}
+                    }
+                },
+                {
                     "name": "blue_decision_create",
                     "description": "Create a lightweight Decision Note.",
                     "inputSchema": {
@@ -1211,6 +1255,89 @@ impl BlueServer {
                         }
                     }
                 },
+                {
+                    "name": "blue_dialogue_create",
+                    "description": "Create a new dialogue document with SQLite metadata. Dialogues capture agent conversations and can be linked to RFCs.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "title": {
+                                "type": "string",
+                                "description": "Dialogue title"
+                            },
+                            "rfc_title": {
+                                "type": "string",
+                                "description": "RFC title to link this dialogue to"
+                            },
+                            "summary": {
+                                "type": "string",
+                                "description": "Brief summary of the dialogue"
+                            },
+                            "content": {
+                                "type": "string",
+                                "description": "Full dialogue content"
+                            }
+                        },
+                        "required": ["title"]
+                    }
+                },
+                {
+                    "name": "blue_dialogue_get",
+                    "description": "Get a dialogue document by title.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "title": {
+                                "type": "string",
+                                "description": "Dialogue title or number"
+                            }
+                        },
+                        "required": ["title"]
+                    }
+                },
+                {
+                    "name": "blue_dialogue_list",
+                    "description": "List all dialogue documents, optionally filtered by RFC.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "rfc_title": {
+                                "type": "string",
+                                "description": "Filter dialogues by RFC title"
+                            }
+                        }
+                    }
+                },
+                {
+                    "name": "blue_dialogue_save",
+                    "description": "Extract dialogue from JSONL and save as a dialogue document with metadata.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "title": {
+                                "type": "string",
+                                "description": "Dialogue title"
+                            },
+                            "task_id": {
+                                "type": "string",
+                                "description": "Task ID to extract dialogue from"
+                            },
+                            "file_path": {
+                                "type": "string",
+                                "description": "Path to JSONL file (alternative to task_id)"
+                            },
+                            "rfc_title": {
+                                "type": "string",
+                                "description": "RFC title to link this dialogue to"
+                            },
+                            "summary": {
+                                "type": "string",
+                                "description": "Brief summary of the dialogue"
+                            }
+                        },
+                        "required": ["title"]
+                    }
+                },
                 // Phase 8: Playwright verification
                 {
                     "name": "blue_playwright_verify",
@@ -1328,6 +1455,11 @@ impl BlueServer {
                                 "type": "array",
                                 "items": { "type": "string" },
                                 "description": "Initial operations to document"
+                            },
+                            "actions": {
+                                "type": "array",
+                                "items": { "type": "string" },
+                                "description": "Action tags for lookup (e.g., ['docker build', 'build image'])"
                             }
                         },
                         "required": ["title"]
@@ -1353,6 +1485,28 @@ impl BlueServer {
                             }
                         },
                         "required": ["title"]
+                    }
+                },
+                {
+                    "name": "blue_runbook_lookup",
+                    "description": "Find a runbook by action query. Uses word-based matching to find the best runbook for a given action like 'docker build' or 'deploy staging'.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "action": {
+                                "type": "string",
+                                "description": "Action to look up (e.g., 'docker build', 'deploy staging')"
+                            }
+                        },
+                        "required": ["action"]
+                    }
+                },
+                {
+                    "name": "blue_runbook_actions",
+                    "description": "List all registered actions across runbooks. Use this to discover what runbooks are available.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {}
                     }
                 },
                 {
@@ -1503,6 +1657,99 @@ impl BlueServer {
                         },
                         "required": ["cwd"]
                     }
+                },
+                // RFC 0005: Local LLM Integration
+                {
+                    "name": "blue_llm_start",
+                    "description": "Start the Ollama LLM server. Manages an embedded Ollama instance or uses an external one.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "port": {
+                                "type": "number",
+                                "description": "Port to run on (default: 11434)"
+                            },
+                            "model": {
+                                "type": "string",
+                                "description": "Default model to use (default: qwen2.5:7b)"
+                            },
+                            "backend": {
+                                "type": "string",
+                                "enum": ["auto", "cuda", "mps", "cpu"],
+                                "description": "Backend to use (default: auto)"
+                            },
+                            "use_external": {
+                                "type": "boolean",
+                                "description": "Use external Ollama instead of embedded (default: false)"
+                            }
+                        }
+                    }
+                },
+                {
+                    "name": "blue_llm_stop",
+                    "description": "Stop the managed Ollama LLM server.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {}
+                    }
+                },
+                {
+                    "name": "blue_llm_status",
+                    "description": "Check LLM server status. Returns running state, version, and GPU info.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {}
+                    }
+                },
+                {
+                    "name": "blue_model_list",
+                    "description": "List available models in the Ollama instance.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {}
+                    }
+                },
+                {
+                    "name": "blue_model_pull",
+                    "description": "Pull a model from the Ollama registry.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "name": {
+                                "type": "string",
+                                "description": "Model name (e.g., 'qwen2.5:7b', 'llama3.2:3b')"
+                            }
+                        },
+                        "required": ["name"]
+                    }
+                },
+                {
+                    "name": "blue_model_remove",
+                    "description": "Remove a model from the Ollama instance.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "name": {
+                                "type": "string",
+                                "description": "Model name to remove"
+                            }
+                        },
+                        "required": ["name"]
+                    }
+                },
+                {
+                    "name": "blue_model_warmup",
+                    "description": "Warm up a model by loading it into memory.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "name": {
+                                "type": "string",
+                                "description": "Model name to warm up"
+                            }
+                        },
+                        "required": ["name"]
+                    }
                 }
             ]
         }))
@@ -1536,6 +1783,10 @@ impl BlueServer {
             "blue_spike_create" => self.handle_spike_create(&call.arguments),
             "blue_spike_complete" => self.handle_spike_complete(&call.arguments),
             "blue_adr_create" => self.handle_adr_create(&call.arguments),
+            "blue_adr_list" => self.handle_adr_list(),
+            "blue_adr_get" => self.handle_adr_get(&call.arguments),
+            "blue_adr_relevant" => self.handle_adr_relevant(&call.arguments),
+            "blue_adr_audit" => self.handle_adr_audit(),
             "blue_decision_create" => self.handle_decision_create(&call.arguments),
             "blue_worktree_create" => self.handle_worktree_create(&call.arguments),
             "blue_worktree_list" => self.handle_worktree_list(&call.arguments),
@@ -1584,6 +1835,10 @@ impl BlueServer {
             // Phase 8: Dialogue handlers
             "blue_dialogue_lint" => self.handle_dialogue_lint(&call.arguments),
             "blue_extract_dialogue" => self.handle_extract_dialogue(&call.arguments),
+            "blue_dialogue_create" => self.handle_dialogue_create(&call.arguments),
+            "blue_dialogue_get" => self.handle_dialogue_get(&call.arguments),
+            "blue_dialogue_list" => self.handle_dialogue_list(&call.arguments),
+            "blue_dialogue_save" => self.handle_dialogue_save(&call.arguments),
             // Phase 8: Playwright handler
             "blue_playwright_verify" => self.handle_playwright_verify(&call.arguments),
             // Phase 9: Post-mortem handlers
@@ -1592,6 +1847,8 @@ impl BlueServer {
             // Phase 9: Runbook handlers
             "blue_runbook_create" => self.handle_runbook_create(&call.arguments),
             "blue_runbook_update" => self.handle_runbook_update(&call.arguments),
+            "blue_runbook_lookup" => self.handle_runbook_lookup(&call.arguments),
+            "blue_runbook_actions" => self.handle_runbook_actions(),
             // Phase 10: Realm tools (RFC 0002)
             "blue_realm_status" => self.handle_realm_status(&call.arguments),
             "blue_realm_check" => self.handle_realm_check(&call.arguments),
@@ -1601,6 +1858,14 @@ impl BlueServer {
             "blue_realm_worktree_create" => self.handle_realm_worktree_create(&call.arguments),
             "blue_realm_pr_status" => self.handle_realm_pr_status(&call.arguments),
             "blue_notifications_list" => self.handle_notifications_list(&call.arguments),
+            // RFC 0005: LLM tools
+            "blue_llm_start" => crate::handlers::llm::handle_start(&call.arguments.unwrap_or_default()),
+            "blue_llm_stop" => crate::handlers::llm::handle_stop(),
+            "blue_llm_status" => crate::handlers::llm::handle_status(),
+            "blue_model_list" => crate::handlers::llm::handle_model_list(),
+            "blue_model_pull" => crate::handlers::llm::handle_model_pull(&call.arguments.unwrap_or_default()),
+            "blue_model_remove" => crate::handlers::llm::handle_model_remove(&call.arguments.unwrap_or_default()),
+            "blue_model_warmup" => crate::handlers::llm::handle_model_warmup(&call.arguments.unwrap_or_default()),
             _ => Err(ServerError::ToolNotFound(call.name)),
         }?;
 
@@ -1986,6 +2251,14 @@ impl BlueServer {
 
         let state = self.ensure_state()?;
 
+        // Check for adr: prefix query (RFC 0004)
+        if let Some(adr_num_str) = query.strip_prefix("adr:") {
+            if let Ok(adr_num) = adr_num_str.trim().parse::<i32>() {
+                // Find documents that cite this ADR
+                return Self::search_adr_citations(state, adr_num, limit);
+            }
+        }
+
         let results = state.store.search_documents(query, doc_type, limit)
             .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
 
@@ -1998,6 +2271,69 @@ impl BlueServer {
                 "status": r.document.status,
                 "score": r.score
             })).collect::<Vec<_>>()
+        }))
+    }
+
+    /// Search for documents citing a specific ADR (RFC 0004)
+    fn search_adr_citations(state: &ProjectState, adr_num: i32, limit: usize) -> Result<Value, ServerError> {
+        // Find the ADR document first
+        let adrs = state.store.list_documents(DocType::Adr)
+            .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+
+        let adr_doc = adrs.into_iter().find(|d| d.number == Some(adr_num));
+
+        let Some(adr) = adr_doc else {
+            return Ok(json!({
+                "query": format!("adr:{}", adr_num),
+                "count": 0,
+                "results": [],
+                "message": format!("ADR {} not found", adr_num)
+            }));
+        };
+
+        let Some(adr_id) = adr.id else {
+            return Ok(json!({
+                "query": format!("adr:{}", adr_num),
+                "count": 0,
+                "results": []
+            }));
+        };
+
+        // Find documents that link to this ADR
+        let query = "SELECT d.id, d.doc_type, d.title, d.status
+                     FROM documents d
+                     JOIN document_links l ON l.source_id = d.id
+                     WHERE l.target_id = ?1
+                     LIMIT ?2";
+
+        let conn = state.store.conn();
+        let mut stmt = conn.prepare(query)
+            .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+
+        let rows = stmt.query_map(rusqlite::params![adr_id, limit], |row| {
+            Ok((
+                row.get::<_, String>(1)?, // doc_type
+                row.get::<_, String>(2)?, // title
+                row.get::<_, String>(3)?, // status
+            ))
+        }).map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+
+        let mut results = Vec::new();
+        for row in rows.flatten() {
+            let (doc_type, title, status) = row;
+            results.push(json!({
+                "title": title,
+                "type": doc_type,
+                "status": status,
+                "score": 1.0
+            }));
+        }
+
+        Ok(json!({
+            "query": format!("adr:{}", adr_num),
+            "adr_title": adr.title,
+            "count": results.len(),
+            "results": results
         }))
     }
 
@@ -2019,6 +2355,28 @@ impl BlueServer {
         let args = args.as_ref().ok_or(ServerError::InvalidParams)?;
         let state = self.ensure_state()?;
         crate::handlers::adr::handle_create(state, args)
+    }
+
+    fn handle_adr_list(&mut self) -> Result<Value, ServerError> {
+        let state = self.ensure_state()?;
+        crate::handlers::adr::handle_list(state)
+    }
+
+    fn handle_adr_get(&mut self, args: &Option<Value>) -> Result<Value, ServerError> {
+        let args = args.as_ref().ok_or(ServerError::InvalidParams)?;
+        let state = self.ensure_state()?;
+        crate::handlers::adr::handle_get(state, args)
+    }
+
+    fn handle_adr_relevant(&mut self, args: &Option<Value>) -> Result<Value, ServerError> {
+        let args = args.as_ref().ok_or(ServerError::InvalidParams)?;
+        let state = self.ensure_state()?;
+        crate::handlers::adr::handle_relevant(state, args)
+    }
+
+    fn handle_adr_audit(&mut self) -> Result<Value, ServerError> {
+        let state = self.ensure_state()?;
+        crate::handlers::adr::handle_audit(state)
     }
 
     fn handle_decision_create(&mut self, args: &Option<Value>) -> Result<Value, ServerError> {
@@ -2278,6 +2636,31 @@ impl BlueServer {
         crate::handlers::dialogue::handle_extract_dialogue(args)
     }
 
+    fn handle_dialogue_create(&mut self, args: &Option<Value>) -> Result<Value, ServerError> {
+        let args = args.as_ref().ok_or(ServerError::InvalidParams)?;
+        let state = self.ensure_state_mut()?;
+        crate::handlers::dialogue::handle_create(state, args)
+    }
+
+    fn handle_dialogue_get(&mut self, args: &Option<Value>) -> Result<Value, ServerError> {
+        let args = args.as_ref().ok_or(ServerError::InvalidParams)?;
+        let state = self.ensure_state()?;
+        crate::handlers::dialogue::handle_get(state, args)
+    }
+
+    fn handle_dialogue_list(&mut self, args: &Option<Value>) -> Result<Value, ServerError> {
+        let empty = json!({});
+        let args = args.as_ref().unwrap_or(&empty);
+        let state = self.ensure_state()?;
+        crate::handlers::dialogue::handle_list(state, args)
+    }
+
+    fn handle_dialogue_save(&mut self, args: &Option<Value>) -> Result<Value, ServerError> {
+        let args = args.as_ref().ok_or(ServerError::InvalidParams)?;
+        let state = self.ensure_state_mut()?;
+        crate::handlers::dialogue::handle_save(state, args)
+    }
+
     fn handle_playwright_verify(&mut self, args: &Option<Value>) -> Result<Value, ServerError> {
         let args = args.as_ref().ok_or(ServerError::InvalidParams)?;
         crate::handlers::playwright::handle_verify(args)
@@ -2309,6 +2692,17 @@ impl BlueServer {
         let args = args.as_ref().ok_or(ServerError::InvalidParams)?;
         let state = self.ensure_state_mut()?;
         crate::handlers::runbook::handle_update(state, args)
+    }
+
+    fn handle_runbook_lookup(&mut self, args: &Option<Value>) -> Result<Value, ServerError> {
+        let args = args.as_ref().ok_or(ServerError::InvalidParams)?;
+        let state = self.ensure_state()?;
+        crate::handlers::runbook::handle_lookup(state, args)
+    }
+
+    fn handle_runbook_actions(&mut self) -> Result<Value, ServerError> {
+        let state = self.ensure_state()?;
+        crate::handlers::runbook::handle_actions(state)
     }
 
     // Phase 10: Realm handlers (RFC 0002)
