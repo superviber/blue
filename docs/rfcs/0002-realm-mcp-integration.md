@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Accepted |
+| **Status** | Implemented |
 | **Created** | 2026-01-24 |
 | **Depends On** | [RFC 0001: Cross-Repo Coordination with Realms](0001-cross-repo-realms.md) |
 | **Dialogue** | [realm-mcp-design.dialogue.md](../dialogues/realm-mcp-design.dialogue.md) |
