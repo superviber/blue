@@ -85,6 +85,7 @@ pub fn handle_create(state: &mut ProjectState, args: &Value) -> Result<Value, Se
         file_path: Some(file_path.to_string_lossy().to_string()),
         created_at: None,
         updated_at: None,
+        deleted_at: None,
     };
     let doc_id = state
         .store

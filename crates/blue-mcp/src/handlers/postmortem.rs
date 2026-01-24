@@ -99,6 +99,7 @@ pub fn handle_create(state: &mut ProjectState, args: &Value) -> Result<Value, Se
         file_path: Some(file_path.to_string_lossy().to_string()),
         created_at: None,
         updated_at: None,
+        deleted_at: None,
     };
     state
         .store
@@ -214,6 +215,7 @@ pub fn handle_action_to_rfc(state: &mut ProjectState, args: &Value) -> Result<Va
         file_path: Some(rfc_file_path.to_string_lossy().to_string()),
         created_at: None,
         updated_at: None,
+        deleted_at: None,
     };
     state
         .store

@@ -5,6 +5,7 @@
 pub mod adr;
 pub mod audit;
 pub mod decision;
+pub mod delete;
 pub mod dialogue;
 pub mod dialogue_lint;
 pub mod env;

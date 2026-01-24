@@ -10,7 +10,7 @@ use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBe
 use tracing::{debug, info, warn};
 
 /// Current schema version
-const SCHEMA_VERSION: i32 = 2;
+const SCHEMA_VERSION: i32 = 3;
 
 /// Core database schema
 const SCHEMA: &str = r#"
@@ -27,11 +27,13 @@ const SCHEMA: &str = r#"
         file_path TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
+        deleted_at TEXT,
         UNIQUE(doc_type, title)
     );
 
     CREATE INDEX IF NOT EXISTS idx_documents_type ON documents(doc_type);
     CREATE INDEX IF NOT EXISTS idx_documents_status ON documents(doc_type, status);
+    CREATE INDEX IF NOT EXISTS idx_documents_deleted ON documents(deleted_at) WHERE deleted_at IS NOT NULL;
 
     CREATE TABLE IF NOT EXISTS document_links (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -266,6 +268,7 @@ pub struct Document {
     pub file_path: Option<String>,
     pub created_at: Option<String>,
     pub updated_at: Option<String>,
+    pub deleted_at: Option<String>,
 }
 
 impl Document {
@@ -280,7 +283,13 @@ impl Document {
             file_path: None,
             created_at: None,
             updated_at: None,
+            deleted_at: None,
         }
+    }
+
+    /// Check if document is soft-deleted
+    pub fn is_deleted(&self) -> bool {
+        self.deleted_at.is_some()
     }
 }
 
@@ -604,6 +613,10 @@ impl DocumentStore {
             Some(v) if v == SCHEMA_VERSION => {
                 debug!("Database is up to date (version {})", v);
             }
+            Some(v) if v < SCHEMA_VERSION => {
+                info!("Migrating database from version {} to {}", v, SCHEMA_VERSION);
+                self.run_migrations(v)?;
+            }
             Some(v) => {
                 warn!(
                     "Schema version {} found, expected {}. Migrations may be needed.",
@@ -611,6 +624,39 @@ impl DocumentStore {
                 );
             }
         }
+
+        Ok(())
+    }
+
+    /// Run migrations from old version to current
+    fn run_migrations(&self, from_version: i32) -> Result<(), StoreError> {
+        // Migration from v2 to v3: Add deleted_at column
+        if from_version < 3 {
+            debug!("Adding deleted_at column to documents table");
+            // Check if column exists first
+            let has_column: bool = self.conn.query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('documents') WHERE name = 'deleted_at'",
+                [],
+                |row| Ok(row.get::<_, i64>(0)? > 0),
+            )?;
+
+            if !has_column {
+                self.conn.execute(
+                    "ALTER TABLE documents ADD COLUMN deleted_at TEXT",
+                    [],
+                )?;
+                self.conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_documents_deleted ON documents(deleted_at) WHERE deleted_at IS NOT NULL",
+                    [],
+                )?;
+            }
+        }
+
+        // Update schema version
+        self.conn.execute(
+            "UPDATE schema_version SET version = ?1",
+            params![SCHEMA_VERSION],
+        )?;
 
         Ok(())
     }
@@ -669,8 +715,8 @@ impl DocumentStore {
     pub fn get_document(&self, doc_type: DocType, title: &str) -> Result<Document, StoreError> {
         self.conn
             .query_row(
-                "SELECT id, doc_type, number, title, status, file_path, created_at, updated_at
-                 FROM documents WHERE doc_type = ?1 AND title = ?2",
+                "SELECT id, doc_type, number, title, status, file_path, created_at, updated_at, deleted_at
+                 FROM documents WHERE doc_type = ?1 AND title = ?2 AND deleted_at IS NULL",
                 params![doc_type.as_str(), title],
                 |row| {
                     Ok(Document {
@@ -682,6 +728,7 @@ impl DocumentStore {
                         file_path: row.get(5)?,
                         created_at: row.get(6)?,
                         updated_at: row.get(7)?,
+                        deleted_at: row.get(8)?,
                     })
                 },
             )
@@ -691,11 +738,11 @@ impl DocumentStore {
             })
     }
 
-    /// Get a document by ID
+    /// Get a document by ID (including soft-deleted)
     pub fn get_document_by_id(&self, id: i64) -> Result<Document, StoreError> {
         self.conn
             .query_row(
-                "SELECT id, doc_type, number, title, status, file_path, created_at, updated_at
+                "SELECT id, doc_type, number, title, status, file_path, created_at, updated_at, deleted_at
                  FROM documents WHERE id = ?1",
                 params![id],
                 |row| {
@@ -708,6 +755,7 @@ impl DocumentStore {
                         file_path: row.get(5)?,
                         created_at: row.get(6)?,
                         updated_at: row.get(7)?,
+                        deleted_at: row.get(8)?,
                     })
                 },
             )
@@ -727,8 +775,8 @@ impl DocumentStore {
     ) -> Result<Document, StoreError> {
         self.conn
             .query_row(
-                "SELECT id, doc_type, number, title, status, file_path, created_at, updated_at
-                 FROM documents WHERE doc_type = ?1 AND number = ?2",
+                "SELECT id, doc_type, number, title, status, file_path, created_at, updated_at, deleted_at
+                 FROM documents WHERE doc_type = ?1 AND number = ?2 AND deleted_at IS NULL",
                 params![doc_type.as_str(), number],
                 |row| {
                     Ok(Document {
@@ -740,6 +788,7 @@ impl DocumentStore {
                         file_path: row.get(5)?,
                         created_at: row.get(6)?,
                         updated_at: row.get(7)?,
+                        deleted_at: row.get(8)?,
                     })
                 },
             )
@@ -773,8 +822,8 @@ impl DocumentStore {
         // Try substring match
         let pattern = format!("%{}%", query.to_lowercase());
         if let Ok(doc) = self.conn.query_row(
-            "SELECT id, doc_type, number, title, status, file_path, created_at, updated_at
-             FROM documents WHERE doc_type = ?1 AND LOWER(title) LIKE ?2
+            "SELECT id, doc_type, number, title, status, file_path, created_at, updated_at, deleted_at
+             FROM documents WHERE doc_type = ?1 AND LOWER(title) LIKE ?2 AND deleted_at IS NULL
              ORDER BY LENGTH(title) ASC LIMIT 1",
             params![doc_type.as_str(), pattern],
             |row| {
@@ -787,6 +836,7 @@ impl DocumentStore {
                     file_path: row.get(5)?,
                     created_at: row.get(6)?,
                     updated_at: row.get(7)?,
+                    deleted_at: row.get(8)?,
                 })
             },
         ) {
@@ -848,11 +898,11 @@ impl DocumentStore {
         })
     }
 
-    /// List all documents of a given type
+    /// List all documents of a given type (excludes soft-deleted)
     pub fn list_documents(&self, doc_type: DocType) -> Result<Vec<Document>, StoreError> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, doc_type, number, title, status, file_path, created_at, updated_at
-             FROM documents WHERE doc_type = ?1 ORDER BY number DESC, title ASC",
+            "SELECT id, doc_type, number, title, status, file_path, created_at, updated_at, deleted_at
+             FROM documents WHERE doc_type = ?1 AND deleted_at IS NULL ORDER BY number DESC, title ASC",
         )?;
 
         let rows = stmt.query_map(params![doc_type.as_str()], |row| {
@@ -865,6 +915,7 @@ impl DocumentStore {
                 file_path: row.get(5)?,
                 created_at: row.get(6)?,
                 updated_at: row.get(7)?,
+                deleted_at: row.get(8)?,
             })
         })?;
 
@@ -872,15 +923,15 @@ impl DocumentStore {
             .map_err(StoreError::Database)
     }
 
-    /// List documents by status
+    /// List documents by status (excludes soft-deleted)
     pub fn list_documents_by_status(
         &self,
         doc_type: DocType,
         status: &str,
     ) -> Result<Vec<Document>, StoreError> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, doc_type, number, title, status, file_path, created_at, updated_at
-             FROM documents WHERE doc_type = ?1 AND status = ?2 ORDER BY number DESC, title ASC",
+            "SELECT id, doc_type, number, title, status, file_path, created_at, updated_at, deleted_at
+             FROM documents WHERE doc_type = ?1 AND status = ?2 AND deleted_at IS NULL ORDER BY number DESC, title ASC",
         )?;
 
         let rows = stmt.query_map(params![doc_type.as_str(), status], |row| {
@@ -893,6 +944,7 @@ impl DocumentStore {
                 file_path: row.get(5)?,
                 created_at: row.get(6)?,
                 updated_at: row.get(7)?,
+                deleted_at: row.get(8)?,
             })
         })?;
 
@@ -900,7 +952,7 @@ impl DocumentStore {
             .map_err(StoreError::Database)
     }
 
-    /// Delete a document
+    /// Delete a document permanently
     pub fn delete_document(&self, doc_type: DocType, title: &str) -> Result<(), StoreError> {
         self.with_retry(|| {
             let deleted = self.conn.execute(
@@ -912,6 +964,148 @@ impl DocumentStore {
             }
             Ok(())
         })
+    }
+
+    /// Soft-delete a document (set deleted_at timestamp)
+    pub fn soft_delete_document(&self, doc_type: DocType, title: &str) -> Result<(), StoreError> {
+        self.with_retry(|| {
+            let now = chrono::Utc::now().to_rfc3339();
+            let updated = self.conn.execute(
+                "UPDATE documents SET deleted_at = ?1, updated_at = ?1
+                 WHERE doc_type = ?2 AND title = ?3 AND deleted_at IS NULL",
+                params![now, doc_type.as_str(), title],
+            )?;
+            if updated == 0 {
+                return Err(StoreError::NotFound(title.to_string()));
+            }
+            Ok(())
+        })
+    }
+
+    /// Restore a soft-deleted document
+    pub fn restore_document(&self, doc_type: DocType, title: &str) -> Result<(), StoreError> {
+        self.with_retry(|| {
+            let now = chrono::Utc::now().to_rfc3339();
+            let updated = self.conn.execute(
+                "UPDATE documents SET deleted_at = NULL, updated_at = ?1
+                 WHERE doc_type = ?2 AND title = ?3 AND deleted_at IS NOT NULL",
+                params![now, doc_type.as_str(), title],
+            )?;
+            if updated == 0 {
+                return Err(StoreError::NotFound(format!(
+                    "soft-deleted {} '{}'",
+                    doc_type.as_str(),
+                    title
+                )));
+            }
+            Ok(())
+        })
+    }
+
+    /// Get a soft-deleted document by type and title
+    pub fn get_deleted_document(&self, doc_type: DocType, title: &str) -> Result<Document, StoreError> {
+        self.conn
+            .query_row(
+                "SELECT id, doc_type, number, title, status, file_path, created_at, updated_at, deleted_at
+                 FROM documents WHERE doc_type = ?1 AND title = ?2 AND deleted_at IS NOT NULL",
+                params![doc_type.as_str(), title],
+                |row| {
+                    Ok(Document {
+                        id: Some(row.get(0)?),
+                        doc_type: DocType::from_str(row.get::<_, String>(1)?.as_str()).unwrap(),
+                        number: row.get(2)?,
+                        title: row.get(3)?,
+                        status: row.get(4)?,
+                        file_path: row.get(5)?,
+                        created_at: row.get(6)?,
+                        updated_at: row.get(7)?,
+                        deleted_at: row.get(8)?,
+                    })
+                },
+            )
+            .map_err(|e| match e {
+                rusqlite::Error::QueryReturnedNoRows => StoreError::NotFound(format!(
+                    "soft-deleted {} '{}'",
+                    doc_type.as_str(),
+                    title
+                )),
+                e => StoreError::Database(e),
+            })
+    }
+
+    /// List soft-deleted documents
+    pub fn list_deleted_documents(&self, doc_type: Option<DocType>) -> Result<Vec<Document>, StoreError> {
+        let query = match doc_type {
+            Some(dt) => format!(
+                "SELECT id, doc_type, number, title, status, file_path, created_at, updated_at, deleted_at
+                 FROM documents WHERE doc_type = '{}' AND deleted_at IS NOT NULL
+                 ORDER BY deleted_at DESC",
+                dt.as_str()
+            ),
+            None => "SELECT id, doc_type, number, title, status, file_path, created_at, updated_at, deleted_at
+                     FROM documents WHERE deleted_at IS NOT NULL
+                     ORDER BY deleted_at DESC".to_string(),
+        };
+
+        let mut stmt = self.conn.prepare(&query)?;
+        let rows = stmt.query_map([], |row| {
+            Ok(Document {
+                id: Some(row.get(0)?),
+                doc_type: DocType::from_str(row.get::<_, String>(1)?.as_str()).unwrap(),
+                number: row.get(2)?,
+                title: row.get(3)?,
+                status: row.get(4)?,
+                file_path: row.get(5)?,
+                created_at: row.get(6)?,
+                updated_at: row.get(7)?,
+                deleted_at: row.get(8)?,
+            })
+        })?;
+
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(StoreError::Database)
+    }
+
+    /// Permanently delete documents that have been soft-deleted for more than N days
+    pub fn purge_old_deleted_documents(&self, days: i64) -> Result<usize, StoreError> {
+        self.with_retry(|| {
+            let cutoff = chrono::Utc::now() - chrono::Duration::days(days);
+            let cutoff_str = cutoff.to_rfc3339();
+
+            let deleted = self.conn.execute(
+                "DELETE FROM documents WHERE deleted_at IS NOT NULL AND deleted_at < ?1",
+                params![cutoff_str],
+            )?;
+
+            Ok(deleted)
+        })
+    }
+
+    /// Check if a document has ADR dependents (documents that reference it via rfc_to_adr link)
+    pub fn has_adr_dependents(&self, document_id: i64) -> Result<Vec<Document>, StoreError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT d.id, d.doc_type, d.number, d.title, d.status, d.file_path, d.created_at, d.updated_at, d.deleted_at
+             FROM documents d
+             JOIN document_links l ON l.source_id = d.id
+             WHERE l.target_id = ?1 AND l.link_type = 'rfc_to_adr' AND d.deleted_at IS NULL",
+        )?;
+
+        let rows = stmt.query_map(params![document_id], |row| {
+            Ok(Document {
+                id: Some(row.get(0)?),
+                doc_type: DocType::from_str(row.get::<_, String>(1)?.as_str()).unwrap(),
+                number: row.get(2)?,
+                title: row.get(3)?,
+                status: row.get(4)?,
+                file_path: row.get(5)?,
+                created_at: row.get(6)?,
+                updated_at: row.get(7)?,
+                deleted_at: row.get(8)?,
+            })
+        })?;
+
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(StoreError::Database)
     }
 
     /// Get the next document number for a type
@@ -944,7 +1138,7 @@ impl DocumentStore {
         })
     }
 
-    /// Get linked documents
+    /// Get linked documents (excludes soft-deleted)
     pub fn get_linked_documents(
         &self,
         source_id: i64,
@@ -952,16 +1146,16 @@ impl DocumentStore {
     ) -> Result<Vec<Document>, StoreError> {
         let query = match link_type {
             Some(lt) => format!(
-                "SELECT d.id, d.doc_type, d.number, d.title, d.status, d.file_path, d.created_at, d.updated_at
+                "SELECT d.id, d.doc_type, d.number, d.title, d.status, d.file_path, d.created_at, d.updated_at, d.deleted_at
                  FROM documents d
                  JOIN document_links l ON l.target_id = d.id
-                 WHERE l.source_id = ?1 AND l.link_type = '{}'",
+                 WHERE l.source_id = ?1 AND l.link_type = '{}' AND d.deleted_at IS NULL",
                 lt.as_str()
             ),
-            None => "SELECT d.id, d.doc_type, d.number, d.title, d.status, d.file_path, d.created_at, d.updated_at
+            None => "SELECT d.id, d.doc_type, d.number, d.title, d.status, d.file_path, d.created_at, d.updated_at, d.deleted_at
                      FROM documents d
                      JOIN document_links l ON l.target_id = d.id
-                     WHERE l.source_id = ?1".to_string(),
+                     WHERE l.source_id = ?1 AND d.deleted_at IS NULL".to_string(),
         };
 
         let mut stmt = self.conn.prepare(&query)?;
@@ -975,6 +1169,7 @@ impl DocumentStore {
                 file_path: row.get(5)?,
                 created_at: row.get(6)?,
                 updated_at: row.get(7)?,
+                deleted_at: row.get(8)?,
             })
         })?;
 
@@ -1140,7 +1335,7 @@ impl DocumentStore {
 
     // ==================== Search Operations ====================
 
-    /// Search documents using FTS5
+    /// Search documents using FTS5 (excludes soft-deleted)
     pub fn search_documents(
         &self,
         query: &str,
@@ -1153,19 +1348,19 @@ impl DocumentStore {
         let sql = match doc_type {
             Some(dt) => format!(
                 "SELECT d.id, d.doc_type, d.number, d.title, d.status, d.file_path,
-                        d.created_at, d.updated_at, bm25(documents_fts) as score
+                        d.created_at, d.updated_at, d.deleted_at, bm25(documents_fts) as score
                  FROM documents_fts fts
                  JOIN documents d ON d.id = fts.rowid
-                 WHERE documents_fts MATCH ?1 AND d.doc_type = '{}'
+                 WHERE documents_fts MATCH ?1 AND d.doc_type = '{}' AND d.deleted_at IS NULL
                  ORDER BY score
                  LIMIT ?2",
                 dt.as_str()
             ),
             None => "SELECT d.id, d.doc_type, d.number, d.title, d.status, d.file_path,
-                            d.created_at, d.updated_at, bm25(documents_fts) as score
+                            d.created_at, d.updated_at, d.deleted_at, bm25(documents_fts) as score
                      FROM documents_fts fts
                      JOIN documents d ON d.id = fts.rowid
-                     WHERE documents_fts MATCH ?1
+                     WHERE documents_fts MATCH ?1 AND d.deleted_at IS NULL
                      ORDER BY score
                      LIMIT ?2"
                 .to_string(),
@@ -1183,8 +1378,9 @@ impl DocumentStore {
                     file_path: row.get(5)?,
                     created_at: row.get(6)?,
                     updated_at: row.get(7)?,
+                    deleted_at: row.get(8)?,
                 },
-                score: row.get(8)?,
+                score: row.get(9)?,
                 snippet: None,
             })
         })?;

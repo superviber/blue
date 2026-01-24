@@ -534,7 +534,7 @@ impl BlueServer {
                 },
                 {
                     "name": "blue_pr_create",
-                    "description": "Create a PR with enforced base branch (develop, not main).",
+                    "description": "Create a PR with enforced base branch (develop, not main). If rfc is provided, title is formatted as 'RFC NNNN: Title Case Name'.",
                     "inputSchema": {
                         "type": "object",
                         "properties": {
@@ -542,9 +542,13 @@ impl BlueServer {
                                 "type": "string",
                                 "description": "Current working directory"
                             },
+                            "rfc": {
+                                "type": "string",
+                                "description": "RFC title (e.g., '0007-consistent-branch-naming'). If provided, PR title is formatted as 'RFC 0007: Consistent Branch Naming'"
+                            },
                             "title": {
                                 "type": "string",
-                                "description": "PR title"
+                                "description": "PR title (used if rfc not provided)"
                             },
                             "base": {
                                 "type": "string",
@@ -558,8 +562,7 @@ impl BlueServer {
                                 "type": "boolean",
                                 "description": "Create as draft PR"
                             }
-                        },
-                        "required": ["title"]
+                        }
                     }
                 },
                 {
@@ -1758,6 +1761,100 @@ impl BlueServer {
                         },
                         "required": ["name"]
                     }
+                },
+                // RFC 0006: Delete tools
+                {
+                    "name": "blue_delete",
+                    "description": "Delete a document (RFC, spike, decision, etc.) with safety checks. Supports dry_run, force, and permanent options. Default is soft-delete with 7-day retention.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "cwd": {
+                                "type": "string",
+                                "description": "Current working directory"
+                            },
+                            "doc_type": {
+                                "type": "string",
+                                "description": "Document type",
+                                "enum": ["rfc", "spike", "adr", "decision", "prd", "postmortem", "runbook"]
+                            },
+                            "title": {
+                                "type": "string",
+                                "description": "Document title or number"
+                            },
+                            "dry_run": {
+                                "type": "boolean",
+                                "description": "Preview what would be deleted without making changes"
+                            },
+                            "force": {
+                                "type": "boolean",
+                                "description": "Skip confirmation for non-draft documents or active sessions"
+                            },
+                            "permanent": {
+                                "type": "boolean",
+                                "description": "Permanently delete (skip soft-delete retention)"
+                            }
+                        },
+                        "required": ["doc_type", "title"]
+                    }
+                },
+                {
+                    "name": "blue_restore",
+                    "description": "Restore a soft-deleted document within the 7-day retention period.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "cwd": {
+                                "type": "string",
+                                "description": "Current working directory"
+                            },
+                            "doc_type": {
+                                "type": "string",
+                                "description": "Document type",
+                                "enum": ["rfc", "spike", "adr", "decision", "prd", "postmortem", "runbook"]
+                            },
+                            "title": {
+                                "type": "string",
+                                "description": "Document title to restore"
+                            }
+                        },
+                        "required": ["doc_type", "title"]
+                    }
+                },
+                {
+                    "name": "blue_deleted_list",
+                    "description": "List soft-deleted documents that can be restored.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "cwd": {
+                                "type": "string",
+                                "description": "Current working directory"
+                            },
+                            "doc_type": {
+                                "type": "string",
+                                "description": "Filter by document type (optional)",
+                                "enum": ["rfc", "spike", "adr", "decision", "prd", "postmortem", "runbook"]
+                            }
+                        }
+                    }
+                },
+                {
+                    "name": "blue_purge_deleted",
+                    "description": "Permanently remove soft-deleted documents older than specified days.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "cwd": {
+                                "type": "string",
+                                "description": "Current working directory"
+                            },
+                            "days": {
+                                "type": "number",
+                                "description": "Documents deleted more than this many days ago will be purged (default: 7)"
+                            }
+                        }
+                    }
                 }
             ]
         }))
@@ -1875,6 +1972,11 @@ impl BlueServer {
             "blue_model_pull" => crate::handlers::llm::handle_model_pull(&call.arguments.unwrap_or_default()),
             "blue_model_remove" => crate::handlers::llm::handle_model_remove(&call.arguments.unwrap_or_default()),
             "blue_model_warmup" => crate::handlers::llm::handle_model_warmup(&call.arguments.unwrap_or_default()),
+            // RFC 0006: Delete tools
+            "blue_delete" => self.handle_delete(&call.arguments),
+            "blue_restore" => self.handle_restore(&call.arguments),
+            "blue_deleted_list" => self.handle_deleted_list(&call.arguments),
+            "blue_purge_deleted" => self.handle_purge_deleted(&call.arguments),
             _ => Err(ServerError::ToolNotFound(call.name)),
         }?;
 
@@ -2786,6 +2888,88 @@ impl BlueServer {
             .and_then(|a| a.get("state"))
             .and_then(|v| v.as_str());
         crate::handlers::realm::handle_notifications_list(self.cwd.as_deref(), state)
+    }
+
+    // RFC 0006: Delete handlers
+
+    fn handle_delete(&mut self, args: &Option<Value>) -> Result<Value, ServerError> {
+        let args = args.as_ref().ok_or(ServerError::InvalidParams)?;
+
+        let doc_type_str = args
+            .get("doc_type")
+            .and_then(|v| v.as_str())
+            .ok_or(ServerError::InvalidParams)?;
+        let doc_type = DocType::from_str(doc_type_str)
+            .ok_or(ServerError::InvalidParams)?;
+
+        let title = args
+            .get("title")
+            .and_then(|v| v.as_str())
+            .ok_or(ServerError::InvalidParams)?;
+
+        let dry_run = args
+            .get("dry_run")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
+        let force = args
+            .get("force")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
+        let permanent = args
+            .get("permanent")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
+        if dry_run {
+            let state = self.ensure_state()?;
+            crate::handlers::delete::handle_delete_dry_run(state, doc_type, title)
+        } else {
+            let state = self.ensure_state_mut()?;
+            crate::handlers::delete::handle_delete(state, doc_type, title, force, permanent)
+        }
+    }
+
+    fn handle_restore(&mut self, args: &Option<Value>) -> Result<Value, ServerError> {
+        let args = args.as_ref().ok_or(ServerError::InvalidParams)?;
+
+        let doc_type_str = args
+            .get("doc_type")
+            .and_then(|v| v.as_str())
+            .ok_or(ServerError::InvalidParams)?;
+        let doc_type = DocType::from_str(doc_type_str)
+            .ok_or(ServerError::InvalidParams)?;
+
+        let title = args
+            .get("title")
+            .and_then(|v| v.as_str())
+            .ok_or(ServerError::InvalidParams)?;
+
+        let state = self.ensure_state_mut()?;
+        crate::handlers::delete::handle_restore(state, doc_type, title)
+    }
+
+    fn handle_deleted_list(&mut self, args: &Option<Value>) -> Result<Value, ServerError> {
+        let doc_type = args
+            .as_ref()
+            .and_then(|a| a.get("doc_type"))
+            .and_then(|v| v.as_str())
+            .and_then(DocType::from_str);
+
+        let state = self.ensure_state()?;
+        crate::handlers::delete::handle_list_deleted(state, doc_type)
+    }
+
+    fn handle_purge_deleted(&mut self, args: &Option<Value>) -> Result<Value, ServerError> {
+        let days = args
+            .as_ref()
+            .and_then(|a| a.get("days"))
+            .and_then(|v| v.as_i64())
+            .unwrap_or(7);
+
+        let state = self.ensure_state_mut()?;
+        crate::handlers::delete::handle_purge_deleted(state, days)
     }
 }
 

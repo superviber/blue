@@ -64,4 +64,10 @@ Run Blue as an MCP server for Claude integration:
 blue mcp
 ```
 
-Configure in Claude settings to enable Blue tools.
+This exposes 8 realm coordination tools to Claude:
+- `realm_status`, `realm_check`, `contract_get`
+- `session_start`, `session_stop`
+- `realm_worktree_create`, `realm_pr_status`
+- `notifications_list`
+
+See [../mcp/README.md](../mcp/README.md) for tool reference and [../mcp/integration.md](../mcp/integration.md) for setup guide.

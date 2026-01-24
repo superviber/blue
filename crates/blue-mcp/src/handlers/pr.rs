@@ -5,6 +5,10 @@
 //! - Base branch must be `develop` (not `main`)
 //! - Test plan checkboxes must be verified before merge
 //! - User must approve PR before merge
+//!
+//! PR title convention (RFC 0007):
+//! - Format: `RFC NNNN: Feature Description`
+//! - Example: `RFC 0007: Consistent Branch Naming`
 
 use std::process::Command;
 
@@ -12,6 +16,7 @@ use blue_core::ProjectState;
 use serde_json::{json, Value};
 
 use crate::error::ServerError;
+use crate::handlers::worktree::strip_rfc_number_prefix;
 
 /// Task category for test plan items
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -26,11 +31,27 @@ pub enum TaskCategory {
 
 
 /// Handle blue_pr_create
+///
+/// If `rfc` is provided (e.g., "0007-consistent-branch-naming"), the title
+/// will be formatted as "RFC 0007: Consistent Branch Naming" per RFC 0007.
 pub fn handle_create(_state: &ProjectState, args: &Value) -> Result<Value, ServerError> {
-    let title = args
-        .get("title")
-        .and_then(|v| v.as_str())
-        .ok_or(ServerError::InvalidParams)?;
+    let rfc = args.get("rfc").and_then(|v| v.as_str());
+
+    // If RFC is provided, format title as "RFC NNNN: Title Case Name"
+    let title = if let Some(rfc_title) = rfc {
+        let (stripped, number) = strip_rfc_number_prefix(rfc_title);
+        let title_case = to_title_case(&stripped);
+        if let Some(n) = number {
+            format!("RFC {:04}: {}", n, title_case)
+        } else {
+            title_case
+        }
+    } else {
+        args.get("title")
+            .and_then(|v| v.as_str())
+            .ok_or(ServerError::InvalidParams)?
+            .to_string()
+    };
 
     let base = args
         .get("base")
@@ -509,4 +530,20 @@ fn update_checkbox_in_body(body: &str, item_selector: &str) -> Result<(String, S
             item_selector
         ))),
     }
+}
+
+/// Convert kebab-case to Title Case
+///
+/// Example: "consistent-branch-naming" -> "Consistent Branch Naming"
+fn to_title_case(s: &str) -> String {
+    s.split('-')
+        .map(|word| {
+            let mut chars = word.chars();
+            match chars.next() {
+                None => String::new(),
+                Some(first) => first.to_uppercase().chain(chars).collect(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }

@@ -1,11 +1,31 @@
 //! Worktree tool handlers
 //!
 //! Handles git worktree operations for isolated feature development.
+//!
+//! Branch naming convention (RFC 0007):
+//! - RFC file: `NNNN-feature-description.md`
+//! - Branch: `feature-description` (number prefix stripped)
+//! - Worktree: `feature-description`
 
 use blue_core::{DocType, ProjectState, Worktree as StoreWorktree};
 use serde_json::{json, Value};
 
 use crate::error::ServerError;
+
+/// Strip RFC number prefix from title
+///
+/// Converts `0007-consistent-branch-naming` to `consistent-branch-naming`
+/// Returns (stripped_name, rfc_number) if pattern matches, otherwise (original, None)
+pub fn strip_rfc_number_prefix(title: &str) -> (String, Option<u32>) {
+    // Match pattern: NNNN-rest-of-title
+    if title.len() > 5 && title.chars().take(4).all(|c| c.is_ascii_digit()) && title.chars().nth(4) == Some('-') {
+        let number: Option<u32> = title[..4].parse().ok();
+        let stripped = title[5..].to_string();
+        (stripped, number)
+    } else {
+        (title.to_string(), None)
+    }
+}
 
 /// Handle blue_worktree_create
 pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, ServerError> {
@@ -44,9 +64,10 @@ pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, Server
         }
     }
 
-    // Create branch name and worktree path
-    let branch_name = format!("rfc/{}", title);
-    let worktree_path = state.home.worktrees_path.join(title);
+    // Create branch name and worktree path (RFC 0007: strip number prefix)
+    let (stripped_name, _rfc_number) = strip_rfc_number_prefix(title);
+    let branch_name = stripped_name.clone();
+    let worktree_path = state.home.worktrees_path.join(&stripped_name);
 
     // Try to create the git worktree
     let repo_path = state.home.root.clone();
@@ -149,7 +170,9 @@ pub fn handle_cleanup(state: &ProjectState, args: &Value) -> Result<Value, Serve
         .and_then(|v| v.as_str())
         .ok_or(ServerError::InvalidParams)?;
 
-    let branch_name = format!("rfc/{}", title);
+    // Support both old (rfc/title) and new (stripped) naming conventions
+    let (stripped_name, _) = strip_rfc_number_prefix(title);
+    let branch_name = stripped_name.clone();
 
     // Find the RFC to get worktree info
     let doc = state
@@ -312,4 +335,45 @@ pub fn handle_remove(state: &ProjectState, args: &Value) -> Result<Value, Server
             None
         )
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_strip_rfc_number_prefix() {
+        // Standard RFC title with number
+        let (stripped, number) = strip_rfc_number_prefix("0007-consistent-branch-naming");
+        assert_eq!(stripped, "consistent-branch-naming");
+        assert_eq!(number, Some(7));
+
+        // Another example
+        let (stripped, number) = strip_rfc_number_prefix("0001-some-feature");
+        assert_eq!(stripped, "some-feature");
+        assert_eq!(number, Some(1));
+
+        // High number
+        let (stripped, number) = strip_rfc_number_prefix("9999-last-rfc");
+        assert_eq!(stripped, "last-rfc");
+        assert_eq!(number, Some(9999));
+    }
+
+    #[test]
+    fn test_strip_rfc_number_prefix_no_number() {
+        // No number prefix
+        let (stripped, number) = strip_rfc_number_prefix("some-feature");
+        assert_eq!(stripped, "some-feature");
+        assert_eq!(number, None);
+
+        // Too few digits
+        let (stripped, number) = strip_rfc_number_prefix("007-james-bond");
+        assert_eq!(stripped, "007-james-bond");
+        assert_eq!(number, None);
+
+        // No hyphen after number
+        let (stripped, number) = strip_rfc_number_prefix("0007feature");
+        assert_eq!(stripped, "0007feature");
+        assert_eq!(number, None);
+    }
 }
