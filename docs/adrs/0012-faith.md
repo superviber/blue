@@ -32,6 +32,8 @@ Faith is not the absence of reason. It's action beyond where reason can reach.
 
 We reason as far as reason goes. Then we trust—ourselves, our teammates, the process.
 
+Faith is also in time. Persisting when you can't see the end is faith in the journey. See ADR 0000: Never Give Up.
+
 ## What This Means
 
 - **Ship before certain.** Production teaches what testing can't.

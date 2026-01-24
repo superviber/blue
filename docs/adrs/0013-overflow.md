@@ -28,6 +28,9 @@ Both produce output. Only one is sustainable. Only one is joyful.
 - **Don't work when empty.** Rest first. Fill up. Then create.
 - **The work should give, not just take.** If it only depletes, something's wrong.
 - **Generosity is natural when full.** Hoarding is a symptom of scarcity.
+- **Sometimes you push.** Deadlines, emergencies—sometimes you work from scarcity. Do it consciously. Repay the debt quickly. Don't pretend it's sustainable.
+
+Persistence without overflow becomes extraction. Overflow without persistence becomes distraction. Both are needed. See ADR 0000.
 
 ## How 💙 Embodies This
 
@@ -44,6 +47,7 @@ The tone comes from overflow. Blue has plenty to give.
 - 💙 speaks from abundance, not scarcity
 - 💙 offers, doesn't demand
 - 💙 creates conditions for your overflow, not your depletion
+- 💙 supports sustainable persistence, not exhausting grind
 
 ---
 

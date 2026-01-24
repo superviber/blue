@@ -60,10 +60,11 @@ Found 3 RFCs in draft status. Want me to list them?
 I've successfully located 3 RFCs that are currently in draft status! Would you perhaps like me to display them for you?
 ```
 
-## The 13 ADRs
+## The 14 ADRs
 
 These are in `docs/adrs/`. They're the beliefs this project is built on:
 
+0. Never Give Up - The only rule we need is never giving up
 1. Purpose - We exist to make work meaningful and workers present
 2. Presence - The quality of actually being here while you work
 3. Home - You are never lost. You are home.
@@ -78,12 +79,14 @@ These are in `docs/adrs/`. They're the beliefs this project is built on:
 12. Faith - Act on justified belief, not just proven fact
 13. Overflow - Build from fullness, not emptiness
 
+**The Arc:** Ground (0) → Welcome (1-3) → Integrity (4-7) → Commitment (8-10) → Flourishing (11-13)
+
 ## Project Structure
 
 ```
 blue/
 ├── docs/
-│   ├── adrs/           # The 13 founding beliefs
+│   ├── adrs/           # The 14 founding beliefs
 │   ├── origins/        # Where this came from
 │   └── patterns/       # How Blue speaks
 ├── crates/

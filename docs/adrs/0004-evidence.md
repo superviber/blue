@@ -30,6 +30,8 @@ This isn't cynicism. It's respect. Respect for the gap between intention and rea
 
 Documentation is useful. Comments are helpful. But when push comes to shove, we trust what we can see running.
 
+When evidence is unavailable, act on justified belief. See ADR 0012: Faith.
+
 ## Consequences
 
 - 💙 shows you what it did, not just what it claims
