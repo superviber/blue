@@ -1,0 +1,49 @@
+#!/bin/bash
+# Blue SessionStart Hook
+# Injects private knowledge into Claude's context via stdout
+
+BLUE_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+KNOWLEDGE_DIR="$BLUE_ROOT/knowledge"
+
+# Phase 1: Read from plaintext files
+# Phase 2: Will read from encrypted SQLite via `blue knowledge get`
+
+inject_file() {
+    local file="$1"
+    local tag="$2"
+    local name="$3"
+
+    if [ -f "$file" ]; then
+        if [ -n "$name" ]; then
+            echo "<$tag name=\"$name\">"
+        else
+            echo "<$tag>"
+        fi
+        cat "$file"
+        echo "</$tag>"
+    fi
+}
+
+# 1. Inject global knowledge (from blue repo)
+for knowledge_file in "$KNOWLEDGE_DIR"/*.md; do
+    if [ -f "$knowledge_file" ]; then
+        name=$(basename "$knowledge_file" .md)
+        inject_file "$knowledge_file" "blue-knowledge" "$name"
+    fi
+done
+
+# 2. Inject project-specific workflow (from current project, if exists)
+#    This file is committed to git, so team can see it
+inject_file ".blue/workflow.md" "blue-project-workflow" ""
+
+# 3. Run the actual session-start command (registers session in DB)
+"$BLUE_ROOT/target/release/blue" session-start "$@" 2>/dev/null
+
+# Output session context
+cat << 'EOF'
+
+<system-reminder>
+SessionStart:blue hook loaded. Blue MCP tools available.
+Use `blue_status` to see current state, `blue_next` for recommendations.
+</system-reminder>
+EOF

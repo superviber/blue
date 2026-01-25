@@ -120,6 +120,26 @@ When connected, use these tools:
 
 All docs live in `.blue/docs/` per RFC 0003.
 
+## Alignment Dialogues
+
+When asked to "play alignment" or run expert deliberation, follow ADR 0014:
+
+1. **You are the 💙 Judge** - orchestrate, don't participate
+2. **Spawn N 🧁 agents in PARALLEL** - single message with N Task tool calls
+3. **Each agent gets fresh context** - no memory of other agents
+4. **Collect outputs** via `blue_extract_dialogue`
+5. **Score contributions** - ALIGNMENT = Wisdom + Consistency + Truth + Relationships (UNBOUNDED)
+6. **Update `.dialogue.md`** with scoreboard, perspectives, tensions
+7. **Repeat rounds** until convergence (velocity → 0 or threshold met)
+8. **Save** via `blue_dialogue_save`
+
+See `.blue/docs/adrs/0014-alignment-dialogue-agents.md` for full spec.
+
+**Helper tools (don't orchestrate, just assist):**
+- `blue_extract_dialogue` - Read agent JSONL outputs
+- `blue_dialogue_lint` - Validate dialogue format
+- `blue_dialogue_save` - Persist to `.blue/docs/dialogues/`
+
 ## Origins
 
 Blue emerged from the convergence of two projects:
