@@ -249,7 +249,7 @@ impl ImportBinding {
     /// Check if this import satisfies a given version
     pub fn satisfies(&self, version: &str) -> Result<bool, RealmError> {
         let req = semver::VersionReq::parse(&self.version)
-            .map_err(|e| RealmError::InvalidVersion(e))?;
+            .map_err(RealmError::InvalidVersion)?;
         let ver = semver::Version::parse(version)?;
         Ok(req.matches(&ver))
     }

@@ -368,7 +368,7 @@ fn load_adr_summaries(state: &ProjectState) -> Result<Vec<AdrSummary>, ServerErr
 
     for entry in entries.flatten() {
         let path = entry.path();
-        if path.extension().map_or(false, |e| e == "md") {
+        if path.extension().is_some_and(|e| e == "md") {
             if let Ok(content) = fs::read_to_string(&path) {
                 if let Some(summary) = parse_adr_file(&path, &content) {
                     summaries.push(summary);

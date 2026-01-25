@@ -220,21 +220,19 @@ pub fn handle_delete(
                 let stem_str = stem.to_string_lossy();
                 for suffix in &[".plan.md", ".dialogue.md", ".draft.md"] {
                     let companion = parent.join(format!("{}{}", stem_str, suffix));
-                    if companion.exists() {
-                        if fs::remove_file(&companion).is_ok() {
+                    if companion.exists()
+                        && fs::remove_file(&companion).is_ok() {
                             files_deleted.push(companion.display().to_string());
                         }
-                    }
                 }
             }
         }
 
         // Delete primary file
-        if base_path.exists() {
-            if fs::remove_file(base_path).is_ok() {
+        if base_path.exists()
+            && fs::remove_file(base_path).is_ok() {
                 files_deleted.push(file_path.clone());
             }
-        }
     }
 
     // Soft or permanent delete

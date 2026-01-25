@@ -210,7 +210,7 @@ impl BlueConfig {
     pub fn save(&self, blue_dir: &std::path::Path) -> Result<(), std::io::Error> {
         let config_path = blue_dir.join("config.yaml");
         let content = serde_yaml::to_string(self)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+            .map_err(|e| std::io::Error::other(e))?;
         std::fs::write(&config_path, content)
     }
 }

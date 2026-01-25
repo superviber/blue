@@ -289,14 +289,14 @@ fn extract_project_name(path: &Path) -> Option<String> {
 fn extract_repo_name_from_url(url: &str) -> Option<String> {
     // Handle SSH URLs: git@host:org/repo.git
     if url.contains(':') && !url.contains("://") {
-        let after_colon = url.split(':').last()?;
+        let after_colon = url.split(':').next_back()?;
         let name = after_colon.trim_end_matches(".git");
-        return name.split('/').last().map(|s| s.to_string());
+        return name.split('/').next_back().map(|s| s.to_string());
     }
 
     // Handle HTTPS URLs: https://host/org/repo.git
     let name = url.trim_end_matches(".git");
-    name.split('/').last().map(|s| s.to_string())
+    name.split('/').next_back().map(|s| s.to_string())
 }
 
 /// List git worktrees for a repository

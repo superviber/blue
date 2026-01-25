@@ -206,7 +206,7 @@ pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, Server
                         "setup_script": setup_script,
                         "message": blue_core::voice::success(
                             &format!("Created worktree for '{}'", title),
-                            Some(&hint.trim())
+                            Some(hint.trim())
                         ),
                         "next_action": {
                             "tool": if setup_script.is_some() || install_command.is_some() {

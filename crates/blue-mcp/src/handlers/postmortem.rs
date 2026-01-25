@@ -398,7 +398,7 @@ fn generate_postmortem_markdown(
     md.push_str("| Time | Event |\n");
     md.push_str("|------|-------|\n");
     md.push_str("| HH:MM | [Event] |\n");
-    md.push_str("\n");
+    md.push('\n');
 
     // Root Cause
     md.push_str("## Root Cause\n\n");
@@ -418,7 +418,7 @@ fn generate_postmortem_markdown(
     } else {
         md.push_str("- [Impact 1]\n");
     }
-    md.push_str("\n");
+    md.push('\n');
 
     // What Went Well
     md.push_str("## What Went Well\n\n");
@@ -433,7 +433,7 @@ fn generate_postmortem_markdown(
     md.push_str("| Item | Owner | Due | Status | RFC |\n");
     md.push_str("|------|-------|-----|--------|-----|\n");
     md.push_str("| [Action 1] | [Name] | [Date] | Open | |\n");
-    md.push_str("\n");
+    md.push('\n');
 
     // Lessons Learned
     md.push_str("## Lessons Learned\n\n");

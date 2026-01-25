@@ -362,8 +362,8 @@ fn run_python_checks(path: &Path, fix: bool, check_type: &str) -> Vec<LintResult
         }
     }
 
-    if check_type == "all" || check_type == "lint" {
-        if use_ruff {
+    if (check_type == "all" || check_type == "lint")
+        && use_ruff {
             let args: Vec<&str> = if fix {
                 vec!["check", "--fix", "."]
             } else {
@@ -379,7 +379,6 @@ fn run_python_checks(path: &Path, fix: bool, check_type: &str) -> Vec<LintResult
                 "ruff check --fix .",
             ));
         }
-    }
 
     results
 }

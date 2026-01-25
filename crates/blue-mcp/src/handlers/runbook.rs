@@ -394,12 +394,11 @@ pub fn handle_lookup(state: &ProjectState, args: &Value) -> Result<Value, Server
             // Calculate best match score for this runbook
             for action in &actions {
                 let score = calculate_match_score(&action_query, action);
-                if score > 0 {
-                    if best_match.as_ref().map_or(true, |(_, _, s)| score > *s) {
+                if score > 0
+                    && best_match.as_ref().is_none_or(|(_, _, s)| score > *s) {
                         best_match = Some((runbook.clone(), actions.clone(), score));
                         break; // This runbook matches, move to next
                     }
-                }
             }
         }
     }

@@ -580,7 +580,7 @@ fn generate_dialogue_markdown(
     md.push_str("| Round | Topic | Outcome |\n");
     md.push_str("|-------|-------|--------|\n");
     md.push_str("| 1 | [Topic] | [Outcome] |\n");
-    md.push_str("\n");
+    md.push('\n');
 
     // Lessons learned
     md.push_str("## Lessons Learned\n\n");

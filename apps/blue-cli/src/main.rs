@@ -1663,7 +1663,7 @@ fn handle_index_command_blocking(command: IndexCommands) -> Result<()> {
             };
 
             let llm = OllamaLlm::new(&llm_config);
-            if let Err(_) = llm.start() {
+            if llm.start().is_err() {
                 // Silently skip if Ollama not available (pre-commit hook shouldn't block)
                 return Ok(());
             }
