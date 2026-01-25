@@ -205,7 +205,7 @@ impl BlueServer {
                 },
                 {
                     "name": "blue_rfc_update_status",
-                    "description": "Update an RFC's status (draft -> accepted -> in-progress -> implemented).",
+                    "description": "Update an RFC's status. WORKFLOW: Set to 'accepted' when RFC is approved, then use blue_worktree_create to start implementation. Status flow: draft -> accepted -> in-progress -> implemented.",
                     "inputSchema": {
                         "type": "object",
                         "properties": {
@@ -481,7 +481,7 @@ impl BlueServer {
                 },
                 {
                     "name": "blue_worktree_create",
-                    "description": "Create an isolated git worktree for RFC implementation.",
+                    "description": "Create an isolated git worktree for RFC implementation. WORKFLOW: Use this after an RFC is accepted (status='accepted'), before starting implementation. Creates a feature branch and isolated working directory. After implementation, use blue_rfc_complete then blue_pr_create.",
                     "inputSchema": {
                         "type": "object",
                         "properties": {
@@ -534,7 +534,7 @@ impl BlueServer {
                 },
                 {
                     "name": "blue_pr_create",
-                    "description": "Create a PR with enforced base branch (develop, not main). If rfc is provided, title is formatted as 'RFC NNNN: Title Case Name'.",
+                    "description": "Create a PR with enforced base branch (develop, not main). WORKFLOW: Use after blue_rfc_complete to submit implementation for review. After PR is merged, use blue_worktree_cleanup to finalize. If rfc is provided, title is formatted as 'RFC NNNN: Title Case Name'.",
                     "inputSchema": {
                         "type": "object",
                         "properties": {
@@ -1010,7 +1010,7 @@ impl BlueServer {
                 },
                 {
                     "name": "blue_rfc_complete",
-                    "description": "Mark RFC as implemented based on plan progress. Requires at least 70% completion.",
+                    "description": "Mark RFC as implemented based on plan progress. WORKFLOW: Use after completing core implementation work in the worktree. Requires at least 70% task completion. After this, use blue_pr_create to submit for review.",
                     "inputSchema": {
                         "type": "object",
                         "properties": {
@@ -1415,6 +1415,53 @@ impl BlueServer {
                             }
                         },
                         "required": ["title"]
+                    }
+                },
+                // RFC 0012: Alignment Dialogue Orchestration
+                {
+                    "name": "blue_alignment_play",
+                    "description": "Run a multi-expert alignment dialogue to deliberate on a topic until convergence",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "topic": {
+                                "type": "string",
+                                "description": "The topic to deliberate on"
+                            },
+                            "constraint": {
+                                "type": "string",
+                                "description": "Key constraint or boundary for the discussion"
+                            },
+                            "expert_count": {
+                                "type": "integer",
+                                "default": 12,
+                                "description": "Number of experts in the panel"
+                            },
+                            "convergence": {
+                                "type": "number",
+                                "default": 0.95,
+                                "description": "Target convergence threshold (0.0-1.0)"
+                            },
+                            "max_rounds": {
+                                "type": "integer",
+                                "default": 12,
+                                "description": "Maximum rounds before stopping"
+                            },
+                            "rfc_title": {
+                                "type": "string",
+                                "description": "RFC to link the dialogue to"
+                            },
+                            "template": {
+                                "type": "string",
+                                "enum": ["infrastructure", "product", "ml", "governance", "general"],
+                                "description": "Expert panel template"
+                            },
+                            "model": {
+                                "type": "string",
+                                "description": "Ollama model to use (default: qwen2.5:7b)"
+                            }
+                        },
+                        "required": ["topic"]
                     }
                 },
                 // Phase 8: Playwright verification
@@ -2140,6 +2187,8 @@ impl BlueServer {
             "blue_dialogue_get" => self.handle_dialogue_get(&call.arguments),
             "blue_dialogue_list" => self.handle_dialogue_list(&call.arguments),
             "blue_dialogue_save" => self.handle_dialogue_save(&call.arguments),
+            // RFC 0012: Alignment Dialogue Orchestration
+            "blue_alignment_play" => self.handle_alignment_play(&call.arguments),
             // Phase 8: Playwright handler
             "blue_playwright_verify" => self.handle_playwright_verify(&call.arguments),
             // Phase 9: Post-mortem handlers
@@ -2224,41 +2273,92 @@ impl BlueServer {
             Ok(state) => {
                 let summary = state.status_summary();
 
-                let recommendations = if !summary.stalled.is_empty() {
-                    vec![format!(
-                        "'{}' might be stalled. Check if work is still in progress.",
-                        summary.stalled[0].title
-                    )]
+                // Build recommendations with MCP tool syntax (RFC 0011)
+                let (recommendations, next_action) = if !summary.stalled.is_empty() {
+                    let title = &summary.stalled[0].title;
+                    (
+                        vec![format!(
+                            "'{}' is in-progress but has no worktree. Use blue_worktree_create with title='{}' to work in isolation.",
+                            title, title
+                        )],
+                        Some(json!({
+                            "tool": "blue_worktree_create",
+                            "args": { "title": title },
+                            "hint": "Create worktree to continue work in isolation"
+                        }))
+                    )
                 } else if !summary.ready.is_empty() {
-                    vec![format!(
-                        "'{}' is ready to implement. Run 'blue worktree create {}' to start.",
-                        summary.ready[0].title, summary.ready[0].title
-                    )]
+                    let title = &summary.ready[0].title;
+                    (
+                        vec![format!(
+                            "'{}' is accepted and ready. Use blue_worktree_create with title='{}' to start implementation.",
+                            title, title
+                        )],
+                        Some(json!({
+                            "tool": "blue_worktree_create",
+                            "args": { "title": title },
+                            "hint": "Create worktree to start implementation"
+                        }))
+                    )
                 } else if !summary.drafts.is_empty() {
-                    vec![format!(
-                        "'{}' is in draft. Review and accept it when ready.",
-                        summary.drafts[0].title
-                    )]
+                    let title = &summary.drafts[0].title;
+                    (
+                        vec![format!(
+                            "'{}' is in draft. Use blue_rfc_update_status with title='{}' and status='accepted' when ready.",
+                            title, title
+                        )],
+                        Some(json!({
+                            "tool": "blue_rfc_update_status",
+                            "args": { "title": title, "status": "accepted" },
+                            "hint": "Accept the RFC to proceed with implementation"
+                        }))
+                    )
                 } else if !summary.active.is_empty() {
-                    vec![format!(
-                        "{} item(s) in progress. Keep at it.",
-                        summary.active.len()
-                    )]
+                    let title = &summary.active[0].title;
+                    (
+                        vec![format!(
+                            "{} item(s) in progress. Continue work on '{}', then use blue_rfc_complete when done.",
+                            summary.active.len(), title
+                        )],
+                        Some(json!({
+                            "tool": "blue_rfc_complete",
+                            "args": { "title": title },
+                            "hint": "Mark as implemented when core work is done"
+                        }))
+                    )
                 } else {
-                    vec!["Nothing pressing. Good time to plan something new.".to_string()]
+                    (
+                        vec!["Nothing in flight. Use blue_rfc_create to start something new.".to_string()],
+                        Some(json!({
+                            "tool": "blue_rfc_create",
+                            "args": {},
+                            "hint": "Create a new RFC to plan your next feature"
+                        }))
+                    )
                 };
 
-                Ok(json!({
+                let mut response = json!({
                     "recommendations": recommendations,
                     "hint": summary.hint
-                }))
+                });
+
+                if let Some(action) = next_action {
+                    response["next_action"] = action;
+                }
+
+                Ok(response)
             }
             Err(_) => {
                 Ok(json!({
                     "recommendations": [
-                        "Run 'blue init' to set up this project first."
+                        "Blue not initialized here. Use blue_guide to get started."
                     ],
-                    "hint": "Can't find Blue here."
+                    "hint": "Can't find Blue here.",
+                    "next_action": {
+                        "tool": "blue_guide",
+                        "args": { "action": "start" },
+                        "hint": "Start the interactive guide"
+                    }
                 }))
             }
         }
@@ -2409,6 +2509,14 @@ impl BlueServer {
         let doc = state.store.find_document(DocType::Rfc, title)
             .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
 
+        // Check for worktree when going to in-progress
+        let has_worktree = state.has_worktree(title);
+        let worktree_warning = if status == "in-progress" && !has_worktree {
+            Some("No worktree exists for this RFC. Use blue_worktree_create to work in isolation.")
+        } else {
+            None
+        };
+
         // Update database
         state.store.update_document_status(DocType::Rfc, title, status)
             .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
@@ -2421,7 +2529,30 @@ impl BlueServer {
             false
         };
 
-        Ok(json!({
+        // Build next_action for accepted status (RFC 0011)
+        let next_action = if status == "accepted" {
+            Some(json!({
+                "tool": "blue_worktree_create",
+                "args": { "title": title },
+                "hint": "Create a worktree to start implementation"
+            }))
+        } else if status == "in-progress" && has_worktree {
+            Some(json!({
+                "tool": "blue_rfc_complete",
+                "args": { "title": title },
+                "hint": "Mark as implemented when core work is done"
+            }))
+        } else if status == "implemented" {
+            Some(json!({
+                "tool": "blue_pr_create",
+                "args": {},
+                "hint": "Create a pull request for review"
+            }))
+        } else {
+            None
+        };
+
+        let mut response = json!({
             "status": "success",
             "title": title,
             "new_status": status,
@@ -2430,7 +2561,17 @@ impl BlueServer {
                 &format!("Updated '{}' to {}", title, status),
                 None
             )
-        }))
+        });
+
+        // Add optional fields
+        if let Some(action) = next_action {
+            response["next_action"] = action;
+        }
+        if let Some(warning) = worktree_warning {
+            response["warning"] = json!(warning);
+        }
+
+        Ok(response)
     }
 
     fn handle_rfc_plan(&mut self, args: &Option<Value>) -> Result<Value, ServerError> {
@@ -3009,6 +3150,13 @@ impl BlueServer {
         let args = args.as_ref().ok_or(ServerError::InvalidParams)?;
         let state = self.ensure_state_mut()?;
         crate::handlers::dialogue::handle_save(state, args)
+    }
+
+    // RFC 0012: Alignment Dialogue Orchestration
+    fn handle_alignment_play(&mut self, args: &Option<Value>) -> Result<Value, ServerError> {
+        let args = args.as_ref().ok_or(ServerError::InvalidParams)?;
+        let state = self.ensure_state_mut()?;
+        crate::handlers::alignment::handle_play(state, args)
     }
 
     fn handle_playwright_verify(&mut self, args: &Option<Value>) -> Result<Value, ServerError> {

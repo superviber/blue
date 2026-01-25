@@ -742,31 +742,6 @@ fn to_kebab_case(s: &str) -> String {
         .join("-")
 }
 
-/// Parse ADR citations from RFC frontmatter
-///
-/// Looks for patterns like:
-/// | **ADRs** | 0004, 0007, 0010 |
-pub fn parse_adr_citations(content: &str) -> Vec<i64> {
-    let mut citations = Vec::new();
-
-    for line in content.lines() {
-        if line.contains("**ADRs**") || line.contains("| ADRs |") {
-            // Extract numbers
-            for part in line.split(|c: char| !c.is_numeric()) {
-                if let Ok(num) = part.parse::<i64>() {
-                    if num < 100 {
-                        // ADR numbers are typically small
-                        citations.push(num);
-                    }
-                }
-            }
-            break;
-        }
-    }
-
-    citations
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -783,16 +758,6 @@ mod tests {
         let keywords = extract_keywords(content);
         assert!(keywords.contains(&"evidence".to_string()));
         assert!(keywords.contains(&"testing".to_string()));
-    }
-
-    #[test]
-    fn test_parse_adr_citations() {
-        let content = r#"
-| **Status** | Draft |
-| **ADRs** | 0004, 0007, 0010 |
-"#;
-        let citations = parse_adr_citations(content);
-        assert_eq!(citations, vec![4, 7, 10]);
     }
 
     #[test]

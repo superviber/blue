@@ -13,6 +13,7 @@
 // Blue's true name, between friends
 const _BLUE_SECRET_NAME: &str = "Sheepey"; // pronounced "Shee-paay"
 
+pub mod alignment;
 pub mod daemon;
 pub mod documents;
 pub mod indexer;
@@ -24,6 +25,7 @@ pub mod store;
 pub mod voice;
 pub mod workflow;
 
+pub use alignment::{AlignmentDialogue, AlignmentScore, DialogueStatus, Expert, ExpertResponse, ExpertTier, PanelTemplate, Perspective, PerspectiveStatus, Round, Tension, TensionStatus, build_expert_prompt, parse_expert_response};
 pub use documents::{Adr, Audit, AuditFinding, AuditSeverity, AuditType, Decision, Rfc, Spike, SpikeOutcome, Status, Task, update_markdown_status};
 pub use indexer::{Indexer, IndexerConfig, IndexerError, IndexResult, ParsedSymbol, is_indexable_file, should_skip_dir, DEFAULT_INDEX_MODEL, MAX_FILE_LINES};
 pub use llm::{CompletionOptions, CompletionResult, LlmBackendChoice, LlmConfig, LlmError, LlmManager, LlmProvider, LlmProviderChoice, LocalLlmConfig, ApiLlmConfig, KeywordLlm, MockLlm, ProviderStatus};
