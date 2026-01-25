@@ -180,6 +180,7 @@ impl ProjectState {
     }
 
     /// Generate a status hint for the user
+    /// Uses MCP tool syntax per RFC 0011
     pub fn generate_hint(&self) -> String {
         let active = self.active_items();
         let ready = self.ready_items();
@@ -187,20 +188,26 @@ impl ProjectState {
 
         if !stalled.is_empty() {
             return format!(
-                "'{}' might be stalled - it's in-progress but has no worktree. Use blue_worktree_create to fix.",
+                "'{}' is in-progress but has no worktree. Use blue_worktree_create to work in isolation.",
                 stalled[0].title
             );
         }
 
         if !ready.is_empty() {
-            return format!("'{}' is ready to implement. Use blue_worktree_create to begin.", ready[0].title);
+            return format!(
+                "'{}' is ready to implement. Use blue_worktree_create to begin.",
+                ready[0].title
+            );
         }
 
         if !active.is_empty() {
-            return format!("{} item(s) currently in progress", active.len());
+            return format!(
+                "{} item(s) in progress. Use blue_rfc_complete when done.",
+                active.len()
+            );
         }
 
-        "Nothing pressing right now. Good time to plan?".to_string()
+        "Nothing in flight. Use blue_rfc_create to start something new.".to_string()
     }
 
     /// Get project status summary
