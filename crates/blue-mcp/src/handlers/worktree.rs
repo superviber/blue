@@ -7,10 +7,78 @@
 //! - Branch: `feature-description` (number prefix stripped)
 //! - Worktree: `feature-description`
 
+use std::path::Path;
+
 use blue_core::{DocType, ProjectState, Worktree as StoreWorktree};
 use serde_json::{json, Value};
 
 use crate::error::ServerError;
+
+/// Detect the appropriate install command for a project
+///
+/// Checks for package manager lock files and project files in priority order.
+/// Returns None if a setup script exists (takes precedence) or no package manager detected.
+fn detect_install_command(path: &Path) -> Option<String> {
+    // Custom setup script takes precedence
+    if path.join("scripts/setup-worktree.sh").exists() {
+        return None;
+    }
+
+    // Node.js - check lock files for package manager
+    if path.join("package.json").exists() {
+        if path.join("bun.lockb").exists() {
+            return Some("bun install".into());
+        }
+        if path.join("pnpm-lock.yaml").exists() {
+            return Some("pnpm install".into());
+        }
+        if path.join("yarn.lock").exists() {
+            return Some("yarn install".into());
+        }
+        return Some("npm install".into());
+    }
+
+    // Python
+    if path.join("pyproject.toml").exists() {
+        if path.join("uv.lock").exists() {
+            return Some("uv sync".into());
+        }
+        if path.join("poetry.lock").exists() {
+            return Some("poetry install".into());
+        }
+        return Some("pip install -e .".into());
+    }
+    if path.join("requirements.txt").exists() {
+        return Some("pip install -r requirements.txt".into());
+    }
+
+    // Rust
+    if path.join("Cargo.toml").exists() {
+        return Some("cargo build".into());
+    }
+
+    // Go
+    if path.join("go.mod").exists() {
+        return Some("go mod download".into());
+    }
+
+    // Generic Makefile
+    if path.join("Makefile").exists() {
+        return Some("make".into());
+    }
+
+    None
+}
+
+/// Check for a custom setup script
+fn detect_setup_script(path: &Path) -> Option<String> {
+    let script_path = path.join("scripts/setup-worktree.sh");
+    if script_path.exists() {
+        Some("./scripts/setup-worktree.sh".into())
+    } else {
+        None
+    }
+}
 
 /// Strip RFC number prefix from title
 ///
@@ -92,15 +160,50 @@ pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, Server
                         let _ = state.store.update_document_status(DocType::Rfc, title, "in-progress");
                     }
 
+                    // Detect install command and setup script
+                    let install_command = detect_install_command(&worktree_path);
+                    let setup_script = detect_setup_script(&worktree_path);
+
+                    // Build hint message
+                    let setup_hint = if let Some(ref script) = setup_script {
+                        format!("Run `{}` to set up.", script)
+                    } else if let Some(ref cmd) = install_command {
+                        format!("Run `{}` to install dependencies.", cmd)
+                    } else {
+                        String::new()
+                    };
+
+                    let hint = format!(
+                        "cd {} to start working. {}",
+                        worktree_path.display(),
+                        setup_hint
+                    );
+
                     Ok(json!({
                         "status": "success",
                         "title": title,
                         "branch": branch_name,
                         "path": worktree_path.display().to_string(),
+                        "install_command": install_command,
+                        "setup_script": setup_script,
                         "message": blue_core::voice::success(
                             &format!("Created worktree for '{}'", title),
-                            Some(&format!("cd {} to start working", worktree_path.display()))
-                        )
+                            Some(&hint.trim())
+                        ),
+                        "next_action": {
+                            "tool": if setup_script.is_some() || install_command.is_some() {
+                                "Bash"
+                            } else {
+                                "blue_rfc_validate"
+                            },
+                            "hint": if setup_script.is_some() {
+                                "Run setup script to configure the worktree"
+                            } else if install_command.is_some() {
+                                "Install dependencies before starting work"
+                            } else {
+                                "Check RFC plan progress as you implement"
+                            }
+                        }
                     }))
                 }
                 Err(e) => Ok(json!({
