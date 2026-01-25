@@ -187,13 +187,13 @@ impl ProjectState {
 
         if !stalled.is_empty() {
             return format!(
-                "'{}' might be stalled - it's in-progress but has no worktree",
+                "'{}' might be stalled - it's in-progress but has no worktree. Use blue_worktree_create to fix.",
                 stalled[0].title
             );
         }
 
         if !ready.is_empty() {
-            return format!("'{}' is ready to implement. Want to start?", ready[0].title);
+            return format!("'{}' is ready to implement. Use blue_worktree_create to begin.", ready[0].title);
         }
 
         if !active.is_empty() {
