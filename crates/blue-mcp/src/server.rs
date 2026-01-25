@@ -92,6 +92,8 @@ impl BlueServer {
             "initialize" => self.handle_initialize(&req.params),
             "tools/list" => self.handle_tools_list(),
             "tools/call" => self.handle_tool_call(&req.params),
+            "resources/list" => self.handle_resources_list(),
+            "resources/read" => self.handle_resources_read(&req.params),
             _ => Err(ServerError::MethodNotFound(req.method.clone())),
         };
 
@@ -120,7 +122,10 @@ impl BlueServer {
         Ok(json!({
             "protocolVersion": "2024-11-05",
             "capabilities": {
-                "tools": {}
+                "tools": {},
+                "resources": {
+                    "listChanged": true
+                }
             },
             "serverInfo": {
                 "name": "blue",
@@ -2047,9 +2052,43 @@ impl BlueServer {
                             }
                         }
                     }
+                },
+                // RFC 0017: Context Activation tools
+                {
+                    "name": "blue_context_status",
+                    "description": "Get context injection status: session ID, active injections, staleness, and relevance graph summary.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "cwd": {
+                                "type": "string",
+                                "description": "Current working directory"
+                            }
+                        }
+                    }
                 }
             ]
         }))
+    }
+
+    // ==================== Resources Handlers (RFC 0016) ====================
+
+    /// Handle resources/list request
+    fn handle_resources_list(&mut self) -> Result<Value, ServerError> {
+        let state = self.ensure_state()?;
+        crate::handlers::resources::handle_resources_list(state)
+    }
+
+    /// Handle resources/read request
+    fn handle_resources_read(&mut self, params: &Option<Value>) -> Result<Value, ServerError> {
+        let params = params.as_ref().ok_or(ServerError::InvalidParams)?;
+        let uri = params
+            .get("uri")
+            .and_then(|v| v.as_str())
+            .ok_or(ServerError::InvalidParams)?;
+
+        let state = self.ensure_state()?;
+        crate::handlers::resources::handle_resources_read(state, uri)
     }
 
     /// Handle tools/call request
@@ -2179,6 +2218,8 @@ impl BlueServer {
             "blue_index_impact" => self.handle_index_impact(&call.arguments),
             "blue_index_file" => self.handle_index_file(&call.arguments),
             "blue_index_realm" => self.handle_index_realm(&call.arguments),
+            // RFC 0017: Context Activation tools
+            "blue_context_status" => self.handle_context_status(&call.arguments),
             _ => Err(ServerError::ToolNotFound(call.name)),
         }?;
 
@@ -3299,6 +3340,12 @@ impl BlueServer {
         let args = args.as_ref().unwrap_or(&default_args);
         let state = self.ensure_state()?;
         crate::handlers::index::handle_index_realm(state, args)
+    }
+
+    // RFC 0017: Context Activation handlers
+    fn handle_context_status(&mut self, _args: &Option<Value>) -> Result<Value, ServerError> {
+        let state = self.ensure_state()?;
+        crate::handlers::resources::handle_context_status(state)
     }
 }
 

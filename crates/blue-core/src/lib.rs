@@ -19,10 +19,12 @@ pub mod documents;
 pub mod forge;
 pub mod indexer;
 pub mod llm;
+pub mod manifest;
 pub mod realm;
 pub mod repo;
 pub mod state;
 pub mod store;
+pub mod uri;
 pub mod voice;
 pub mod workflow;
 
@@ -33,6 +35,8 @@ pub use indexer::{Indexer, IndexerConfig, IndexerError, IndexResult, ParsedSymbo
 pub use llm::{CompletionOptions, CompletionResult, LlmBackendChoice, LlmConfig, LlmError, LlmManager, LlmProvider, LlmProviderChoice, LocalLlmConfig, ApiLlmConfig, KeywordLlm, MockLlm, ProviderStatus};
 pub use repo::{detect_blue, BlueHome, RepoError, WorktreeInfo};
 pub use state::{ItemType, ProjectState, StateError, StatusSummary, WorkItem};
-pub use store::{DocType, Document, DocumentStore, FileIndexEntry, IndexSearchResult, IndexStatus, LinkType, Reminder, ReminderStatus, SearchResult, Session, SessionType, StagingLock, StagingLockQueueEntry, StagingLockResult, StoreError, SymbolIndexEntry, Task as StoreTask, TaskProgress, Worktree, INDEX_PROMPT_VERSION};
+pub use store::{ContextInjection, DocType, Document, DocumentStore, EdgeType, FileIndexEntry, IndexSearchResult, IndexStatus, LinkType, RefreshPolicy, RefreshRateLimit, RelevanceEdge, Reminder, ReminderStatus, SearchResult, Session, SessionType, StagingLock, StagingLockQueueEntry, StagingLockResult, StalenessCheck, StalenessReason, StoreError, SymbolIndexEntry, Task as StoreTask, TaskProgress, Worktree, INDEX_PROMPT_VERSION};
 pub use voice::*;
 pub use workflow::{PrdStatus, RfcStatus, SpikeOutcome as WorkflowSpikeOutcome, SpikeStatus, WorkflowError, validate_rfc_transition};
+pub use manifest::{ContextManifest, IdentityConfig, WorkflowConfig, ReferenceConfig, PluginConfig, SourceConfig, RefreshTrigger, SalienceTrigger, ManifestError, ManifestResolution, TierResolution, ResolvedSource};
+pub use uri::{BlueUri, UriError, read_uri_content, estimate_tokens};

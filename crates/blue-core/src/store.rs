@@ -10,7 +10,7 @@ use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBe
 use tracing::{debug, info, warn};
 
 /// Current schema version
-const SCHEMA_VERSION: i32 = 4;
+const SCHEMA_VERSION: i32 = 6;
 
 /// Core database schema
 const SCHEMA: &str = r#"
@@ -178,6 +178,40 @@ const SCHEMA: &str = r#"
 
     CREATE INDEX IF NOT EXISTS idx_symbol_index_file ON symbol_index(file_id);
     CREATE INDEX IF NOT EXISTS idx_symbol_index_name ON symbol_index(name);
+
+    -- Context injection audit log (RFC 0016)
+    CREATE TABLE IF NOT EXISTS context_injections (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id TEXT NOT NULL,
+        timestamp TEXT NOT NULL,
+        tier TEXT NOT NULL,
+        source_uri TEXT NOT NULL,
+        content_hash TEXT NOT NULL,
+        token_count INTEGER
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_context_injections_session ON context_injections(session_id);
+    CREATE INDEX IF NOT EXISTS idx_context_injections_timestamp ON context_injections(timestamp);
+
+    -- Relevance graph edges (RFC 0017)
+    CREATE TABLE IF NOT EXISTS relevance_edges (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        source_uri TEXT NOT NULL,
+        target_uri TEXT NOT NULL,
+        edge_type TEXT NOT NULL,
+        weight REAL DEFAULT 1.0,
+        created_at TEXT NOT NULL,
+        UNIQUE(source_uri, target_uri, edge_type)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_relevance_source ON relevance_edges(source_uri);
+    CREATE INDEX IF NOT EXISTS idx_relevance_target ON relevance_edges(target_uri);
+
+    -- Staleness tracking index for documents (RFC 0017)
+    CREATE INDEX IF NOT EXISTS idx_documents_staleness ON documents(
+        doc_type,
+        updated_at
+    ) WHERE deleted_at IS NULL;
 "#;
 
 /// FTS5 schema for full-text search
@@ -592,6 +626,164 @@ pub struct ExpiredDeploymentInfo {
     pub stacks: Option<String>,
 }
 
+// ==================== Context Injection Types (RFC 0016) ====================
+
+/// A logged context injection event
+#[derive(Debug, Clone)]
+pub struct ContextInjection {
+    pub id: Option<i64>,
+    pub session_id: String,
+    pub timestamp: String,
+    pub tier: String,
+    pub source_uri: String,
+    pub content_hash: String,
+    pub token_count: Option<i32>,
+}
+
+impl ContextInjection {
+    pub fn new(session_id: &str, tier: &str, source_uri: &str, content_hash: &str, token_count: Option<i32>) -> Self {
+        Self {
+            id: None,
+            session_id: session_id.to_string(),
+            timestamp: chrono::Utc::now().to_rfc3339(),
+            tier: tier.to_string(),
+            source_uri: source_uri.to_string(),
+            content_hash: content_hash.to_string(),
+            token_count,
+        }
+    }
+}
+
+// ==================== Dynamic Context Activation Types (RFC 0017) ====================
+
+/// A relevance edge connecting two documents
+#[derive(Debug, Clone)]
+pub struct RelevanceEdge {
+    pub id: Option<i64>,
+    pub source_uri: String,
+    pub target_uri: String,
+    pub edge_type: EdgeType,
+    pub weight: f64,
+    pub created_at: String,
+}
+
+/// Types of relevance edges
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EdgeType {
+    /// Explicitly declared relationship (e.g., "References: ADR 0005")
+    Explicit,
+    /// Keyword-based similarity
+    Keyword,
+    /// Learned from co-access patterns
+    Learned,
+}
+
+impl EdgeType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            EdgeType::Explicit => "explicit",
+            EdgeType::Keyword => "keyword",
+            EdgeType::Learned => "learned",
+        }
+    }
+
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s.to_lowercase().as_str() {
+            "explicit" => Some(EdgeType::Explicit),
+            "keyword" => Some(EdgeType::Keyword),
+            "learned" => Some(EdgeType::Learned),
+            _ => None,
+        }
+    }
+}
+
+impl RelevanceEdge {
+    pub fn new(source_uri: &str, target_uri: &str, edge_type: EdgeType) -> Self {
+        Self {
+            id: None,
+            source_uri: source_uri.to_string(),
+            target_uri: target_uri.to_string(),
+            edge_type,
+            weight: 1.0,
+            created_at: chrono::Utc::now().to_rfc3339(),
+        }
+    }
+
+    pub fn with_weight(mut self, weight: f64) -> Self {
+        self.weight = weight;
+        self
+    }
+}
+
+/// Staleness check result for a document
+#[derive(Debug, Clone)]
+pub struct StalenessCheck {
+    pub uri: String,
+    pub is_stale: bool,
+    pub reason: StalenessReason,
+    pub last_injected: Option<String>,
+    pub current_hash: String,
+    pub injected_hash: Option<String>,
+}
+
+/// Reason why a document is considered stale
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StalenessReason {
+    /// Document was never injected in this session
+    NeverInjected,
+    /// Content hash changed since last injection
+    ContentChanged,
+    /// Document is fresh (not stale)
+    Fresh,
+}
+
+/// Refresh policy for different document types
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RefreshPolicy {
+    /// Refresh only at session start
+    SessionStart,
+    /// Refresh whenever content changes
+    OnChange,
+    /// Refresh only on explicit request
+    OnRequest,
+    /// Never automatically refresh
+    Never,
+}
+
+/// Rate limiter state for refresh operations
+#[derive(Debug, Clone)]
+pub struct RefreshRateLimit {
+    pub session_id: String,
+    pub last_refresh: Option<String>,
+    pub cooldown_secs: u64,
+}
+
+impl RefreshRateLimit {
+    pub const DEFAULT_COOLDOWN_SECS: u64 = 30;
+
+    pub fn new(session_id: &str) -> Self {
+        Self {
+            session_id: session_id.to_string(),
+            last_refresh: None,
+            cooldown_secs: Self::DEFAULT_COOLDOWN_SECS,
+        }
+    }
+
+    pub fn is_allowed(&self) -> bool {
+        match &self.last_refresh {
+            None => true,
+            Some(last) => {
+                if let Ok(last_time) = chrono::DateTime::parse_from_rfc3339(last) {
+                    let elapsed = chrono::Utc::now().signed_duration_since(last_time);
+                    elapsed.num_seconds() >= self.cooldown_secs as i64
+                } else {
+                    true
+                }
+            }
+        }
+    }
+}
+
 // ==================== Semantic Index Types (RFC 0010) ====================
 
 /// Current prompt version for indexing
@@ -870,6 +1062,67 @@ impl DocumentStore {
 
             // Create FTS5 tables for semantic search
             self.conn.execute_batch(FILE_INDEX_FTS5_SCHEMA)?;
+        }
+
+        // Migration from v4 to v5: Add context injection audit table (RFC 0016)
+        if from_version < 5 {
+            debug!("Adding context injection audit table (RFC 0016)");
+
+            self.conn.execute(
+                "CREATE TABLE IF NOT EXISTS context_injections (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id TEXT NOT NULL,
+                    timestamp TEXT NOT NULL,
+                    tier TEXT NOT NULL,
+                    source_uri TEXT NOT NULL,
+                    content_hash TEXT NOT NULL,
+                    token_count INTEGER
+                )",
+                [],
+            )?;
+
+            self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_context_injections_session ON context_injections(session_id)",
+                [],
+            )?;
+            self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_context_injections_timestamp ON context_injections(timestamp)",
+                [],
+            )?;
+        }
+
+        // Migration from v5 to v6: Add relevance graph and staleness tracking (RFC 0017)
+        if from_version < 6 {
+            debug!("Adding relevance graph and staleness tracking (RFC 0017)");
+
+            // Create relevance_edges table
+            self.conn.execute(
+                "CREATE TABLE IF NOT EXISTS relevance_edges (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    source_uri TEXT NOT NULL,
+                    target_uri TEXT NOT NULL,
+                    edge_type TEXT NOT NULL,
+                    weight REAL DEFAULT 1.0,
+                    created_at TEXT NOT NULL,
+                    UNIQUE(source_uri, target_uri, edge_type)
+                )",
+                [],
+            )?;
+
+            self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_relevance_source ON relevance_edges(source_uri)",
+                [],
+            )?;
+            self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_relevance_target ON relevance_edges(target_uri)",
+                [],
+            )?;
+
+            // Add staleness tracking index
+            self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_documents_staleness ON documents(doc_type, updated_at) WHERE deleted_at IS NULL",
+                [],
+            )?;
         }
 
         // Update schema version
@@ -2631,6 +2884,263 @@ impl DocumentStore {
             Some((hash, version)) => Ok(hash != current_hash || version < INDEX_PROMPT_VERSION),
             None => Ok(true), // Not indexed = stale
         }
+    }
+
+    // ==================== Context Injection Methods (RFC 0016) ====================
+
+    /// Log a context injection event
+    pub fn log_injection(
+        &self,
+        session_id: &str,
+        tier: &str,
+        source_uri: &str,
+        content_hash: &str,
+        token_count: Option<i32>,
+    ) -> Result<i64, StoreError> {
+        self.with_retry(|| {
+            let now = chrono::Utc::now().to_rfc3339();
+            self.conn.execute(
+                "INSERT INTO context_injections (session_id, timestamp, tier, source_uri, content_hash, token_count)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![session_id, now, tier, source_uri, content_hash, token_count],
+            )?;
+            Ok(self.conn.last_insert_rowid())
+        })
+    }
+
+    /// Get injection history for a session
+    pub fn get_injection_history(&self, session_id: &str) -> Result<Vec<ContextInjection>, StoreError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, session_id, timestamp, tier, source_uri, content_hash, token_count
+             FROM context_injections
+             WHERE session_id = ?1
+             ORDER BY timestamp ASC",
+        )?;
+
+        let rows = stmt.query_map(params![session_id], |row| {
+            Ok(ContextInjection {
+                id: Some(row.get(0)?),
+                session_id: row.get(1)?,
+                timestamp: row.get(2)?,
+                tier: row.get(3)?,
+                source_uri: row.get(4)?,
+                content_hash: row.get(5)?,
+                token_count: row.get(6)?,
+            })
+        })?;
+
+        let mut results = Vec::new();
+        for row in rows {
+            results.push(row?);
+        }
+        Ok(results)
+    }
+
+    /// Get recent injections across all sessions (for debugging)
+    pub fn get_recent_injections(&self, limit: usize) -> Result<Vec<ContextInjection>, StoreError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, session_id, timestamp, tier, source_uri, content_hash, token_count
+             FROM context_injections
+             ORDER BY timestamp DESC
+             LIMIT ?1",
+        )?;
+
+        let rows = stmt.query_map(params![limit as i64], |row| {
+            Ok(ContextInjection {
+                id: Some(row.get(0)?),
+                session_id: row.get(1)?,
+                timestamp: row.get(2)?,
+                tier: row.get(3)?,
+                source_uri: row.get(4)?,
+                content_hash: row.get(5)?,
+                token_count: row.get(6)?,
+            })
+        })?;
+
+        let mut results = Vec::new();
+        for row in rows {
+            results.push(row?);
+        }
+        Ok(results)
+    }
+
+    /// Get injection stats for a session
+    pub fn get_injection_stats(&self, session_id: &str) -> Result<(usize, i64), StoreError> {
+        let result = self.conn.query_row(
+            "SELECT COUNT(*), COALESCE(SUM(token_count), 0)
+             FROM context_injections
+             WHERE session_id = ?1",
+            params![session_id],
+            |row| Ok((row.get::<_, i64>(0)? as usize, row.get::<_, i64>(1)?)),
+        )?;
+        Ok(result)
+    }
+
+    /// Get the last injection for a URI in a session
+    pub fn get_last_injection(&self, session_id: &str, uri: &str) -> Result<Option<ContextInjection>, StoreError> {
+        self.conn
+            .query_row(
+                "SELECT id, session_id, timestamp, tier, source_uri, content_hash, token_count
+                 FROM context_injections
+                 WHERE session_id = ?1 AND source_uri = ?2
+                 ORDER BY timestamp DESC
+                 LIMIT 1",
+                params![session_id, uri],
+                |row| {
+                    Ok(ContextInjection {
+                        id: Some(row.get(0)?),
+                        session_id: row.get(1)?,
+                        timestamp: row.get(2)?,
+                        tier: row.get(3)?,
+                        source_uri: row.get(4)?,
+                        content_hash: row.get(5)?,
+                        token_count: row.get(6)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(StoreError::Database)
+    }
+
+    /// Get the last refresh time for a session (for rate limiting)
+    pub fn get_last_refresh_time(&self, session_id: &str) -> Result<Option<String>, StoreError> {
+        self.conn
+            .query_row(
+                "SELECT MAX(timestamp) FROM context_injections WHERE session_id = ?1",
+                params![session_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(StoreError::Database)
+            .map(|opt| opt.flatten())
+    }
+
+    /// Get recent injections for a session
+    pub fn get_session_injections(&self, session_id: &str, limit: usize) -> Result<Vec<ContextInjection>, StoreError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, session_id, timestamp, tier, source_uri, content_hash, token_count
+             FROM context_injections
+             WHERE session_id = ?1
+             ORDER BY timestamp DESC
+             LIMIT ?2"
+        ).map_err(StoreError::Database)?;
+
+        let rows = stmt.query_map(params![session_id, limit as i64], |row| {
+            Ok(ContextInjection {
+                id: Some(row.get(0)?),
+                session_id: row.get(1)?,
+                timestamp: row.get(2)?,
+                tier: row.get(3)?,
+                source_uri: row.get(4)?,
+                content_hash: row.get(5)?,
+                token_count: row.get(6)?,
+            })
+        }).map_err(StoreError::Database)?;
+
+        rows.collect::<Result<Vec<_>, _>>().map_err(StoreError::Database)
+    }
+
+    // ==================== Relevance Graph Methods (RFC 0017) ====================
+
+    /// Add a relevance edge
+    pub fn add_relevance_edge(&self, edge: &RelevanceEdge) -> Result<i64, StoreError> {
+        self.with_retry(|| {
+            let now = chrono::Utc::now().to_rfc3339();
+            self.conn.execute(
+                "INSERT OR REPLACE INTO relevance_edges (source_uri, target_uri, edge_type, weight, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    edge.source_uri,
+                    edge.target_uri,
+                    edge.edge_type.as_str(),
+                    edge.weight,
+                    now,
+                ],
+            )?;
+            Ok(self.conn.last_insert_rowid())
+        })
+    }
+
+    /// Get relevance edges from a source URI
+    pub fn get_relevance_edges(&self, source_uri: &str) -> Result<Vec<RelevanceEdge>, StoreError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, source_uri, target_uri, edge_type, weight, created_at
+             FROM relevance_edges
+             WHERE source_uri = ?1
+             ORDER BY weight DESC",
+        )?;
+
+        let rows = stmt.query_map(params![source_uri], |row| {
+            Ok(RelevanceEdge {
+                id: Some(row.get(0)?),
+                source_uri: row.get(1)?,
+                target_uri: row.get(2)?,
+                edge_type: EdgeType::from_str(&row.get::<_, String>(3)?).unwrap_or(EdgeType::Explicit),
+                weight: row.get(4)?,
+                created_at: row.get(5)?,
+            })
+        })?;
+
+        let mut results = Vec::new();
+        for row in rows {
+            results.push(row?);
+        }
+        Ok(results)
+    }
+
+    /// Get all edges pointing to a target URI
+    pub fn get_incoming_edges(&self, target_uri: &str) -> Result<Vec<RelevanceEdge>, StoreError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, source_uri, target_uri, edge_type, weight, created_at
+             FROM relevance_edges
+             WHERE target_uri = ?1
+             ORDER BY weight DESC",
+        )?;
+
+        let rows = stmt.query_map(params![target_uri], |row| {
+            Ok(RelevanceEdge {
+                id: Some(row.get(0)?),
+                source_uri: row.get(1)?,
+                target_uri: row.get(2)?,
+                edge_type: EdgeType::from_str(&row.get::<_, String>(3)?).unwrap_or(EdgeType::Explicit),
+                weight: row.get(4)?,
+                created_at: row.get(5)?,
+            })
+        })?;
+
+        let mut results = Vec::new();
+        for row in rows {
+            results.push(row?);
+        }
+        Ok(results)
+    }
+
+    /// Remove a relevance edge
+    pub fn remove_relevance_edge(&self, source_uri: &str, target_uri: &str, edge_type: EdgeType) -> Result<bool, StoreError> {
+        let rows = self.conn.execute(
+            "DELETE FROM relevance_edges WHERE source_uri = ?1 AND target_uri = ?2 AND edge_type = ?3",
+            params![source_uri, target_uri, edge_type.as_str()],
+        )?;
+        Ok(rows > 0)
+    }
+
+    /// Clear all edges of a specific type
+    pub fn clear_edges_by_type(&self, edge_type: EdgeType) -> Result<usize, StoreError> {
+        let rows = self.conn.execute(
+            "DELETE FROM relevance_edges WHERE edge_type = ?1",
+            params![edge_type.as_str()],
+        )?;
+        Ok(rows)
+    }
+
+    /// Count relevance edges
+    pub fn count_relevance_edges(&self) -> Result<usize, StoreError> {
+        let count: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM relevance_edges",
+            [],
+            |row| row.get(0),
+        )?;
+        Ok(count as usize)
     }
 }
 
