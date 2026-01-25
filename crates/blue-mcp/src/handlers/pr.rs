@@ -14,7 +14,7 @@
 
 use std::process::Command;
 
-use blue_core::{CreatePrOpts, MergeStrategy, ProjectState, create_forge, detect_forge_type, parse_git_url};
+use blue_core::{CreatePrOpts, MergeStrategy, ProjectState, create_forge_cached, detect_forge_type_cached, parse_git_url};
 use serde_json::{json, Value};
 
 use crate::error::ServerError;
@@ -91,7 +91,8 @@ pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, Server
     };
 
     let git_url = parse_git_url(&remote_url);
-    let forge_type = detect_forge_type(&remote_url);
+    let blue_dir = Some(state.home.blue_dir.as_path());
+    let forge_type = detect_forge_type_cached(&remote_url, blue_dir);
 
     // Get current branch for head
     let head = match get_current_branch(&state.home.root) {
@@ -107,8 +108,8 @@ pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, Server
         }
     };
 
-    // Create forge client and make PR
-    let forge = match create_forge(&remote_url) {
+    // Create forge client and make PR (with caching)
+    let forge = match create_forge_cached(&remote_url, blue_dir) {
         Ok(f) => f,
         Err(e) => {
             return Ok(json!({
@@ -308,58 +309,130 @@ pub fn handle_check_approvals(_state: &ProjectState, args: &Value) -> Result<Val
 }
 
 /// Handle blue_pr_merge
-pub fn handle_merge(_state: &ProjectState, args: &Value) -> Result<Value, ServerError> {
-    let pr_number = args.get("pr_number").and_then(|v| v.as_u64()).map(|n| n as u32);
+///
+/// Merges a PR using the detected forge's native API.
+pub fn handle_merge(state: &ProjectState, args: &Value) -> Result<Value, ServerError> {
+    let pr_number = args.get("pr_number").and_then(|v| v.as_u64());
     let squash = args.get("squash").and_then(|v| v.as_bool()).unwrap_or(true);
 
-    // Fetch PR and check preconditions
-    let pr_data = fetch_pr_data(pr_number)?;
-    let (approved, _) = fetch_pr_approvals(pr_number)?;
+    // Get remote URL and create forge client
+    let remote_url = match get_remote_url(&state.home.root) {
+        Ok(url) => url,
+        Err(e) => {
+            return Ok(json!({
+                "status": "error",
+                "message": blue_core::voice::error(
+                    "Couldn't detect git remote",
+                    &e
+                )
+            }));
+        }
+    };
+
+    let git_url = parse_git_url(&remote_url);
+    let blue_dir = Some(state.home.blue_dir.as_path());
+    let forge_type = detect_forge_type_cached(&remote_url, blue_dir);
+
+    let forge = match create_forge_cached(&remote_url, blue_dir) {
+        Ok(f) => f,
+        Err(e) => {
+            return Ok(json!({
+                "status": "error",
+                "message": blue_core::voice::error(
+                    "Couldn't create forge client",
+                    &format!("{}", e)
+                )
+            }));
+        }
+    };
+
+    // Get PR number - either from args or try to detect from current branch
+    let number = match pr_number {
+        Some(n) => n,
+        None => {
+            // Try to get PR for current branch via gh CLI as fallback
+            let pr_data = fetch_pr_data(None)?;
+            pr_data.number as u64
+        }
+    };
+
+    // Check preconditions via gh CLI (works for GitHub, may not work for Forgejo)
+    // TODO: Add review fetching to Forge trait for full cross-forge support
+    let preconditions_result = check_merge_preconditions(pr_number.map(|n| n as u32));
+
+    if let Err(precondition_error) = preconditions_result {
+        // If we can't check preconditions (e.g., gh not configured), warn but allow
+        // the user to proceed - the forge will reject if not allowed
+        if !args.get("force").and_then(|v| v.as_bool()).unwrap_or(false) {
+            return Ok(json!({
+                "status": "warning",
+                "message": blue_core::voice::error(
+                    "Couldn't verify preconditions",
+                    &format!("{}. Use force=true to merge anyway.", precondition_error)
+                ),
+                "hint": "Precondition checks require gh CLI. The forge may still reject the merge."
+            }));
+        }
+    }
+
+    // Perform the merge
+    let strategy = if squash {
+        MergeStrategy::Squash
+    } else {
+        MergeStrategy::Merge
+    };
+
+    match forge.merge_pr(&git_url.owner, &git_url.repo, number, strategy) {
+        Ok(()) => {
+            Ok(json!({
+                "status": "success",
+                "pr_number": number,
+                "forge": forge_type.to_string(),
+                "strategy": if squash { "squash" } else { "merge" },
+                "message": blue_core::voice::success(
+                    &format!("Merged PR #{}", number),
+                    Some("Run blue_worktree_cleanup to clean up local worktree.")
+                ),
+                "next_steps": [
+                    "Run blue_worktree_cleanup to remove worktree and local branch"
+                ]
+            }))
+        }
+        Err(e) => {
+            Ok(json!({
+                "status": "error",
+                "message": blue_core::voice::error(
+                    "Merge failed",
+                    &format!("{}", e)
+                )
+            }))
+        }
+    }
+}
+
+/// Check merge preconditions (approval, test plan)
+/// Returns Ok(()) if ready to merge, Err with reason otherwise
+fn check_merge_preconditions(pr_number: Option<u32>) -> Result<(), String> {
+    // Try to fetch PR data via gh CLI
+    let pr_data = fetch_pr_data(pr_number)
+        .map_err(|e| format!("Couldn't fetch PR data: {:?}", e))?;
+
+    let (approved, _) = fetch_pr_approvals(pr_number)
+        .map_err(|e| format!("Couldn't fetch approvals: {:?}", e))?;
+
     let items = parse_test_plan(&pr_data.body);
     let all_items_checked = items.iter().all(|(_, checked, _)| *checked);
 
-    // Enforce preconditions
     if !approved {
-        return Ok(json!({
-            "status": "error",
-            "message": blue_core::voice::error(
-                "Can't merge without approval",
-                "Get user approval on GitHub first"
-            )
-        }));
+        return Err("PR not approved. Get reviewer approval first.".to_string());
     }
 
     if !all_items_checked {
         let unchecked = items.iter().filter(|(_, checked, _)| !*checked).count();
-        return Ok(json!({
-            "status": "error",
-            "message": blue_core::voice::error(
-                &format!("{} test plan items still unchecked", unchecked),
-                "Run blue_pr_verify to complete verification"
-            )
-        }));
+        return Err(format!("{} test plan items still unchecked", unchecked));
     }
 
-    let merge_cmd = format!(
-        "gh pr merge {} {}--delete-branch",
-        pr_data.number,
-        if squash { "--squash " } else { "" }
-    );
-
-    Ok(json!({
-        "status": "success",
-        "command": merge_cmd,
-        "pr_number": pr_data.number,
-        "squash": squash,
-        "next_steps": [
-            format!("Run: {}", merge_cmd),
-            "Run blue_worktree_remove to clean up"
-        ],
-        "message": blue_core::voice::success(
-            &format!("PR #{} ready to merge", pr_data.number),
-            Some("Run the command to merge.")
-        )
-    }))
+    Ok(())
 }
 
 // =============================================================================

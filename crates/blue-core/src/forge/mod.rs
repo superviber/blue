@@ -187,6 +187,85 @@ pub struct ForgeConfig {
     pub repo: String,
 }
 
+/// Blue config file structure
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct BlueConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub forge: Option<ForgeConfig>,
+}
+
+impl BlueConfig {
+    /// Load config from .blue/config.yaml
+    pub fn load(blue_dir: &std::path::Path) -> Option<Self> {
+        let config_path = blue_dir.join("config.yaml");
+        if !config_path.exists() {
+            return None;
+        }
+
+        let content = std::fs::read_to_string(&config_path).ok()?;
+        serde_yaml::from_str(&content).ok()
+    }
+
+    /// Save config to .blue/config.yaml
+    pub fn save(&self, blue_dir: &std::path::Path) -> Result<(), std::io::Error> {
+        let config_path = blue_dir.join("config.yaml");
+        let content = serde_yaml::to_string(self)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        std::fs::write(&config_path, content)
+    }
+}
+
+/// Detect forge type with caching support
+///
+/// If blue_dir is provided, will check for cached config first and save
+/// detected type for future use.
+pub fn detect_forge_type_cached(remote_url: &str, blue_dir: Option<&std::path::Path>) -> ForgeType {
+    let url = parse_git_url(remote_url);
+
+    // Check cache first
+    if let Some(dir) = blue_dir {
+        if let Some(config) = BlueConfig::load(dir) {
+            if let Some(forge) = config.forge {
+                // Validate cached config matches current remote
+                if forge.host == url.host && forge.owner == url.owner && forge.repo == url.repo {
+                    return forge.forge_type;
+                }
+            }
+        }
+    }
+
+    // Detect and cache
+    let forge_type = detect_forge_type(remote_url);
+
+    // Save to cache if blue_dir provided
+    if let Some(dir) = blue_dir {
+        let forge_config = ForgeConfig {
+            forge_type,
+            host: url.host,
+            owner: url.owner,
+            repo: url.repo,
+        };
+
+        let mut config = BlueConfig::load(dir).unwrap_or_default();
+        config.forge = Some(forge_config);
+        let _ = config.save(dir); // Ignore errors - caching is best-effort
+    }
+
+    forge_type
+}
+
+/// Create a forge instance with caching support
+pub fn create_forge_cached(remote_url: &str, blue_dir: Option<&std::path::Path>) -> Result<Box<dyn Forge>, ForgeError> {
+    let url = parse_git_url(remote_url);
+    let forge_type = detect_forge_type_cached(remote_url, blue_dir);
+    let token = get_token(forge_type)?;
+
+    match forge_type {
+        ForgeType::GitHub => Ok(Box::new(GitHubForge::new(token))),
+        ForgeType::Forgejo => Ok(Box::new(ForgejoForge::new(&url.host, token))),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
