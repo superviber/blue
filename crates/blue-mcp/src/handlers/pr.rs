@@ -1,6 +1,8 @@
 //! Pull Request tool handlers
 //!
 //! Handles PR creation, verification, and merge with workflow enforcement.
+//! Supports both GitHub and Forgejo/Gitea via the forge abstraction (RFC 0013).
+//!
 //! Enforces:
 //! - Base branch must be `develop` (not `main`)
 //! - Test plan checkboxes must be verified before merge
@@ -12,7 +14,7 @@
 
 use std::process::Command;
 
-use blue_core::ProjectState;
+use blue_core::{CreatePrOpts, MergeStrategy, ProjectState, create_forge, detect_forge_type, parse_git_url};
 use serde_json::{json, Value};
 
 use crate::error::ServerError;
@@ -34,7 +36,9 @@ pub enum TaskCategory {
 ///
 /// If `rfc` is provided (e.g., "0007-consistent-branch-naming"), the title
 /// will be formatted as "RFC 0007: Consistent Branch Naming" per RFC 0007.
-pub fn handle_create(_state: &ProjectState, args: &Value) -> Result<Value, ServerError> {
+///
+/// Uses native REST API for the detected forge (GitHub or Forgejo/Gitea).
+pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, ServerError> {
     let rfc = args.get("rfc").and_then(|v| v.as_str());
 
     // If RFC is provided, format title as "RFC NNNN: Title Case Name"
@@ -72,38 +76,89 @@ pub fn handle_create(_state: &ProjectState, args: &Value) -> Result<Value, Serve
         }));
     }
 
-    // Build the gh command
-    let mut cmd_parts = vec![
-        "gh pr create".to_string(),
-        format!("--base {}", base),
-        format!("--title '{}'", title),
-    ];
+    // Get remote URL and detect forge type
+    let remote_url = match get_remote_url(&state.home.root) {
+        Ok(url) => url,
+        Err(e) => {
+            return Ok(json!({
+                "status": "error",
+                "message": blue_core::voice::error(
+                    "Couldn't detect git remote",
+                    &e
+                )
+            }));
+        }
+    };
 
-    if let Some(b) = body {
-        cmd_parts.push(format!("--body '{}'", b.replace('\'', "'\\''")));
+    let git_url = parse_git_url(&remote_url);
+    let forge_type = detect_forge_type(&remote_url);
+
+    // Get current branch for head
+    let head = match get_current_branch(&state.home.root) {
+        Ok(branch) => branch,
+        Err(e) => {
+            return Ok(json!({
+                "status": "error",
+                "message": blue_core::voice::error(
+                    "Couldn't get current branch",
+                    &e
+                )
+            }));
+        }
+    };
+
+    // Create forge client and make PR
+    let forge = match create_forge(&remote_url) {
+        Ok(f) => f,
+        Err(e) => {
+            return Ok(json!({
+                "status": "error",
+                "message": blue_core::voice::error(
+                    "Couldn't create forge client",
+                    &format!("{}", e)
+                )
+            }));
+        }
+    };
+
+    let opts = CreatePrOpts {
+        owner: git_url.owner.clone(),
+        repo: git_url.repo.clone(),
+        head,
+        base: base.to_string(),
+        title: title.clone(),
+        body: body.map(|s| s.to_string()),
+        draft,
+    };
+
+    match forge.create_pr(opts) {
+        Ok(pr) => {
+            Ok(json!({
+                "status": "success",
+                "pr_url": pr.url,
+                "pr_number": pr.number,
+                "forge": forge_type.to_string(),
+                "base_branch": base,
+                "title": title,
+                "message": blue_core::voice::success(
+                    &format!("Created PR #{}", pr.number),
+                    Some(&pr.url)
+                ),
+                "next_steps": [
+                    "Run blue_pr_verify to check test plan items"
+                ]
+            }))
+        }
+        Err(e) => {
+            Ok(json!({
+                "status": "error",
+                "message": blue_core::voice::error(
+                    "Failed to create PR",
+                    &format!("{}", e)
+                )
+            }))
+        }
     }
-
-    if draft {
-        cmd_parts.push("--draft".to_string());
-    }
-
-    let create_command = cmd_parts.join(" ");
-
-    Ok(json!({
-        "status": "success",
-        "command": create_command,
-        "base_branch": base,
-        "title": title,
-        "next_steps": [
-            format!("Run: {}", create_command),
-            "Add yourself as reviewer: gh pr edit --add-reviewer @me",
-            "Run blue_pr_verify to check test plan items"
-        ],
-        "message": blue_core::voice::success(
-            &format!("Ready to create PR targeting '{}'", base),
-            Some("Run the command to create the PR.")
-        )
-    }))
 }
 
 /// Handle blue_pr_verify
@@ -546,4 +601,53 @@ fn to_title_case(s: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+/// Get the remote URL from git config
+///
+/// Tries 'origin' first, then falls back to any other remote.
+fn get_remote_url(repo_path: &std::path::Path) -> Result<String, String> {
+    let repo = git2::Repository::discover(repo_path)
+        .map_err(|e| format!("Not a git repository: {}", e))?;
+
+    // Try origin first
+    if let Ok(remote) = repo.find_remote("origin") {
+        if let Some(url) = remote.url() {
+            return Ok(url.to_string());
+        }
+    }
+
+    // Try forgejo remote (common in Blue repos)
+    if let Ok(remote) = repo.find_remote("forgejo") {
+        if let Some(url) = remote.url() {
+            return Ok(url.to_string());
+        }
+    }
+
+    // Fall back to any remote
+    let remotes = repo.remotes()
+        .map_err(|e| format!("Couldn't list remotes: {}", e))?;
+
+    for name in remotes.iter().flatten() {
+        if let Ok(remote) = repo.find_remote(name) {
+            if let Some(url) = remote.url() {
+                return Ok(url.to_string());
+            }
+        }
+    }
+
+    Err("No remotes configured".to_string())
+}
+
+/// Get the current branch name
+fn get_current_branch(repo_path: &std::path::Path) -> Result<String, String> {
+    let repo = git2::Repository::discover(repo_path)
+        .map_err(|e| format!("Not a git repository: {}", e))?;
+
+    let head = repo.head()
+        .map_err(|e| format!("Couldn't get HEAD: {}", e))?;
+
+    head.shorthand()
+        .map(|s| s.to_string())
+        .ok_or_else(|| "HEAD is not a branch".to_string())
 }
