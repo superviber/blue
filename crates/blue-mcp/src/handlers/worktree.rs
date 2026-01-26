@@ -7,10 +7,78 @@
 //! - Branch: `feature-description` (number prefix stripped)
 //! - Worktree: `feature-description`
 
+use std::path::Path;
+
 use blue_core::{DocType, ProjectState, Worktree as StoreWorktree};
 use serde_json::{json, Value};
 
 use crate::error::ServerError;
+
+/// Detect the appropriate install command for a project
+///
+/// Checks for package manager lock files and project files in priority order.
+/// Returns None if a setup script exists (takes precedence) or no package manager detected.
+fn detect_install_command(path: &Path) -> Option<String> {
+    // Custom setup script takes precedence
+    if path.join("scripts/setup-worktree.sh").exists() {
+        return None;
+    }
+
+    // Node.js - check lock files for package manager
+    if path.join("package.json").exists() {
+        if path.join("bun.lockb").exists() {
+            return Some("bun install".into());
+        }
+        if path.join("pnpm-lock.yaml").exists() {
+            return Some("pnpm install".into());
+        }
+        if path.join("yarn.lock").exists() {
+            return Some("yarn install".into());
+        }
+        return Some("npm install".into());
+    }
+
+    // Python
+    if path.join("pyproject.toml").exists() {
+        if path.join("uv.lock").exists() {
+            return Some("uv sync".into());
+        }
+        if path.join("poetry.lock").exists() {
+            return Some("poetry install".into());
+        }
+        return Some("pip install -e .".into());
+    }
+    if path.join("requirements.txt").exists() {
+        return Some("pip install -r requirements.txt".into());
+    }
+
+    // Rust
+    if path.join("Cargo.toml").exists() {
+        return Some("cargo build".into());
+    }
+
+    // Go
+    if path.join("go.mod").exists() {
+        return Some("go mod download".into());
+    }
+
+    // Generic Makefile
+    if path.join("Makefile").exists() {
+        return Some("make".into());
+    }
+
+    None
+}
+
+/// Check for a custom setup script
+fn detect_setup_script(path: &Path) -> Option<String> {
+    let script_path = path.join("scripts/setup-worktree.sh");
+    if script_path.exists() {
+        Some("./scripts/setup-worktree.sh".into())
+    } else {
+        None
+    }
+}
 
 /// Strip RFC number prefix from title
 ///
@@ -51,17 +119,37 @@ pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, Server
         }));
     }
 
+    // Check RFC has a plan (RFC 0014: plan enforcement)
+    let doc_id = doc.id.ok_or(ServerError::InvalidParams)?;
+    let tasks = state
+        .store
+        .get_tasks(doc_id)
+        .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+
+    if tasks.is_empty() {
+        return Ok(json!({
+            "status": "error",
+            "message": blue_core::voice::error(
+                &format!("RFC '{}' needs a plan before creating worktree", title),
+                "Create a plan first with blue_rfc_plan"
+            ),
+            "next_action": {
+                "tool": "blue_rfc_plan",
+                "args": { "title": title },
+                "hint": "Create implementation tasks before starting work"
+            }
+        }));
+    }
+
     // Check if worktree already exists
-    if let Some(id) = doc.id {
-        if let Ok(Some(_existing)) = state.store.get_worktree(id) {
-            return Ok(json!({
-                "status": "error",
-                "message": blue_core::voice::error(
-                    &format!("Worktree for '{}' already exists", title),
-                    "Use blue_worktree_list to see active worktrees"
-                )
-            }));
-        }
+    if let Ok(Some(_existing)) = state.store.get_worktree(doc_id) {
+        return Ok(json!({
+            "status": "error",
+            "message": blue_core::voice::error(
+                &format!("Worktree for '{}' already exists", title),
+                "Use blue_worktree_list to see active worktrees"
+            )
+        }));
     }
 
     // Create branch name and worktree path (RFC 0007: strip number prefix)
@@ -76,31 +164,64 @@ pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, Server
             match blue_core::repo::create_worktree(&repo, &branch_name, &worktree_path) {
                 Ok(()) => {
                     // Record in store
-                    if let Some(doc_id) = doc.id {
-                        let wt = StoreWorktree {
-                            id: None,
-                            document_id: doc_id,
-                            branch_name: branch_name.clone(),
-                            worktree_path: worktree_path.display().to_string(),
-                            created_at: None,
-                        };
-                        let _ = state.store.add_worktree(&wt);
-                    }
+                    let wt = StoreWorktree {
+                        id: None,
+                        document_id: doc_id,
+                        branch_name: branch_name.clone(),
+                        worktree_path: worktree_path.display().to_string(),
+                        created_at: None,
+                    };
+                    let _ = state.store.add_worktree(&wt);
 
                     // Update RFC status to in-progress if accepted
                     if doc.status == "accepted" {
                         let _ = state.store.update_document_status(DocType::Rfc, title, "in-progress");
                     }
 
+                    // Detect install command and setup script
+                    let install_command = detect_install_command(&worktree_path);
+                    let setup_script = detect_setup_script(&worktree_path);
+
+                    // Build hint message
+                    let setup_hint = if let Some(ref script) = setup_script {
+                        format!("Run `{}` to set up.", script)
+                    } else if let Some(ref cmd) = install_command {
+                        format!("Run `{}` to install dependencies.", cmd)
+                    } else {
+                        String::new()
+                    };
+
+                    let hint = format!(
+                        "cd {} to start working. {}",
+                        worktree_path.display(),
+                        setup_hint
+                    );
+
                     Ok(json!({
                         "status": "success",
                         "title": title,
                         "branch": branch_name,
                         "path": worktree_path.display().to_string(),
+                        "install_command": install_command,
+                        "setup_script": setup_script,
                         "message": blue_core::voice::success(
                             &format!("Created worktree for '{}'", title),
-                            Some(&format!("cd {} to start working", worktree_path.display()))
-                        )
+                            Some(hint.trim())
+                        ),
+                        "next_action": {
+                            "tool": if setup_script.is_some() || install_command.is_some() {
+                                "Bash"
+                            } else {
+                                "blue_rfc_validate"
+                            },
+                            "hint": if setup_script.is_some() {
+                                "Run setup script to configure the worktree"
+                            } else if install_command.is_some() {
+                                "Install dependencies before starting work"
+                            } else {
+                                "Check RFC plan progress as you implement"
+                            }
+                        }
                     }))
                 }
                 Err(e) => Ok(json!({
@@ -375,5 +496,24 @@ mod tests {
         let (stripped, number) = strip_rfc_number_prefix("0007feature");
         assert_eq!(stripped, "0007feature");
         assert_eq!(number, None);
+    }
+
+    #[test]
+    fn test_worktree_requires_plan() {
+        use blue_core::{Document, ProjectState};
+
+        let state = ProjectState::for_test();
+
+        // Create an accepted RFC without a plan
+        let mut doc = Document::new(DocType::Rfc, "test-rfc", "accepted");
+        doc.number = Some(1);
+        state.store.add_document(&doc).unwrap();
+
+        // Try to create worktree - should fail due to missing plan
+        let args = serde_json::json!({ "title": "test-rfc" });
+        let result = handle_create(&state, &args).unwrap();
+
+        assert_eq!(result["status"], "error");
+        assert!(result["message"].as_str().unwrap().contains("needs a plan"));
     }
 }

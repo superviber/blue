@@ -110,7 +110,7 @@ impl<P: LlmProvider> Indexer<P> {
         };
 
         let completion = self.provider.complete(&prompt, &options)
-            .map_err(|e| IndexerError::LlmError(e))?;
+            .map_err(IndexerError::LlmError)?;
 
         // Parse YAML response
         let parsed = parse_index_response(&completion.text);
@@ -433,7 +433,8 @@ symbols: []"#;
 
     #[test]
     fn test_parse_index_response_invalid() {
-        let response = "this is not valid yaml { broken }";
+        // Use actually invalid YAML (unclosed bracket)
+        let response = "key: [unclosed bracket";
         let parsed = parse_index_response(response);
         assert!(parsed.error.is_some());
     }

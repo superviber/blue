@@ -1,11 +1,11 @@
-# ADR 0006: alignment-dialogue-agents
+# ADR 0014: alignment-dialogue-agents
 
 | | |
 |---|---|
 | **Status** | Active |
 | **Date** | 2026-01-19 |
-| **Updated** | 2026-01-20 (rebrand: Alignment → Alignment) |
-| **Supersedes** | Original wisdom-dialogue-agents (same ADR, renamed) |
+| **Updated** | 2026-01-24 (imported from coherence-mcp ADR 0006) |
+| **Source** | coherence-mcp/docs/adrs/0006-alignment-dialogue-agents.md |
 
 ---
 

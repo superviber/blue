@@ -17,7 +17,7 @@ use tracing::info;
 
 /// Run the MCP server
 pub async fn run() -> anyhow::Result<()> {
-    let mut server = BlueServer::new();
+    let server = std::sync::Arc::new(std::sync::Mutex::new(BlueServer::new()));
 
     let stdin = tokio::io::stdin();
     let mut stdout = tokio::io::stdout();
@@ -34,7 +34,15 @@ pub async fn run() -> anyhow::Result<()> {
             break; // EOF
         }
 
-        let response = server.handle_request(line.trim());
+        // Run blocking handlers in spawn_blocking to avoid tokio runtime conflicts
+        let request = line.trim().to_string();
+        let server_clone = server.clone();
+        let response = tokio::task::spawn_blocking(move || {
+            let mut server = server_clone.lock().unwrap();
+            server.handle_request(&request)
+        })
+        .await?;
+
         stdout.write_all(response.as_bytes()).await?;
         stdout.write_all(b"\n").await?;
         stdout.flush().await?;

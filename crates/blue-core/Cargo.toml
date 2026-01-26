@@ -25,6 +25,7 @@ reqwest.workspace = true
 dirs.workspace = true
 semver.workspace = true
 regex.workspace = true
+sha2.workspace = true
 
 [dev-dependencies]
 tower.workspace = true

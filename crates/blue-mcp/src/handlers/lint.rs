@@ -17,6 +17,7 @@ enum ProjectType {
     JavaScript,
     Python,
     Cdk,
+    RfcDocs,
 }
 
 impl ProjectType {
@@ -26,6 +27,7 @@ impl ProjectType {
             ProjectType::JavaScript => "javascript",
             ProjectType::Python => "python",
             ProjectType::Cdk => "cdk",
+            ProjectType::RfcDocs => "rfc-docs",
         }
     }
 }
@@ -67,6 +69,7 @@ pub fn handle_lint(args: &Value, repo_path: &Path) -> Result<Value, ServerError>
             ProjectType::JavaScript => run_js_checks(repo_path, fix, check_type),
             ProjectType::Python => run_python_checks(repo_path, fix, check_type),
             ProjectType::Cdk => run_cdk_checks(repo_path, check_type),
+            ProjectType::RfcDocs => run_rfc_checks(repo_path, fix, check_type),
         };
         all_results.extend(results);
     }
@@ -151,6 +154,10 @@ fn detect_project_types(path: &Path) -> Vec<ProjectType> {
     }
     if path.join("cdk.json").exists() {
         types.push(ProjectType::Cdk);
+    }
+    // RFC 0017: Check for Blue RFC docs
+    if path.join(".blue/docs/rfcs").exists() {
+        types.push(ProjectType::RfcDocs);
     }
 
     types
@@ -244,6 +251,8 @@ fn count_issues(output: &str, project_type: ProjectType, check_name: &str) -> us
                 0
             }
         }
+        // RFC headers are counted directly in run_rfc_checks
+        (ProjectType::RfcDocs, _) => 0,
         _ => 0,
     }
 }
@@ -362,8 +371,8 @@ fn run_python_checks(path: &Path, fix: bool, check_type: &str) -> Vec<LintResult
         }
     }
 
-    if check_type == "all" || check_type == "lint" {
-        if use_ruff {
+    if (check_type == "all" || check_type == "lint")
+        && use_ruff {
             let args: Vec<&str> = if fix {
                 vec!["check", "--fix", "."]
             } else {
@@ -379,7 +388,6 @@ fn run_python_checks(path: &Path, fix: bool, check_type: &str) -> Vec<LintResult
                 "ruff check --fix .",
             ));
         }
-    }
 
     results
 }
@@ -397,6 +405,92 @@ fn run_cdk_checks(path: &Path, check_type: &str) -> Vec<LintResult> {
             "cdk synth",
             "# cdk synth is validation only",
         ));
+    }
+
+    results
+}
+
+/// RFC 0017: Run RFC header checks
+fn run_rfc_checks(path: &Path, fix: bool, check_type: &str) -> Vec<LintResult> {
+    use blue_core::{HeaderFormat, convert_inline_to_table_header, validate_rfc_header};
+    use std::fs;
+
+    let mut results = Vec::new();
+
+    if check_type != "all" && check_type != "headers" {
+        return results;
+    }
+
+    let rfcs_path = path.join(".blue/docs/rfcs");
+    if !rfcs_path.exists() {
+        return results;
+    }
+
+    let mut inline_count = 0;
+    let mut missing_count = 0;
+    let mut fixed_count = 0;
+
+    // Scan RFC files (exclude .plan.md files)
+    if let Ok(entries) = fs::read_dir(&rfcs_path) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if let Some(ext) = path.extension() {
+                if ext != "md" {
+                    continue;
+                }
+            } else {
+                continue;
+            }
+
+            // Skip .plan.md files
+            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                if name.ends_with(".plan.md") {
+                    continue;
+                }
+            }
+
+            if let Ok(content) = fs::read_to_string(&path) {
+                match validate_rfc_header(&content) {
+                    HeaderFormat::Table => {
+                        // Good - canonical format
+                    }
+                    HeaderFormat::Inline => {
+                        if fix {
+                            let converted = convert_inline_to_table_header(&content);
+                            if let Ok(()) = fs::write(&path, converted) {
+                                fixed_count += 1;
+                            }
+                        } else {
+                            inline_count += 1;
+                        }
+                    }
+                    HeaderFormat::Missing => {
+                        missing_count += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    let total_issues = if fix { 0 } else { inline_count + missing_count };
+
+    results.push(LintResult {
+        project_type: ProjectType::RfcDocs,
+        name: "headers",
+        tool: "blue_lint",
+        passed: total_issues == 0,
+        issue_count: total_issues,
+        fix_command: "blue_lint --fix --check headers",
+    });
+
+    // Add details if there were issues or fixes
+    if inline_count > 0 || missing_count > 0 || fixed_count > 0 {
+        tracing::info!(
+            "RFC headers: {} inline (non-canonical), {} missing, {} fixed",
+            inline_count,
+            missing_count,
+            fixed_count
+        );
     }
 
     results

@@ -31,7 +31,7 @@ pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, Server
 
     // Generate filename with date
     let date = chrono::Utc::now().format("%Y-%m-%d").to_string();
-    let filename = format!("spikes/{}-{}.md", date, title);
+    let filename = format!("spikes/{}-{}.md", date, to_kebab_case(title));
 
     // Generate markdown
     let markdown = spike.to_markdown();
@@ -142,4 +142,16 @@ pub fn handle_complete(state: &ProjectState, args: &Value) -> Result<Value, Serv
             Some(hint)
         )
     }))
+}
+
+/// Convert a string to kebab-case for filenames
+fn to_kebab_case(s: &str) -> String {
+    s.to_lowercase()
+        .chars()
+        .map(|c| if c.is_alphanumeric() { c } else { '-' })
+        .collect::<String>()
+        .split('-')
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("-")
 }

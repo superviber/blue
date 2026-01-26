@@ -35,7 +35,7 @@ pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, Server
     // Get next PRD number
     let prd_number = state
         .store
-        .next_number(DocType::Prd)
+        .next_number_with_fs(DocType::Prd, &state.home.docs_path)
         .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
 
     // Generate file path

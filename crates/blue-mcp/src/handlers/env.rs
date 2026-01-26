@@ -26,7 +26,7 @@ pub fn handle_detect(args: &Value, repo_path: &Path) -> Result<Value, ServerErro
     let path = args
         .get("cwd")
         .and_then(|v| v.as_str())
-        .map(|s| std::path::PathBuf::from(s))
+        .map(std::path::PathBuf::from)
         .unwrap_or_else(|| repo_path.to_path_buf());
 
     let (dependencies, env_files, iac_detected, docker_detected, mock_config) =
@@ -63,13 +63,13 @@ pub fn handle_mock(args: &Value, repo_path: &Path) -> Result<Value, ServerError>
     let scan_path = args
         .get("cwd")
         .and_then(|v| v.as_str())
-        .map(|s| std::path::PathBuf::from(s))
+        .map(std::path::PathBuf::from)
         .unwrap_or_else(|| repo_path.to_path_buf());
 
     let worktree_path = args
         .get("worktree_path")
         .and_then(|v| v.as_str())
-        .map(|s| std::path::PathBuf::from(s))
+        .map(std::path::PathBuf::from)
         .unwrap_or_else(|| scan_path.clone());
 
     let agent_id = args

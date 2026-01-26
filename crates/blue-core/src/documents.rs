@@ -565,6 +565,129 @@ pub fn update_markdown_status(
     Ok(changed)
 }
 
+/// RFC header format types (RFC 0017)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HeaderFormat {
+    /// Table format: `| **Status** | Draft |`
+    Table,
+    /// Inline format: `**Status:** Draft`
+    Inline,
+    /// No recognizable header format
+    Missing,
+}
+
+/// Validate RFC header format
+///
+/// Returns the detected header format:
+/// - Table: canonical format `| **Status** | Draft |`
+/// - Inline: non-canonical format `**Status:** Draft`
+/// - Missing: no status header found
+pub fn validate_rfc_header(content: &str) -> HeaderFormat {
+    let table_pattern = regex::Regex::new(r"\| \*\*Status\*\* \| [^|]+ \|").unwrap();
+    let inline_pattern = regex::Regex::new(r"\*\*Status:\*\*\s+\S+").unwrap();
+
+    if table_pattern.is_match(content) {
+        HeaderFormat::Table
+    } else if inline_pattern.is_match(content) {
+        HeaderFormat::Inline
+    } else {
+        HeaderFormat::Missing
+    }
+}
+
+/// Convert inline header format to table format
+///
+/// Converts patterns like:
+/// ```text
+/// **Status:** Draft
+/// **Created:** 2026-01-25
+/// **Author:** Claude
+/// ```
+///
+/// To:
+/// ```text
+/// | | |
+/// |---|---|
+/// | **Status** | Draft |
+/// | **Created** | 2026-01-25 |
+/// | **Author** | Claude |
+/// ```
+pub fn convert_inline_to_table_header(content: &str) -> String {
+    // Match inline metadata patterns: **Key:** Value
+    let inline_re = regex::Regex::new(r"\*\*([^:*]+):\*\*\s*(.+)").unwrap();
+
+    let mut metadata_lines: Vec<(String, String)> = Vec::new();
+    let mut other_lines: Vec<String> = Vec::new();
+    let mut in_header_section = false;
+    let mut header_ended = false;
+
+    for line in content.lines() {
+        // Skip title line
+        if line.starts_with("# ") {
+            other_lines.push(line.to_string());
+            in_header_section = true;
+            continue;
+        }
+
+        // Check for inline metadata
+        if in_header_section && !header_ended {
+            if let Some(caps) = inline_re.captures(line) {
+                let key = caps.get(1).unwrap().as_str().trim();
+                let value = caps.get(2).unwrap().as_str().trim();
+                metadata_lines.push((key.to_string(), value.to_string()));
+                continue;
+            }
+
+            // Empty line in header section is ok
+            if line.trim().is_empty() && !metadata_lines.is_empty() {
+                continue;
+            }
+
+            // If we had metadata and hit something else, header section ended
+            if !metadata_lines.is_empty() {
+                header_ended = true;
+            }
+        }
+
+        other_lines.push(line.to_string());
+    }
+
+    if metadata_lines.is_empty() {
+        return content.to_string();
+    }
+
+    // Reconstruct content with table format
+    let mut result = String::new();
+
+    // Find and add title
+    if let Some(title_pos) = other_lines.iter().position(|l| l.starts_with("# ")) {
+        result.push_str(&other_lines[title_pos]);
+        result.push_str("\n\n");
+
+        // Add table header
+        result.push_str("| | |\n");
+        result.push_str("|---|---|\n");
+
+        // Add metadata rows
+        for (key, value) in &metadata_lines {
+            result.push_str(&format!("| **{}** | {} |\n", key, value));
+        }
+
+        // Add remaining content
+        let remaining = other_lines[title_pos + 1..].join("\n");
+        let trimmed = remaining.trim_start();
+        if !trimmed.is_empty() {
+            result.push('\n');
+            result.push_str(trimmed);
+        }
+    } else {
+        // No title found, return original
+        return content.to_string();
+    }
+
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -631,5 +754,47 @@ mod tests {
 
         let changed = update_markdown_status(&file, "implemented").unwrap();
         assert!(!changed);
+    }
+
+    #[test]
+    fn test_validate_rfc_header_table_format() {
+        let content = "# RFC 0001: Test\n\n| | |\n|---|---|\n| **Status** | Draft |\n| **Date** | 2026-01-24 |\n";
+        assert_eq!(validate_rfc_header(content), HeaderFormat::Table);
+    }
+
+    #[test]
+    fn test_validate_rfc_header_inline_format() {
+        let content = "# RFC 0001: Test\n\n**Status:** Draft\n**Date:** 2026-01-24\n";
+        assert_eq!(validate_rfc_header(content), HeaderFormat::Inline);
+    }
+
+    #[test]
+    fn test_validate_rfc_header_missing() {
+        let content = "# RFC 0001: Test\n\nJust some content without status.\n";
+        assert_eq!(validate_rfc_header(content), HeaderFormat::Missing);
+    }
+
+    #[test]
+    fn test_convert_inline_to_table_header() {
+        let content = "# RFC 0001: Test\n\n**Status:** Draft\n**Created:** 2026-01-25\n**Author:** Claude\n\n## Problem\n\nSomething is wrong.\n";
+
+        let converted = convert_inline_to_table_header(content);
+
+        assert!(converted.contains("| | |"));
+        assert!(converted.contains("|---|---|"));
+        assert!(converted.contains("| **Status** | Draft |"));
+        assert!(converted.contains("| **Created** | 2026-01-25 |"));
+        assert!(converted.contains("| **Author** | Claude |"));
+        assert!(converted.contains("## Problem"));
+        assert!(converted.contains("Something is wrong."));
+        assert!(!converted.contains("**Status:**"));
+    }
+
+    #[test]
+    fn test_convert_inline_to_table_header_no_change() {
+        let content = "# RFC 0001: Test\n\n| | |\n|---|---|\n| **Status** | Draft |\n\n## Problem\n";
+        let converted = convert_inline_to_table_header(content);
+        // Should not change already-table-formatted content
+        assert_eq!(converted, content);
     }
 }

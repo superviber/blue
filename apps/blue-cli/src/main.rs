@@ -56,7 +56,11 @@ enum Commands {
     },
 
     /// Run as MCP server
-    Mcp,
+    Mcp {
+        /// Enable debug logging to /tmp/blue-mcp-debug.log
+        #[arg(long)]
+        debug: bool,
+    },
 
     /// Daemon commands
     Daemon {
@@ -111,6 +115,12 @@ enum Commands {
     Impact {
         /// File path to analyze
         file: String,
+    },
+
+    /// Context injection visibility (RFC 0016)
+    Context {
+        #[command(subcommand)]
+        command: Option<ContextCommands>,
     },
 }
 
@@ -355,6 +365,16 @@ enum PrCommands {
 }
 
 #[derive(Subcommand)]
+enum ContextCommands {
+    /// Show full manifest with injection status
+    Show {
+        /// Show complete audit trail with timestamps and hashes
+        #[arg(long)]
+        verbose: bool,
+    },
+}
+
+#[derive(Subcommand)]
 enum IndexCommands {
     /// Index all files in the realm (bootstrap)
     All {
@@ -399,14 +419,27 @@ enum IndexCommands {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::from_default_env()
-                .add_directive(tracing::Level::INFO.into()),
-        )
-        .init();
-
     let cli = Cli::parse();
+
+    // RFC 0020: MCP debug mode logs to file at DEBUG level
+    let is_mcp_debug = matches!(&cli.command, Some(Commands::Mcp { debug: true }));
+    if is_mcp_debug {
+        let log_file = std::fs::File::create("/tmp/blue-mcp-debug.log")?;
+        tracing_subscriber::fmt()
+            .with_writer(log_file)
+            .with_env_filter(
+                tracing_subscriber::EnvFilter::from_default_env()
+                    .add_directive(tracing::Level::DEBUG.into()),
+            )
+            .init();
+    } else {
+        tracing_subscriber::fmt()
+            .with_env_filter(
+                tracing_subscriber::EnvFilter::from_default_env()
+                    .add_directive(tracing::Level::INFO.into()),
+            )
+            .init();
+    }
 
     match cli.command {
         None | Some(Commands::Status) => {
@@ -420,7 +453,7 @@ async fn main() -> Result<()> {
             println!("Looking at what's ready. One moment.");
             // TODO: Implement next
         }
-        Some(Commands::Mcp) => {
+        Some(Commands::Mcp { .. }) => {
             blue_mcp::run().await?;
         }
         Some(Commands::Daemon { command }) => {
@@ -482,6 +515,9 @@ async fn main() -> Result<()> {
         }
         Some(Commands::Impact { file }) => {
             handle_impact_command(&file).await?;
+        }
+        Some(Commands::Context { command }) => {
+            handle_context_command(command).await?;
         }
     }
 
@@ -1644,7 +1680,7 @@ fn handle_index_command_blocking(command: IndexCommands) -> Result<()> {
             };
 
             let llm = OllamaLlm::new(&llm_config);
-            if let Err(_) = llm.start() {
+            if llm.start().is_err() {
                 // Silently skip if Ollama not available (pre-commit hook shouldn't block)
                 return Ok(());
             }
@@ -2021,4 +2057,173 @@ async fn handle_impact_command(file: &str) -> Result<()> {
     }
 
     Ok(())
+}
+
+// ==================== Context Commands (RFC 0016) ====================
+
+async fn handle_context_command(command: Option<ContextCommands>) -> Result<()> {
+    use blue_core::ContextManifest;
+
+    let cwd = std::env::current_dir()?;
+    let blue_dir = cwd.join(".blue");
+
+    if !blue_dir.exists() {
+        println!("No .blue directory found. Run 'blue init' first.");
+        return Ok(());
+    }
+
+    let manifest = ContextManifest::load_or_default(&cwd)?;
+
+    match command {
+        None => {
+            // Quick summary (default)
+            let resolution = manifest.resolve(&cwd)?;
+            print_context_summary(&resolution);
+        }
+        Some(ContextCommands::Show { verbose }) => {
+            // Full manifest view
+            let resolution = manifest.resolve(&cwd)?;
+
+            if verbose {
+                print_context_verbose(&manifest, &resolution);
+            } else {
+                print_context_show(&manifest, &resolution);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn print_context_summary(resolution: &blue_core::ManifestResolution) {
+    fn format_tokens(tokens: usize) -> String {
+        if tokens >= 1000 {
+            format!("{:.1}k", tokens as f64 / 1000.0)
+        } else {
+            format!("{}", tokens)
+        }
+    }
+
+    println!(
+        "Identity: {} sources ({} tokens) | Workflow: {} sources ({} tokens)",
+        resolution.identity.source_count,
+        format_tokens(resolution.identity.token_count),
+        resolution.workflow.source_count,
+        format_tokens(resolution.workflow.token_count),
+    );
+}
+
+fn print_context_show(manifest: &blue_core::ContextManifest, resolution: &blue_core::ManifestResolution) {
+    println!("Context Manifest (v{})", manifest.version);
+    println!();
+
+    // Identity tier
+    println!("Identity Tier (always injected)");
+    println!("  Budget: {} tokens", manifest.identity.max_tokens);
+    println!("  Actual: {} tokens", resolution.identity.token_count);
+    for source in &resolution.identity.sources {
+        let label = source.label.as_deref().unwrap_or("");
+        let status = if source.file_count > 0 { "✓" } else { "○" };
+        println!("  {} {} ({} files, {} tokens)", status, source.uri, source.file_count, source.tokens);
+        if !label.is_empty() {
+            println!("      {}", label);
+        }
+    }
+    println!();
+
+    // Workflow tier
+    println!("Workflow Tier (activity-triggered)");
+    println!("  Budget: {} tokens", manifest.workflow.max_tokens);
+    println!("  Actual: {} tokens", resolution.workflow.token_count);
+    for source in &resolution.workflow.sources {
+        let label = source.label.as_deref().unwrap_or("");
+        let status = if source.file_count > 0 { "✓" } else { "○" };
+        println!("  {} {} ({} files, {} tokens)", status, source.uri, source.file_count, source.tokens);
+        if !label.is_empty() {
+            println!("      {}", label);
+        }
+    }
+
+    // Triggers
+    if !manifest.workflow.refresh_triggers.is_empty() {
+        println!("  Triggers:");
+        for trigger in &manifest.workflow.refresh_triggers {
+            let name = match trigger {
+                blue_core::RefreshTrigger::OnRfcChange => "on_rfc_change".to_string(),
+                blue_core::RefreshTrigger::EveryNTurns(n) => format!("every_{}_turns", n),
+                blue_core::RefreshTrigger::OnToolCall(tool) => format!("on_tool_call({})", tool),
+            };
+            println!("    - {}", name);
+        }
+    }
+    println!();
+
+    // Reference tier
+    println!("Reference Tier (on-demand via MCP)");
+    println!("  Budget: {} tokens", manifest.reference.max_tokens);
+    println!("  Staleness: {} days", manifest.reference.staleness_days);
+    if let Some(graph) = &manifest.reference.graph {
+        println!("  Graph: {}", graph);
+    }
+    println!();
+
+    // Plugins
+    if !manifest.plugins.is_empty() {
+        println!("Plugins:");
+        for plugin in &manifest.plugins {
+            println!("  - {}", plugin.uri);
+            if !plugin.provides.is_empty() {
+                println!("    Provides: {}", plugin.provides.join(", "));
+            }
+        }
+    }
+}
+
+fn print_context_verbose(manifest: &blue_core::ContextManifest, resolution: &blue_core::ManifestResolution) {
+    // Print the regular show output first
+    print_context_show(manifest, resolution);
+
+    // Add verbose details
+    println!("=== Audit Details ===");
+    println!();
+
+    if let Some(generated) = &manifest.generated_at {
+        println!("Generated: {}", generated);
+    }
+    if let Some(commit) = &manifest.source_commit {
+        println!("Source commit: {}", commit);
+    }
+
+    println!();
+    println!("Content Hashes:");
+    for source in &resolution.identity.sources {
+        println!("  {} -> {}", source.uri, source.content_hash);
+    }
+    for source in &resolution.workflow.sources {
+        println!("  {} -> {}", source.uri, source.content_hash);
+    }
+
+    // Try to show recent injection history from the database
+    let cwd = std::env::current_dir().ok();
+    if let Some(cwd) = cwd {
+        let db_path = cwd.join(".blue").join("blue.db");
+        if db_path.exists() {
+            if let Ok(store) = blue_core::DocumentStore::open(&db_path) {
+                if let Ok(recent) = store.get_recent_injections(10) {
+                    if !recent.is_empty() {
+                        println!();
+                        println!("Recent Injections:");
+                        for inj in recent {
+                            println!("  {} | {} | {} | {} tokens",
+                                inj.timestamp,
+                                inj.tier,
+                                inj.source_uri,
+                                inj.token_count.unwrap_or(0)
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
 }

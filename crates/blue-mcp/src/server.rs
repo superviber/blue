@@ -9,31 +9,84 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use tracing::{debug, info};
 
-use blue_core::{detect_blue, DocType, Document, ProjectState, Rfc};
+use blue_core::{detect_blue, DocType, Document, ProjectState, Rfc, RfcStatus, validate_rfc_transition};
 
 use crate::error::ServerError;
 
 /// Blue MCP Server state
 pub struct BlueServer {
-    /// Current working directory
+    /// Current working directory (set explicitly via tool args)
     cwd: Option<PathBuf>,
+    /// MCP root from initialize handshake (RFC 0020)
+    mcp_root: Option<PathBuf>,
     /// Cached project state
     state: Option<ProjectState>,
+    /// Raw initialize params (for diagnostics)
+    init_params: Option<Value>,
 }
 
 impl BlueServer {
     pub fn new() -> Self {
         Self {
             cwd: None,
+            mcp_root: None,
             state: None,
+            init_params: None,
         }
     }
 
+    /// Walk up directory tree to find Blue project root
+    fn find_blue_root(&self) -> Option<PathBuf> {
+        Self::find_blue_root_static()
+    }
+
+    /// Static version for use in contexts without &self
+    fn find_blue_root_static() -> Option<PathBuf> {
+        let mut dir = std::env::current_dir().ok()?;
+        for _ in 0..20 {
+            if dir.join(".blue").exists() {
+                return Some(dir);
+            }
+            if !dir.pop() {
+                return None;
+            }
+        }
+        None
+    }
+
+    /// Build RFC 0020 "not found" error with attempted paths and guidance
+    fn not_found_error(&self) -> ServerError {
+        let process_cwd = std::env::current_dir()
+            .ok()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "<unknown>".to_string());
+
+        let mut msg = format!("Blue project not found. Process cwd: {process_cwd}");
+
+        if let Some(ref root) = self.mcp_root {
+            msg.push_str(&format!(", mcp_root: {}", root.display()));
+        }
+
+        msg.push_str(". Run 'blue init' or pass 'cwd' parameter.");
+        ServerError::BlueNotDetected(msg)
+    }
+
     /// Try to load project state for the current directory
+    ///
+    /// RFC 0020 fallback chain: cwd → mcp_root → walk tree → fail with guidance
     fn ensure_state(&mut self) -> Result<&ProjectState, ServerError> {
         if self.state.is_none() {
-            let cwd = self.cwd.as_ref().ok_or(ServerError::BlueNotDetected)?;
-            let home = detect_blue(cwd).map_err(|_| ServerError::BlueNotDetected)?;
+            // RFC 0020: explicit cwd → MCP roots → walk tree → fail with guidance
+            let cwd = self.cwd.clone()
+                .or_else(|| self.mcp_root.clone())
+                .or_else(|| self.find_blue_root())
+                .ok_or_else(|| self.not_found_error())?;
+            let home = detect_blue(&cwd).map_err(|_| {
+                ServerError::BlueNotDetected(format!(
+                    "Blue not detected in: {}. Expected .blue/ directory. Run 'blue init' or pass 'cwd' parameter.",
+                    cwd.display()
+                ))
+            })?;
 
             // Try to get project name from the current path
             let project = home.project_name.clone().unwrap_or_else(|| "default".to_string());
@@ -44,13 +97,22 @@ impl BlueServer {
             self.state = Some(state);
         }
 
-        self.state.as_ref().ok_or(ServerError::BlueNotDetected)
+        self.state.as_ref().ok_or_else(|| self.not_found_error())
     }
 
     fn ensure_state_mut(&mut self) -> Result<&mut ProjectState, ServerError> {
         if self.state.is_none() {
-            let cwd = self.cwd.as_ref().ok_or(ServerError::BlueNotDetected)?;
-            let home = detect_blue(cwd).map_err(|_| ServerError::BlueNotDetected)?;
+            // RFC 0020: explicit cwd → MCP roots → walk tree → fail with guidance
+            let cwd = self.cwd.clone()
+                .or_else(|| self.mcp_root.clone())
+                .or_else(|| self.find_blue_root())
+                .ok_or_else(|| self.not_found_error())?;
+            let home = detect_blue(&cwd).map_err(|_| {
+                ServerError::BlueNotDetected(format!(
+                    "Blue not detected in: {}. Expected .blue/ directory. Run 'blue init' or pass 'cwd' parameter.",
+                    cwd.display()
+                ))
+            })?;
 
             // Try to get project name from the current path
             let project = home.project_name.clone().unwrap_or_else(|| "default".to_string());
@@ -61,7 +123,8 @@ impl BlueServer {
             self.state = Some(state);
         }
 
-        self.state.as_mut().ok_or(ServerError::BlueNotDetected)
+        let err = self.not_found_error();
+        self.state.as_mut().ok_or(err)
     }
 
     /// Handle a JSON-RPC request
@@ -92,6 +155,8 @@ impl BlueServer {
             "initialize" => self.handle_initialize(&req.params),
             "tools/list" => self.handle_tools_list(),
             "tools/call" => self.handle_tool_call(&req.params),
+            "resources/list" => self.handle_resources_list(),
+            "resources/read" => self.handle_resources_read(&req.params),
             _ => Err(ServerError::MethodNotFound(req.method.clone())),
         };
 
@@ -115,17 +180,76 @@ impl BlueServer {
     }
 
     /// Handle initialize request
-    fn handle_initialize(&mut self, _params: &Option<Value>) -> Result<Value, ServerError> {
-        info!("MCP initialize");
+    fn handle_initialize(&mut self, params: &Option<Value>) -> Result<Value, ServerError> {
+        info!("MCP initialize with params: {:?}", params);
+        self.init_params = params.clone();
+
+        // RFC 0020: Write diagnostics for debugging
+        let diag = json!({
+            "init_params": params,
+            "process_cwd": std::env::current_dir().ok().map(|p| p.display().to_string()),
+            "mcp_root": self.mcp_root.as_ref().map(|p| p.display().to_string()),
+            "blue_found_via_walk": Self::find_blue_root_static().map(|p| p.display().to_string()),
+        });
+        let _ = std::fs::write("/tmp/blue-mcp-diag.json", serde_json::to_string_pretty(&diag).unwrap_or_default());
+
+        // RFC 0020: Extract roots from client capabilities (MCP spec)
+        if let Some(p) = params {
+            // Check for roots in clientInfo or capabilities
+            if let Some(roots) = p.get("roots").and_then(|r| r.as_array()) {
+                if let Some(first_root) = roots.first() {
+                    if let Some(uri) = first_root.get("uri").and_then(|u| u.as_str()) {
+                        // Convert file:// URI to path
+                        let path = uri.strip_prefix("file://").unwrap_or(uri);
+                        info!("Setting mcp_root from roots: {}", path);
+                        self.mcp_root = Some(PathBuf::from(path));
+                    }
+                }
+            }
+            // Also check workspaceFolders (some clients use this)
+            if self.mcp_root.is_none() {
+                if let Some(folders) = p.get("workspaceFolders").and_then(|f| f.as_array()) {
+                    if let Some(first) = folders.first() {
+                        if let Some(uri) = first.get("uri").and_then(|u| u.as_str()) {
+                            let path = uri.strip_prefix("file://").unwrap_or(uri);
+                            info!("Setting mcp_root from workspaceFolders: {}", path);
+                            self.mcp_root = Some(PathBuf::from(path));
+                        }
+                    }
+                }
+            }
+        }
+
         Ok(json!({
             "protocolVersion": "2024-11-05",
             "capabilities": {
-                "tools": {}
+                "tools": {},
+                "resources": {
+                    "listChanged": true
+                },
+                "roots": {
+                    "listChanged": true
+                }
             },
             "serverInfo": {
                 "name": "blue",
                 "version": env!("CARGO_PKG_VERSION")
-            }
+            },
+            "instructions": concat!(
+                "You are working with Blue, a project management and workflow tool.\n\n",
+                "HOW BLUE SPEAKS — follow these patterns when writing responses:\n",
+                "Do: Keep it to 2 sentences before action. Put questions at the end. ",
+                "Suggest what to do next when something goes wrong. Trust the user's competence.\n",
+                "Don't: Use exclamation marks in errors. Apologize for system behavior. ",
+                "Hedge with \"maybe\" or \"perhaps\" or \"I think\". Over-explain.\n\n",
+                "THE 14 ADRs — beliefs this project is built on (in .blue/docs/adrs/):\n",
+                "0. Never Give Up  1. Purpose  2. Presence  3. Home  ",
+                "4. Evidence  5. Single Source  6. Relationships  7. Integrity  ",
+                "8. Honor  9. Courage  10. No Dead Code  ",
+                "11. Freedom Through Constraint  12. Faith  13. Overflow\n",
+                "Arc: Ground (0) → Welcome (1-3) → Integrity (4-7) → Commitment (8-10) → Flourishing (11-13)\n\n",
+                "All docs live in .blue/docs/ — use blue_status to see what's happening, blue_next for what's next."
+            )
         }))
     }
 
@@ -205,7 +329,7 @@ impl BlueServer {
                 },
                 {
                     "name": "blue_rfc_update_status",
-                    "description": "Update an RFC's status. WORKFLOW: Set to 'accepted' when RFC is approved, then use blue_worktree_create to start implementation. Status flow: draft -> accepted -> in-progress -> implemented.",
+                    "description": "Update an RFC's status (draft -> accepted -> in-progress -> implemented).",
                     "inputSchema": {
                         "type": "object",
                         "properties": {
@@ -481,7 +605,7 @@ impl BlueServer {
                 },
                 {
                     "name": "blue_worktree_create",
-                    "description": "Create an isolated git worktree for RFC implementation. WORKFLOW: Use this after an RFC is accepted (status='accepted'), before starting implementation. Creates a feature branch and isolated working directory. After implementation, use blue_rfc_complete then blue_pr_create.",
+                    "description": "Create an isolated git worktree for RFC implementation. Use after an RFC is accepted, before starting work. Creates a feature branch and isolated directory.",
                     "inputSchema": {
                         "type": "object",
                         "properties": {
@@ -534,7 +658,7 @@ impl BlueServer {
                 },
                 {
                     "name": "blue_pr_create",
-                    "description": "Create a PR with enforced base branch (develop, not main). WORKFLOW: Use after blue_rfc_complete to submit implementation for review. After PR is merged, use blue_worktree_cleanup to finalize. If rfc is provided, title is formatted as 'RFC NNNN: Title Case Name'.",
+                    "description": "Create a PR with enforced base branch (develop, not main). Use after implementation is complete and blue_rfc_complete succeeds. If rfc is provided, title is formatted as 'RFC NNNN: Title Case Name'.",
                     "inputSchema": {
                         "type": "object",
                         "properties": {
@@ -1010,7 +1134,7 @@ impl BlueServer {
                 },
                 {
                     "name": "blue_rfc_complete",
-                    "description": "Mark RFC as implemented based on plan progress. WORKFLOW: Use after completing core implementation work in the worktree. Requires at least 70% task completion. After this, use blue_pr_create to submit for review.",
+                    "description": "Mark RFC as implemented based on plan progress. Use after completing tasks in the worktree. Requires at least 70% completion. Follow with blue_pr_create.",
                     "inputSchema": {
                         "type": "object",
                         "properties": {
@@ -1180,6 +1304,29 @@ impl BlueServer {
                         }
                     }
                 },
+                // RFC 0018: Document sync tool
+                {
+                    "name": "blue_sync",
+                    "description": "Reconcile database with filesystem. Scans .blue/docs/ for documents not in database and vice versa.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "cwd": {
+                                "type": "string",
+                                "description": "Current working directory"
+                            },
+                            "doc_type": {
+                                "type": "string",
+                                "description": "Limit to specific document type",
+                                "enum": ["rfc", "spike", "adr", "decision", "dialogue", "audit", "runbook", "postmortem", "prd"]
+                            },
+                            "dry_run": {
+                                "type": "boolean",
+                                "description": "Report drift without fixing (default: false)"
+                            }
+                        }
+                    }
+                },
                 // Phase 7: Environment isolation tools
                 {
                     "name": "blue_env_detect",
@@ -1336,7 +1483,7 @@ impl BlueServer {
                 },
                 {
                     "name": "blue_dialogue_create",
-                    "description": "Create a new dialogue document with SQLite metadata. Dialogues capture agent conversations and can be linked to RFCs.",
+                    "description": "Create a new dialogue document. Pass alignment: true for multi-agent alignment dialogues (ADR 0014). When alignment is enabled, the response message contains a JUDGE PROTOCOL section — you MUST follow those instructions exactly to orchestrate the dialogue. The protocol tells you how to spawn background agents, score them, and run convergence rounds.",
                     "inputSchema": {
                         "type": "object",
                         "properties": {
@@ -1355,6 +1502,23 @@ impl BlueServer {
                             "content": {
                                 "type": "string",
                                 "description": "Full dialogue content"
+                            },
+                            "alignment": {
+                                "type": "boolean",
+                                "description": "Enable alignment mode — returns a judge protocol with pastry-themed expert agents"
+                            },
+                            "agents": {
+                                "type": "integer",
+                                "description": "Number of cupcake agents (alignment mode only, default 3)"
+                            },
+                            "model": {
+                                "type": "string",
+                                "description": "Model for agents: sonnet, opus, or haiku (alignment mode only, default sonnet)"
+                            },
+                            "sources": {
+                                "type": "array",
+                                "items": { "type": "string" },
+                                "description": "File paths agents must Read for grounding (alignment mode only)"
                             }
                         },
                         "required": ["title"]
@@ -1415,53 +1579,6 @@ impl BlueServer {
                             }
                         },
                         "required": ["title"]
-                    }
-                },
-                // RFC 0012: Alignment Dialogue Orchestration
-                {
-                    "name": "blue_alignment_play",
-                    "description": "Run a multi-expert alignment dialogue to deliberate on a topic until convergence",
-                    "inputSchema": {
-                        "type": "object",
-                        "properties": {
-                            "topic": {
-                                "type": "string",
-                                "description": "The topic to deliberate on"
-                            },
-                            "constraint": {
-                                "type": "string",
-                                "description": "Key constraint or boundary for the discussion"
-                            },
-                            "expert_count": {
-                                "type": "integer",
-                                "default": 12,
-                                "description": "Number of experts in the panel"
-                            },
-                            "convergence": {
-                                "type": "number",
-                                "default": 0.95,
-                                "description": "Target convergence threshold (0.0-1.0)"
-                            },
-                            "max_rounds": {
-                                "type": "integer",
-                                "default": 12,
-                                "description": "Maximum rounds before stopping"
-                            },
-                            "rfc_title": {
-                                "type": "string",
-                                "description": "RFC to link the dialogue to"
-                            },
-                            "template": {
-                                "type": "string",
-                                "enum": ["infrastructure", "product", "ml", "governance", "general"],
-                                "description": "Expert panel template"
-                            },
-                            "model": {
-                                "type": "string",
-                                "description": "Ollama model to use (default: qwen2.5:7b)"
-                            }
-                        },
-                        "required": ["topic"]
                     }
                 },
                 // Phase 8: Playwright verification
@@ -2094,9 +2211,43 @@ impl BlueServer {
                             }
                         }
                     }
+                },
+                // RFC 0017: Context Activation tools
+                {
+                    "name": "blue_context_status",
+                    "description": "Get context injection status: session ID, active injections, staleness, and relevance graph summary.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "cwd": {
+                                "type": "string",
+                                "description": "Current working directory"
+                            }
+                        }
+                    }
                 }
             ]
         }))
+    }
+
+    // ==================== Resources Handlers (RFC 0016) ====================
+
+    /// Handle resources/list request
+    fn handle_resources_list(&mut self) -> Result<Value, ServerError> {
+        let state = self.ensure_state()?;
+        crate::handlers::resources::handle_resources_list(state)
+    }
+
+    /// Handle resources/read request
+    fn handle_resources_read(&mut self, params: &Option<Value>) -> Result<Value, ServerError> {
+        let params = params.as_ref().ok_or(ServerError::InvalidParams)?;
+        let uri = params
+            .get("uri")
+            .and_then(|v| v.as_str())
+            .ok_or(ServerError::InvalidParams)?;
+
+        let state = self.ensure_state()?;
+        crate::handlers::resources::handle_resources_read(state, uri)
     }
 
     /// Handle tools/call request
@@ -2171,6 +2322,8 @@ impl BlueServer {
             "blue_prd_list" => self.handle_prd_list(&call.arguments),
             // Phase 7: Lint handler
             "blue_lint" => self.handle_lint(&call.arguments),
+            // RFC 0018: Document sync handler
+            "blue_sync" => self.handle_sync(&call.arguments),
             // Phase 7: Environment handlers
             "blue_env_detect" => self.handle_env_detect(&call.arguments),
             "blue_env_mock" => self.handle_env_mock(&call.arguments),
@@ -2187,8 +2340,6 @@ impl BlueServer {
             "blue_dialogue_get" => self.handle_dialogue_get(&call.arguments),
             "blue_dialogue_list" => self.handle_dialogue_list(&call.arguments),
             "blue_dialogue_save" => self.handle_dialogue_save(&call.arguments),
-            // RFC 0012: Alignment Dialogue Orchestration
-            "blue_alignment_play" => self.handle_alignment_play(&call.arguments),
             // Phase 8: Playwright handler
             "blue_playwright_verify" => self.handle_playwright_verify(&call.arguments),
             // Phase 9: Post-mortem handlers
@@ -2228,6 +2379,8 @@ impl BlueServer {
             "blue_index_impact" => self.handle_index_impact(&call.arguments),
             "blue_index_file" => self.handle_index_file(&call.arguments),
             "blue_index_realm" => self.handle_index_realm(&call.arguments),
+            // RFC 0017: Context Activation tools
+            "blue_context_status" => self.handle_context_status(&call.arguments),
             _ => Err(ServerError::ToolNotFound(call.name)),
         }?;
 
@@ -2244,13 +2397,44 @@ impl BlueServer {
         match self.ensure_state() {
             Ok(state) => {
                 let summary = state.status_summary();
-                Ok(json!({
+
+                // Check for index drift across all doc types
+                let mut total_drift = 0;
+                let mut drift_details = serde_json::Map::new();
+
+                for doc_type in &[DocType::Rfc, DocType::Spike, DocType::Adr, DocType::Decision] {
+                    if let Ok(result) = state.store.reconcile(&state.home.docs_path, Some(*doc_type), true) {
+                        if result.has_drift() {
+                            total_drift += result.drift_count();
+                            drift_details.insert(
+                                format!("{:?}", doc_type).to_lowercase(),
+                                json!({
+                                    "unindexed": result.unindexed.len(),
+                                    "orphaned": result.orphaned.len(),
+                                    "stale": result.stale.len()
+                                })
+                            );
+                        }
+                    }
+                }
+
+                let mut response = json!({
                     "active": summary.active,
                     "ready": summary.ready,
                     "stalled": summary.stalled,
                     "drafts": summary.drafts,
                     "hint": summary.hint
-                }))
+                });
+
+                if total_drift > 0 {
+                    response["index_drift"] = json!({
+                        "total": total_drift,
+                        "by_type": drift_details,
+                        "hint": "Run blue_sync to reconcile."
+                    });
+                }
+
+                Ok(response)
             }
             Err(_) => {
                 // Fall back to a simple message if not in a Blue project
@@ -2273,92 +2457,41 @@ impl BlueServer {
             Ok(state) => {
                 let summary = state.status_summary();
 
-                // Build recommendations with MCP tool syntax (RFC 0011)
-                let (recommendations, next_action) = if !summary.stalled.is_empty() {
-                    let title = &summary.stalled[0].title;
-                    (
-                        vec![format!(
-                            "'{}' is in-progress but has no worktree. Use blue_worktree_create with title='{}' to work in isolation.",
-                            title, title
-                        )],
-                        Some(json!({
-                            "tool": "blue_worktree_create",
-                            "args": { "title": title },
-                            "hint": "Create worktree to continue work in isolation"
-                        }))
-                    )
+                let recommendations = if !summary.stalled.is_empty() {
+                    vec![format!(
+                        "'{}' might be stalled. Check if work is still in progress.",
+                        summary.stalled[0].title
+                    )]
                 } else if !summary.ready.is_empty() {
-                    let title = &summary.ready[0].title;
-                    (
-                        vec![format!(
-                            "'{}' is accepted and ready. Use blue_worktree_create with title='{}' to start implementation.",
-                            title, title
-                        )],
-                        Some(json!({
-                            "tool": "blue_worktree_create",
-                            "args": { "title": title },
-                            "hint": "Create worktree to start implementation"
-                        }))
-                    )
+                    vec![format!(
+                        "'{}' is ready to implement. Use blue_worktree_create with title='{}' to start.",
+                        summary.ready[0].title, summary.ready[0].title
+                    )]
                 } else if !summary.drafts.is_empty() {
-                    let title = &summary.drafts[0].title;
-                    (
-                        vec![format!(
-                            "'{}' is in draft. Use blue_rfc_update_status with title='{}' and status='accepted' when ready.",
-                            title, title
-                        )],
-                        Some(json!({
-                            "tool": "blue_rfc_update_status",
-                            "args": { "title": title, "status": "accepted" },
-                            "hint": "Accept the RFC to proceed with implementation"
-                        }))
-                    )
+                    vec![format!(
+                        "'{}' is in draft. Review and accept it when ready.",
+                        summary.drafts[0].title
+                    )]
                 } else if !summary.active.is_empty() {
-                    let title = &summary.active[0].title;
-                    (
-                        vec![format!(
-                            "{} item(s) in progress. Continue work on '{}', then use blue_rfc_complete when done.",
-                            summary.active.len(), title
-                        )],
-                        Some(json!({
-                            "tool": "blue_rfc_complete",
-                            "args": { "title": title },
-                            "hint": "Mark as implemented when core work is done"
-                        }))
-                    )
+                    vec![format!(
+                        "{} item(s) in progress. Keep at it.",
+                        summary.active.len()
+                    )]
                 } else {
-                    (
-                        vec!["Nothing in flight. Use blue_rfc_create to start something new.".to_string()],
-                        Some(json!({
-                            "tool": "blue_rfc_create",
-                            "args": {},
-                            "hint": "Create a new RFC to plan your next feature"
-                        }))
-                    )
+                    vec!["Nothing pressing. Good time to plan something new.".to_string()]
                 };
 
-                let mut response = json!({
+                Ok(json!({
                     "recommendations": recommendations,
                     "hint": summary.hint
-                });
-
-                if let Some(action) = next_action {
-                    response["next_action"] = action;
-                }
-
-                Ok(response)
+                }))
             }
             Err(_) => {
                 Ok(json!({
                     "recommendations": [
-                        "Blue not initialized here. Use blue_guide to get started."
+                        "Run 'blue init' to set up this project first."
                     ],
-                    "hint": "Can't find Blue here.",
-                    "next_action": {
-                        "tool": "blue_guide",
-                        "args": { "action": "start" },
-                        "hint": "Start the interactive guide"
-                    }
+                    "hint": "Can't find Blue here."
                 }))
             }
         }
@@ -2378,7 +2511,7 @@ impl BlueServer {
         match self.ensure_state() {
             Ok(state) => {
                 // Get next RFC number
-                let number = state.store.next_number(DocType::Rfc)
+                let number = state.store.next_number_with_fs(DocType::Rfc, &state.home.docs_path)
                     .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
 
                 // Generate markdown
@@ -2456,20 +2589,50 @@ impl BlueServer {
         let doc = state.store.find_document(DocType::Rfc, title)
             .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
 
+        let doc_id = doc.id;
+        let rfc_number = doc.number.unwrap_or(0);
+
+        // RFC 0017: Check if plan file exists and cache is stale - rebuild if needed
+        let plan_path = blue_core::plan_file_path(&state.home.docs_path, title, rfc_number);
+        let mut cache_rebuilt = false;
+
+        if let Some(id) = doc_id {
+            if plan_path.exists() {
+                let cache_mtime = state.store.get_plan_cache_mtime(id)
+                    .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+
+                if blue_core::is_cache_stale(&plan_path, cache_mtime.as_deref()) {
+                    // Rebuild cache from plan file
+                    let plan = blue_core::read_plan_file(&plan_path)
+                        .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+
+                    state.store.rebuild_tasks_from_plan(id, &plan.tasks)
+                        .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+
+                    // Update cache mtime
+                    let mtime = chrono::Utc::now().to_rfc3339();
+                    state.store.update_plan_cache_mtime(id, &mtime)
+                        .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+
+                    cache_rebuilt = true;
+                }
+            }
+        }
+
         // Get tasks if any
-        let tasks = if let Some(id) = doc.id {
+        let tasks = if let Some(id) = doc_id {
             state.store.get_tasks(id).unwrap_or_default()
         } else {
             vec![]
         };
 
-        let progress = if let Some(id) = doc.id {
+        let progress = if let Some(id) = doc_id {
             state.store.get_task_progress(id).ok()
         } else {
             None
         };
 
-        Ok(json!({
+        let mut response = json!({
             "id": doc.id,
             "number": doc.number,
             "title": doc.title,
@@ -2487,7 +2650,35 @@ impl BlueServer {
                 "total": p.total,
                 "percentage": p.percentage
             }))
-        }))
+        });
+
+        // Add plan file info if it exists
+        if plan_path.exists() {
+            response["plan_file"] = json!(plan_path.display().to_string());
+            response["_plan_uri"] = json!(format!("blue://docs/rfcs/{}/plan", rfc_number));
+            response["cache_rebuilt"] = json!(cache_rebuilt);
+
+            // RFC 0019: Include Claude Code task format for auto-creation
+            let incomplete_tasks: Vec<_> = tasks.iter()
+                .filter(|t| !t.completed)
+                .map(|t| json!({
+                    "subject": format!("💙 {}", t.description),
+                    "description": format!("RFC: {}\nTask {} of {}", doc.title, t.task_index + 1, tasks.len()),
+                    "activeForm": format!("Working on: {}", t.description),
+                    "metadata": {
+                        "blue_rfc": doc.title,
+                        "blue_rfc_number": rfc_number,
+                        "blue_task_index": t.task_index
+                    }
+                }))
+                .collect();
+
+            if !incomplete_tasks.is_empty() {
+                response["claude_code_tasks"] = json!(incomplete_tasks);
+            }
+        }
+
+        Ok(response)
     }
 
     fn handle_rfc_update_status(&mut self, args: &Option<Value>) -> Result<Value, ServerError> {
@@ -2498,55 +2689,72 @@ impl BlueServer {
             .and_then(|v| v.as_str())
             .ok_or(ServerError::InvalidParams)?;
 
-        let status = args
+        let status_str = args
             .get("status")
             .and_then(|v| v.as_str())
             .ok_or(ServerError::InvalidParams)?;
 
         let state = self.ensure_state()?;
 
-        // Find the document to get its file path
+        // Find the document to get its file path and current status
         let doc = state.store.find_document(DocType::Rfc, title)
             .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
 
-        // Check for worktree when going to in-progress
+        // Parse statuses and validate transition (RFC 0014)
+        let current_status = RfcStatus::parse(&doc.status)
+            .map_err(|e| ServerError::Workflow(e.to_string()))?;
+        let target_status = RfcStatus::parse(status_str)
+            .map_err(|e| ServerError::Workflow(e.to_string()))?;
+
+        // Validate the transition
+        validate_rfc_transition(current_status, target_status)
+            .map_err(|e| ServerError::Workflow(e.to_string()))?;
+
+        // Check for worktree if going to in-progress (RFC 0011)
         let has_worktree = state.has_worktree(title);
-        let worktree_warning = if status == "in-progress" && !has_worktree {
-            Some("No worktree exists for this RFC. Use blue_worktree_create to work in isolation.")
+        let worktree_warning = if status_str == "in-progress" && !has_worktree {
+            Some("No worktree exists for this RFC. Consider using blue_worktree_create for isolated development.")
         } else {
             None
         };
 
         // Update database
-        state.store.update_document_status(DocType::Rfc, title, status)
+        state.store.update_document_status(DocType::Rfc, title, status_str)
             .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
 
         // Update markdown file (RFC 0008)
         let file_updated = if let Some(ref file_path) = doc.file_path {
             let full_path = state.home.docs_path.join(file_path);
-            blue_core::update_markdown_status(&full_path, status).unwrap_or(false)
+            blue_core::update_markdown_status(&full_path, status_str).unwrap_or(false)
         } else {
             false
         };
 
+        // Conversational hints guide Claude to next action (RFC 0014)
+        let hint = match target_status {
+            RfcStatus::Accepted => Some(
+                "RFC accepted. Ask the user: 'Ready to begin implementation? \
+                 I'll create a worktree and set up the environment.'"
+            ),
+            RfcStatus::InProgress => Some(
+                "Implementation started. Work in the worktree, mark plan tasks \
+                 as you complete them."
+            ),
+            RfcStatus::Implemented => Some(
+                "Implementation complete. Ask the user: 'Ready to create a PR?'"
+            ),
+            RfcStatus::Superseded => Some(
+                "RFC superseded. The newer RFC takes precedence."
+            ),
+            RfcStatus::Draft => None,
+        };
+
         // Build next_action for accepted status (RFC 0011)
-        let next_action = if status == "accepted" {
+        let next_action = if status_str == "accepted" {
             Some(json!({
                 "tool": "blue_worktree_create",
                 "args": { "title": title },
                 "hint": "Create a worktree to start implementation"
-            }))
-        } else if status == "in-progress" && has_worktree {
-            Some(json!({
-                "tool": "blue_rfc_complete",
-                "args": { "title": title },
-                "hint": "Mark as implemented when core work is done"
-            }))
-        } else if status == "implemented" {
-            Some(json!({
-                "tool": "blue_pr_create",
-                "args": {},
-                "hint": "Create a pull request for review"
             }))
         } else {
             None
@@ -2555,11 +2763,11 @@ impl BlueServer {
         let mut response = json!({
             "status": "success",
             "title": title,
-            "new_status": status,
+            "new_status": status_str,
             "file_updated": file_updated,
             "message": blue_core::voice::success(
-                &format!("Updated '{}' to {}", title, status),
-                None
+                &format!("Updated '{}' to {}", title, status_str),
+                hint
             )
         });
 
@@ -2595,15 +2803,59 @@ impl BlueServer {
 
         let doc_id = doc.id.ok_or(ServerError::InvalidParams)?;
 
+        // RFC 0017: Status gating - only allow planning for accepted or in-progress RFCs
+        let status_lower = doc.status.to_lowercase();
+        if status_lower != "accepted" && status_lower != "in-progress" {
+            return Err(ServerError::Workflow(format!(
+                "RFC must be 'accepted' or 'in-progress' to create a plan (current: {})",
+                doc.status
+            )));
+        }
+
+        // RFC 0017: Write .plan.md file as authoritative source
+        let plan_tasks: Vec<blue_core::PlanTask> = tasks
+            .iter()
+            .map(|desc| blue_core::PlanTask {
+                description: desc.clone(),
+                completed: false,
+            })
+            .collect();
+
+        let plan = blue_core::PlanFile {
+            rfc_title: title.to_string(),
+            status: blue_core::PlanStatus::InProgress,
+            updated_at: chrono::Utc::now().to_rfc3339(),
+            tasks: plan_tasks.clone(),
+        };
+
+        let rfc_number = doc.number.unwrap_or(0);
+        let plan_path = blue_core::plan_file_path(&state.home.docs_path, title, rfc_number);
+
+        // Ensure parent directory exists
+        if let Some(parent) = plan_path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| ServerError::StateLoadFailed(format!("Failed to create directory: {}", e)))?;
+        }
+
+        blue_core::write_plan_file(&plan_path, &plan)
+            .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+
+        // Update SQLite cache
         state.store.set_tasks(doc_id, &tasks)
+            .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+
+        // Update cache mtime
+        let mtime = chrono::Utc::now().to_rfc3339();
+        state.store.update_plan_cache_mtime(doc_id, &mtime)
             .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
 
         Ok(json!({
             "status": "success",
             "title": title,
             "task_count": tasks.len(),
+            "plan_file": plan_path.display().to_string(),
             "message": blue_core::voice::success(
-                &format!("Set {} tasks for '{}'", tasks.len(), title),
+                &format!("Set {} tasks for '{}'. Plan file created.", tasks.len(), title),
                 Some("Mark them complete as you go with blue_rfc_task_complete.")
             )
         }))
@@ -2628,23 +2880,58 @@ impl BlueServer {
             .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
 
         let doc_id = doc.id.ok_or(ServerError::InvalidParams)?;
+        let rfc_number = doc.number.unwrap_or(0);
+
+        // RFC 0017: Check if .plan.md exists and use it as authority
+        let plan_path = blue_core::plan_file_path(&state.home.docs_path, title, rfc_number);
 
         // Parse task index or find by substring
         let task_index = if let Ok(idx) = task.parse::<i32>() {
             idx
         } else {
-            // Find task by substring
-            let tasks = state.store.get_tasks(doc_id)
-                .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+            // Find task by substring - check plan file first if it exists
+            if plan_path.exists() {
+                let plan = blue_core::read_plan_file(&plan_path)
+                    .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
 
-            tasks.iter()
-                .find(|t| t.description.to_lowercase().contains(&task.to_lowercase()))
-                .map(|t| t.task_index)
-                .ok_or(ServerError::InvalidParams)?
+                plan.tasks
+                    .iter()
+                    .position(|t| t.description.to_lowercase().contains(&task.to_lowercase()))
+                    .map(|idx| idx as i32)
+                    .ok_or(ServerError::InvalidParams)?
+            } else {
+                // Fall back to SQLite
+                let tasks = state.store.get_tasks(doc_id)
+                    .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+
+                tasks.iter()
+                    .find(|t| t.description.to_lowercase().contains(&task.to_lowercase()))
+                    .map(|t| t.task_index)
+                    .ok_or(ServerError::InvalidParams)?
+            }
         };
 
-        state.store.complete_task(doc_id, task_index)
-            .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+        // RFC 0017: Update .plan.md if it exists
+        let plan_updated = if plan_path.exists() {
+            let updated_plan = blue_core::update_task_in_plan(&plan_path, task_index as usize, true)
+                .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+
+            // Rebuild SQLite cache from plan
+            state.store.rebuild_tasks_from_plan(doc_id, &updated_plan.tasks)
+                .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+
+            // Update cache mtime
+            let mtime = chrono::Utc::now().to_rfc3339();
+            state.store.update_plan_cache_mtime(doc_id, &mtime)
+                .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+
+            true
+        } else {
+            // No plan file - update SQLite directly (legacy behavior)
+            state.store.complete_task(doc_id, task_index)
+                .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+            false
+        };
 
         let progress = state.store.get_task_progress(doc_id)
             .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
@@ -2653,6 +2940,7 @@ impl BlueServer {
             "status": "success",
             "title": title,
             "task_index": task_index,
+            "plan_updated": plan_updated,
             "progress": {
                 "completed": progress.completed,
                 "total": progress.total,
@@ -3067,6 +3355,65 @@ impl BlueServer {
         crate::handlers::lint::handle_lint(args, &state.home.root)
     }
 
+    // RFC 0018: Document sync handler
+    fn handle_sync(&mut self, args: &Option<Value>) -> Result<Value, ServerError> {
+        let empty = json!({});
+        let args = args.as_ref().unwrap_or(&empty);
+
+        let doc_type = args.get("doc_type")
+            .and_then(|v| v.as_str())
+            .and_then(DocType::from_str);
+
+        let dry_run = args.get("dry_run")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
+        let state = self.ensure_state()?;
+
+        let result = state.store.reconcile(&state.home.docs_path, doc_type, dry_run)
+            .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+
+        let message = if dry_run {
+            if result.has_drift() {
+                blue_core::voice::info(
+                    &format!(
+                        "Found {} issues: {} unindexed, {} orphaned, {} stale",
+                        result.drift_count(),
+                        result.unindexed.len(),
+                        result.orphaned.len(),
+                        result.stale.len()
+                    ),
+                    Some("Run without --dry-run to fix.")
+                )
+            } else {
+                blue_core::voice::success("No drift detected. Database and filesystem in sync.", None)
+            }
+        } else if result.added > 0 || result.updated > 0 || result.soft_deleted > 0 {
+            blue_core::voice::success(
+                &format!(
+                    "Synced: {} added, {} updated, {} soft-deleted",
+                    result.added, result.updated, result.soft_deleted
+                ),
+                None
+            )
+        } else {
+            blue_core::voice::success("Already in sync.", None)
+        };
+
+        Ok(json!({
+            "status": "success",
+            "message": message,
+            "dry_run": dry_run,
+            "unindexed": result.unindexed,
+            "orphaned": result.orphaned,
+            "stale": result.stale,
+            "added": result.added,
+            "updated": result.updated,
+            "soft_deleted": result.soft_deleted,
+            "has_drift": result.has_drift()
+        }))
+    }
+
     // Phase 7: Environment handlers
 
     fn handle_env_detect(&mut self, args: &Option<Value>) -> Result<Value, ServerError> {
@@ -3150,13 +3497,6 @@ impl BlueServer {
         let args = args.as_ref().ok_or(ServerError::InvalidParams)?;
         let state = self.ensure_state_mut()?;
         crate::handlers::dialogue::handle_save(state, args)
-    }
-
-    // RFC 0012: Alignment Dialogue Orchestration
-    fn handle_alignment_play(&mut self, args: &Option<Value>) -> Result<Value, ServerError> {
-        let args = args.as_ref().ok_or(ServerError::InvalidParams)?;
-        let state = self.ensure_state_mut()?;
-        crate::handlers::alignment::handle_play(state, args)
     }
 
     fn handle_playwright_verify(&mut self, args: &Option<Value>) -> Result<Value, ServerError> {
@@ -3390,6 +3730,12 @@ impl BlueServer {
         let state = self.ensure_state()?;
         crate::handlers::index::handle_index_realm(state, args)
     }
+
+    // RFC 0017: Context Activation handlers
+    fn handle_context_status(&mut self, _args: &Option<Value>) -> Result<Value, ServerError> {
+        let state = self.ensure_state()?;
+        crate::handlers::resources::handle_context_status(state)
+    }
 }
 
 impl Default for BlueServer {
@@ -3411,4 +3757,288 @@ struct JsonRpcRequest {
 struct ToolCallParams {
     name: String,
     arguments: Option<Value>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // --- BlueServer construction ---
+
+    #[test]
+    fn test_new_server_fields_are_none() {
+        let server = BlueServer::new();
+        assert!(server.cwd.is_none());
+        assert!(server.mcp_root.is_none());
+        assert!(server.state.is_none());
+        assert!(server.init_params.is_none());
+    }
+
+    // --- handle_initialize: roots extraction ---
+
+    #[test]
+    fn test_initialize_extracts_roots_uri() {
+        let mut server = BlueServer::new();
+        let params = Some(json!({
+            "roots": [{"uri": "file:///home/user/project"}]
+        }));
+        let _ = server.handle_initialize(&params);
+        assert_eq!(server.mcp_root, Some(PathBuf::from("/home/user/project")));
+        assert!(server.cwd.is_none(), "cwd must not be set from initialize");
+    }
+
+    #[test]
+    fn test_initialize_extracts_workspace_folders() {
+        let mut server = BlueServer::new();
+        let params = Some(json!({
+            "workspaceFolders": [{"uri": "file:///home/user/workspace"}]
+        }));
+        let _ = server.handle_initialize(&params);
+        assert_eq!(server.mcp_root, Some(PathBuf::from("/home/user/workspace")));
+        assert!(server.cwd.is_none());
+    }
+
+    #[test]
+    fn test_initialize_roots_takes_precedence_over_workspace_folders() {
+        let mut server = BlueServer::new();
+        let params = Some(json!({
+            "roots": [{"uri": "file:///from/roots"}],
+            "workspaceFolders": [{"uri": "file:///from/workspace"}]
+        }));
+        let _ = server.handle_initialize(&params);
+        assert_eq!(server.mcp_root, Some(PathBuf::from("/from/roots")));
+    }
+
+    #[test]
+    fn test_initialize_strips_file_prefix() {
+        let mut server = BlueServer::new();
+        let params = Some(json!({
+            "roots": [{"uri": "file:///some/path"}]
+        }));
+        let _ = server.handle_initialize(&params);
+        assert_eq!(server.mcp_root, Some(PathBuf::from("/some/path")));
+    }
+
+    #[test]
+    fn test_initialize_handles_uri_without_file_prefix() {
+        let mut server = BlueServer::new();
+        let params = Some(json!({
+            "roots": [{"uri": "/direct/path"}]
+        }));
+        let _ = server.handle_initialize(&params);
+        assert_eq!(server.mcp_root, Some(PathBuf::from("/direct/path")));
+    }
+
+    #[test]
+    fn test_initialize_empty_roots_leaves_mcp_root_none() {
+        let mut server = BlueServer::new();
+        let params = Some(json!({ "roots": [] }));
+        let _ = server.handle_initialize(&params);
+        assert!(server.mcp_root.is_none());
+    }
+
+    #[test]
+    fn test_initialize_no_roots_leaves_mcp_root_none() {
+        let mut server = BlueServer::new();
+        let params = Some(json!({ "clientInfo": {"name": "test"} }));
+        let _ = server.handle_initialize(&params);
+        assert!(server.mcp_root.is_none());
+    }
+
+    #[test]
+    fn test_initialize_none_params_leaves_mcp_root_none() {
+        let mut server = BlueServer::new();
+        let _ = server.handle_initialize(&None);
+        assert!(server.mcp_root.is_none());
+    }
+
+    #[test]
+    fn test_initialize_stores_raw_params() {
+        let mut server = BlueServer::new();
+        let params = Some(json!({"test": "value"}));
+        let _ = server.handle_initialize(&params);
+        assert_eq!(server.init_params.unwrap()["test"], "value");
+    }
+
+    // --- Field isolation: cwd vs mcp_root ---
+
+    #[test]
+    fn test_cwd_and_mcp_root_are_independent() {
+        let mut server = BlueServer::new();
+
+        // Set mcp_root via initialize
+        let params = Some(json!({
+            "roots": [{"uri": "file:///mcp/root"}]
+        }));
+        let _ = server.handle_initialize(&params);
+
+        // Set cwd as tool args would
+        server.cwd = Some(PathBuf::from("/explicit/cwd"));
+
+        // Both should exist independently
+        assert_eq!(server.cwd, Some(PathBuf::from("/explicit/cwd")));
+        assert_eq!(server.mcp_root, Some(PathBuf::from("/mcp/root")));
+    }
+
+    // --- ensure_state fallback chain ---
+
+    #[test]
+    fn test_ensure_state_uses_cwd_first() {
+        let mut server = BlueServer::new();
+        server.cwd = Some(PathBuf::from("/nonexistent/cwd"));
+        server.mcp_root = Some(PathBuf::from("/nonexistent/mcp"));
+
+        let result = server.ensure_state();
+        // Should fail, but error references cwd path (first in chain)
+        match result {
+            Err(ServerError::BlueNotDetected(msg)) => {
+                assert!(
+                    msg.contains("/nonexistent/cwd"),
+                    "Expected cwd path in error, got: {msg}"
+                );
+            }
+            other => panic!("Expected BlueNotDetected with cwd path, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_ensure_state_falls_back_to_mcp_root() {
+        let mut server = BlueServer::new();
+        // No cwd set, only mcp_root
+        server.mcp_root = Some(PathBuf::from("/nonexistent/mcp"));
+
+        let result = server.ensure_state();
+        match result {
+            Err(ServerError::BlueNotDetected(msg)) => {
+                assert!(
+                    msg.contains("/nonexistent/mcp"),
+                    "Expected mcp_root path in error, got: {msg}"
+                );
+            }
+            other => panic!("Expected BlueNotDetected with mcp_root path, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_ensure_state_no_paths_falls_through_to_walk() {
+        let mut server = BlueServer::new();
+        // No cwd, no mcp_root — will try find_blue_root (walk-up)
+        // Since tests run from within the blue project, walk-up should find .blue/
+        // and ensure_state should succeed
+        let result = server.ensure_state();
+        // If running from within blue project, this succeeds.
+        // If not, it fails with BlueNotDetected. Either is valid.
+        match result {
+            Ok(state) => {
+                // Walk-up found the project
+                assert!(!state.home.root.as_os_str().is_empty());
+            }
+            Err(ServerError::BlueNotDetected(_)) => {
+                // Not running from within a blue project — walk-up returned None
+            }
+            Err(other) => panic!("Unexpected error variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_not_found_error_includes_process_cwd() {
+        let server = BlueServer::new();
+        let err = server.not_found_error();
+        let msg = err.to_string();
+        assert!(msg.contains("Blue project not found"), "Missing lead: {msg}");
+        assert!(msg.contains("Process cwd:"), "Missing process cwd: {msg}");
+        assert!(msg.contains("blue init"), "Missing fix suggestion: {msg}");
+    }
+
+    #[test]
+    fn test_not_found_error_includes_mcp_root_when_set() {
+        let mut server = BlueServer::new();
+        server.mcp_root = Some(PathBuf::from("/some/mcp/root"));
+        let msg = server.not_found_error().to_string();
+        assert!(msg.contains("/some/mcp/root"), "Missing mcp_root in error: {msg}");
+    }
+
+    #[test]
+    fn test_detect_blue_failure_shows_path_and_guidance() {
+        let mut server = BlueServer::new();
+        server.cwd = Some(PathBuf::from("/nonexistent/no-blue-here"));
+
+        let result = server.ensure_state();
+        match result {
+            Err(ServerError::BlueNotDetected(msg)) => {
+                assert!(msg.contains("/nonexistent/no-blue-here"), "Missing attempted path: {msg}");
+                assert!(msg.contains(".blue/"), "Missing expected dir: {msg}");
+                assert!(msg.contains("blue init"), "Missing fix suggestion: {msg}");
+            }
+            other => panic!("Expected BlueNotDetected, got: {other:?}"),
+        }
+    }
+
+    // --- find_blue_root_static ---
+
+    #[test]
+    fn test_find_blue_root_static_returns_dir_with_blue() {
+        // When running from within the blue project, should find .blue/
+        if let Some(root) = BlueServer::find_blue_root_static() {
+            assert!(
+                root.join(".blue").exists(),
+                "Found root {} but .blue/ doesn't exist there",
+                root.display()
+            );
+        }
+        // If not in a blue project, None is fine — no assertion needed
+    }
+
+    // --- Full request/response integration ---
+
+    #[test]
+    fn test_initialize_request_returns_capabilities() {
+        let mut server = BlueServer::new();
+        let request = json!({
+            "jsonrpc": "2.0",
+            "method": "initialize",
+            "params": {
+                "roots": [{"uri": "file:///test/project"}]
+            },
+            "id": 1
+        });
+
+        let response_str = server.handle_request(&serde_json::to_string(&request).unwrap());
+        let response: Value = serde_json::from_str(&response_str).unwrap();
+
+        assert_eq!(response["result"]["protocolVersion"], "2024-11-05");
+        assert!(response["result"]["capabilities"]["tools"].is_object());
+        assert_eq!(response["result"]["serverInfo"]["name"], "blue");
+        assert_eq!(server.mcp_root, Some(PathBuf::from("/test/project")));
+    }
+
+    #[test]
+    fn test_tool_call_sets_cwd_not_mcp_root() {
+        let mut server = BlueServer::new();
+
+        // Initialize with roots first
+        let init = json!({
+            "jsonrpc": "2.0",
+            "method": "initialize",
+            "params": { "roots": [{"uri": "file:///mcp/root"}] },
+            "id": 1
+        });
+        server.handle_request(&serde_json::to_string(&init).unwrap());
+
+        // Tool call with cwd arg
+        let call = json!({
+            "jsonrpc": "2.0",
+            "method": "tools/call",
+            "params": {
+                "name": "blue_status",
+                "arguments": {"cwd": "/tool/cwd"}
+            },
+            "id": 2
+        });
+        server.handle_request(&serde_json::to_string(&call).unwrap());
+
+        // cwd set from tool arg, mcp_root preserved from initialize
+        assert_eq!(server.cwd, Some(PathBuf::from("/tool/cwd")));
+        assert_eq!(server.mcp_root, Some(PathBuf::from("/mcp/root")));
+    }
 }

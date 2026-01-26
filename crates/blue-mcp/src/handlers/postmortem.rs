@@ -76,7 +76,7 @@ pub fn handle_create(state: &mut ProjectState, args: &Value) -> Result<Value, Se
     // Get next postmortem number
     let pm_number = state
         .store
-        .next_number(DocType::Postmortem)
+        .next_number_with_fs(DocType::Postmortem, &state.home.docs_path)
         .map_err(|e| ServerError::CommandFailed(e.to_string()))?;
 
     // Generate file path with date prefix
@@ -100,6 +100,8 @@ pub fn handle_create(state: &mut ProjectState, args: &Value) -> Result<Value, Se
         created_at: None,
         updated_at: None,
         deleted_at: None,
+        content_hash: Some(blue_core::store::hash_content(&markdown)),
+        indexed_at: None,
     };
     state
         .store
@@ -183,7 +185,7 @@ pub fn handle_action_to_rfc(state: &mut ProjectState, args: &Value) -> Result<Va
     // Get next RFC number
     let rfc_number = state
         .store
-        .next_number(DocType::Rfc)
+        .next_number_with_fs(DocType::Rfc, &state.home.docs_path)
         .map_err(|e| ServerError::CommandFailed(e.to_string()))?;
 
     // Generate file path
@@ -216,6 +218,8 @@ pub fn handle_action_to_rfc(state: &mut ProjectState, args: &Value) -> Result<Va
         created_at: None,
         updated_at: None,
         deleted_at: None,
+        content_hash: Some(blue_core::store::hash_content(&markdown)),
+        indexed_at: None,
     };
     state
         .store
@@ -398,7 +402,7 @@ fn generate_postmortem_markdown(
     md.push_str("| Time | Event |\n");
     md.push_str("|------|-------|\n");
     md.push_str("| HH:MM | [Event] |\n");
-    md.push_str("\n");
+    md.push('\n');
 
     // Root Cause
     md.push_str("## Root Cause\n\n");
@@ -418,7 +422,7 @@ fn generate_postmortem_markdown(
     } else {
         md.push_str("- [Impact 1]\n");
     }
-    md.push_str("\n");
+    md.push('\n');
 
     // What Went Well
     md.push_str("## What Went Well\n\n");
@@ -433,7 +437,7 @@ fn generate_postmortem_markdown(
     md.push_str("| Item | Owner | Due | Status | RFC |\n");
     md.push_str("|------|-------|-----|--------|-----|\n");
     md.push_str("| [Action 1] | [Name] | [Date] | Open | |\n");
-    md.push_str("\n");
+    md.push('\n');
 
     // Lessons Learned
     md.push_str("## Lessons Learned\n\n");

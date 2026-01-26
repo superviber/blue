@@ -7,10 +7,18 @@ use std::thread;
 use std::time::Duration;
 
 use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
+use sha2::{Sha256, Digest};
 use tracing::{debug, info, warn};
 
+/// Compute a SHA-256 hash of content for staleness detection (RFC 0018)
+pub fn hash_content(content: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(content.as_bytes());
+    format!("{:x}", hasher.finalize())
+}
+
 /// Current schema version
-const SCHEMA_VERSION: i32 = 4;
+const SCHEMA_VERSION: i32 = 8;
 
 /// Core database schema
 const SCHEMA: &str = r#"
@@ -28,6 +36,8 @@ const SCHEMA: &str = r#"
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         deleted_at TEXT,
+        content_hash TEXT,
+        indexed_at TEXT,
         UNIQUE(doc_type, title)
     );
 
@@ -178,6 +188,40 @@ const SCHEMA: &str = r#"
 
     CREATE INDEX IF NOT EXISTS idx_symbol_index_file ON symbol_index(file_id);
     CREATE INDEX IF NOT EXISTS idx_symbol_index_name ON symbol_index(name);
+
+    -- Context injection audit log (RFC 0016)
+    CREATE TABLE IF NOT EXISTS context_injections (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id TEXT NOT NULL,
+        timestamp TEXT NOT NULL,
+        tier TEXT NOT NULL,
+        source_uri TEXT NOT NULL,
+        content_hash TEXT NOT NULL,
+        token_count INTEGER
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_context_injections_session ON context_injections(session_id);
+    CREATE INDEX IF NOT EXISTS idx_context_injections_timestamp ON context_injections(timestamp);
+
+    -- Relevance graph edges (RFC 0017)
+    CREATE TABLE IF NOT EXISTS relevance_edges (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        source_uri TEXT NOT NULL,
+        target_uri TEXT NOT NULL,
+        edge_type TEXT NOT NULL,
+        weight REAL DEFAULT 1.0,
+        created_at TEXT NOT NULL,
+        UNIQUE(source_uri, target_uri, edge_type)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_relevance_source ON relevance_edges(source_uri);
+    CREATE INDEX IF NOT EXISTS idx_relevance_target ON relevance_edges(target_uri);
+
+    -- Staleness tracking index for documents (RFC 0017)
+    CREATE INDEX IF NOT EXISTS idx_documents_staleness ON documents(
+        doc_type,
+        updated_at
+    ) WHERE deleted_at IS NULL;
 "#;
 
 /// FTS5 schema for full-text search
@@ -318,6 +362,31 @@ impl DocType {
             DocType::Audit => "audits",
         }
     }
+
+    /// Subdirectory in .blue/docs/ (RFC 0018)
+    pub fn subdir(&self) -> &'static str {
+        match self {
+            DocType::Rfc => "rfcs",
+            DocType::Spike => "spikes",
+            DocType::Adr => "adrs",
+            DocType::Decision => "decisions",
+            DocType::Prd => "prds",
+            DocType::Postmortem => "postmortems",
+            DocType::Runbook => "runbooks",
+            DocType::Dialogue => "dialogues",
+            DocType::Audit => "audits",
+        }
+    }
+}
+
+/// Convert a title to a kebab-case slug for matching (RFC 0022)
+/// "Filesystem Authority" → "filesystem-authority"
+pub fn title_to_slug(title: &str) -> String {
+    title
+        .to_lowercase()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join("-")
 }
 
 /// Link types between documents
@@ -359,6 +428,10 @@ pub struct Document {
     pub created_at: Option<String>,
     pub updated_at: Option<String>,
     pub deleted_at: Option<String>,
+    /// Content hash for staleness detection (RFC 0018)
+    pub content_hash: Option<String>,
+    /// When the document was last indexed from filesystem (RFC 0018)
+    pub indexed_at: Option<String>,
 }
 
 impl Document {
@@ -374,6 +447,8 @@ impl Document {
             created_at: None,
             updated_at: None,
             deleted_at: None,
+            content_hash: None,
+            indexed_at: None,
         }
     }
 
@@ -381,6 +456,144 @@ impl Document {
     pub fn is_deleted(&self) -> bool {
         self.deleted_at.is_some()
     }
+
+    /// Check if document is stale based on content hash (RFC 0018)
+    pub fn is_stale(&self, file_path: &Path) -> bool {
+        use std::fs;
+
+        // If no file exists, document isn't stale (it's orphaned, handled separately)
+        if !file_path.exists() {
+            return false;
+        }
+
+        // If we have no hash, document is stale (needs indexing)
+        let Some(ref stored_hash) = self.content_hash else {
+            return true;
+        };
+
+        // Fast path: check mtime if we have indexed_at
+        if let Some(ref indexed_at) = self.indexed_at {
+            if let Ok(metadata) = fs::metadata(file_path) {
+                if let Ok(modified) = metadata.modified() {
+                    let file_mtime: chrono::DateTime<chrono::Utc> = modified.into();
+                    if let Ok(indexed_time) = chrono::DateTime::parse_from_rfc3339(indexed_at) {
+                        // File hasn't changed since indexing
+                        if file_mtime <= indexed_time {
+                            return false;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Slow path: verify with hash
+        if let Ok(content) = fs::read_to_string(file_path) {
+            let current_hash = hash_content(&content);
+            return current_hash != *stored_hash;
+        }
+
+        // If we can't read the file, assume not stale
+        false
+    }
+}
+
+/// Result of parsing a document from a file (RFC 0018)
+#[derive(Debug, Clone)]
+pub struct ParsedDocument {
+    pub doc_type: DocType,
+    pub title: String,
+    pub number: Option<i32>,
+    pub status: String,
+    pub content_hash: String,
+}
+
+/// Parse document metadata from a markdown file's frontmatter (RFC 0018)
+///
+/// Extracts title, number, status from the header table format:
+/// ```markdown
+/// # RFC 0042: My Feature
+///
+/// | | |
+/// |---|---|
+/// | **Status** | Draft |
+/// ```
+pub fn parse_document_from_file(file_path: &Path) -> Result<ParsedDocument, StoreError> {
+    use std::fs;
+
+    let content = fs::read_to_string(file_path)
+        .map_err(|e| StoreError::IoError(e.to_string()))?;
+
+    // Determine doc type from path
+    let path_str = file_path.to_string_lossy();
+    let doc_type = if path_str.contains("/rfcs/") {
+        DocType::Rfc
+    } else if path_str.contains("/spikes/") {
+        DocType::Spike
+    } else if path_str.contains("/adrs/") {
+        DocType::Adr
+    } else if path_str.contains("/decisions/") {
+        DocType::Decision
+    } else if path_str.contains("/postmortems/") {
+        DocType::Postmortem
+    } else if path_str.contains("/runbooks/") {
+        DocType::Runbook
+    } else if path_str.contains("/dialogues/") {
+        DocType::Dialogue
+    } else if path_str.contains("/audits/") {
+        DocType::Audit
+    } else if path_str.contains("/prds/") {
+        DocType::Prd
+    } else {
+        return Err(StoreError::InvalidOperation(
+            format!("Unknown document type for path: {}", path_str)
+        ));
+    };
+
+    // Extract title from first line: # Type NNNN: Title or # Type: Title
+    let title_re = regex::Regex::new(r"^#\s+(?:\w+)\s*(?:(\d+):?)?\s*:?\s*(.+)$").unwrap();
+    let title_line = content.lines().next()
+        .ok_or_else(|| StoreError::InvalidOperation("Empty file".to_string()))?;
+
+    let (number, title) = if let Some(caps) = title_re.captures(title_line) {
+        let num = caps.get(1).and_then(|m| m.as_str().parse().ok());
+        let title = caps.get(2)
+            .map(|m| m.as_str().trim().to_string())
+            .unwrap_or_else(|| "untitled".to_string());
+        (num, title)
+    } else {
+        // Fallback: use filename as title
+        let stem = file_path.file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("untitled");
+        // Try to extract number from filename like "0042-my-feature.md"
+        let num_re = regex::Regex::new(r"^(\d+)-(.+)$").unwrap();
+        if let Some(caps) = num_re.captures(stem) {
+            let num = caps.get(1).and_then(|m| m.as_str().parse().ok());
+            let title = caps.get(2).map(|m| m.as_str().to_string()).unwrap_or_else(|| stem.to_string());
+            (num, title)
+        } else {
+            (None, stem.to_string())
+        }
+    };
+
+    // Extract status from table format: | **Status** | Draft |
+    let status_re = regex::Regex::new(r"\|\s*\*\*Status\*\*\s*\|\s*([^|]+)\s*\|").unwrap();
+    let status = content.lines()
+        .find_map(|line| {
+            status_re.captures(line)
+                .map(|c| c.get(1).unwrap().as_str().trim().to_lowercase())
+        })
+        .unwrap_or_else(|| "draft".to_string());
+
+    let content_hash = hash_content(&content);
+
+    Ok(ParsedDocument {
+        doc_type,
+        title,
+        number,
+        status,
+        content_hash,
+    })
 }
 
 /// A task in a document's plan
@@ -418,6 +631,35 @@ pub struct SearchResult {
     pub document: Document,
     pub score: f64,
     pub snippet: Option<String>,
+}
+
+/// Result of reconciling database with filesystem (RFC 0018)
+#[derive(Debug, Clone, Default)]
+pub struct ReconcileResult {
+    /// Files found on filesystem but not in database
+    pub unindexed: Vec<String>,
+    /// DB records with no corresponding file
+    pub orphaned: Vec<String>,
+    /// Files that have changed since last index
+    pub stale: Vec<String>,
+    /// Number of documents added (when not dry_run)
+    pub added: usize,
+    /// Number of documents updated (when not dry_run)
+    pub updated: usize,
+    /// Number of documents soft-deleted (when not dry_run)
+    pub soft_deleted: usize,
+}
+
+impl ReconcileResult {
+    /// Check if there is any drift between filesystem and database
+    pub fn has_drift(&self) -> bool {
+        !self.unindexed.is_empty() || !self.orphaned.is_empty() || !self.stale.is_empty()
+    }
+
+    /// Total count of issues found
+    pub fn drift_count(&self) -> usize {
+        self.unindexed.len() + self.orphaned.len() + self.stale.len()
+    }
 }
 
 /// Session types for multi-agent coordination
@@ -592,6 +834,164 @@ pub struct ExpiredDeploymentInfo {
     pub stacks: Option<String>,
 }
 
+// ==================== Context Injection Types (RFC 0016) ====================
+
+/// A logged context injection event
+#[derive(Debug, Clone)]
+pub struct ContextInjection {
+    pub id: Option<i64>,
+    pub session_id: String,
+    pub timestamp: String,
+    pub tier: String,
+    pub source_uri: String,
+    pub content_hash: String,
+    pub token_count: Option<i32>,
+}
+
+impl ContextInjection {
+    pub fn new(session_id: &str, tier: &str, source_uri: &str, content_hash: &str, token_count: Option<i32>) -> Self {
+        Self {
+            id: None,
+            session_id: session_id.to_string(),
+            timestamp: chrono::Utc::now().to_rfc3339(),
+            tier: tier.to_string(),
+            source_uri: source_uri.to_string(),
+            content_hash: content_hash.to_string(),
+            token_count,
+        }
+    }
+}
+
+// ==================== Dynamic Context Activation Types (RFC 0017) ====================
+
+/// A relevance edge connecting two documents
+#[derive(Debug, Clone)]
+pub struct RelevanceEdge {
+    pub id: Option<i64>,
+    pub source_uri: String,
+    pub target_uri: String,
+    pub edge_type: EdgeType,
+    pub weight: f64,
+    pub created_at: String,
+}
+
+/// Types of relevance edges
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EdgeType {
+    /// Explicitly declared relationship (e.g., "References: ADR 0005")
+    Explicit,
+    /// Keyword-based similarity
+    Keyword,
+    /// Learned from co-access patterns
+    Learned,
+}
+
+impl EdgeType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            EdgeType::Explicit => "explicit",
+            EdgeType::Keyword => "keyword",
+            EdgeType::Learned => "learned",
+        }
+    }
+
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s.to_lowercase().as_str() {
+            "explicit" => Some(EdgeType::Explicit),
+            "keyword" => Some(EdgeType::Keyword),
+            "learned" => Some(EdgeType::Learned),
+            _ => None,
+        }
+    }
+}
+
+impl RelevanceEdge {
+    pub fn new(source_uri: &str, target_uri: &str, edge_type: EdgeType) -> Self {
+        Self {
+            id: None,
+            source_uri: source_uri.to_string(),
+            target_uri: target_uri.to_string(),
+            edge_type,
+            weight: 1.0,
+            created_at: chrono::Utc::now().to_rfc3339(),
+        }
+    }
+
+    pub fn with_weight(mut self, weight: f64) -> Self {
+        self.weight = weight;
+        self
+    }
+}
+
+/// Staleness check result for a document
+#[derive(Debug, Clone)]
+pub struct StalenessCheck {
+    pub uri: String,
+    pub is_stale: bool,
+    pub reason: StalenessReason,
+    pub last_injected: Option<String>,
+    pub current_hash: String,
+    pub injected_hash: Option<String>,
+}
+
+/// Reason why a document is considered stale
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StalenessReason {
+    /// Document was never injected in this session
+    NeverInjected,
+    /// Content hash changed since last injection
+    ContentChanged,
+    /// Document is fresh (not stale)
+    Fresh,
+}
+
+/// Refresh policy for different document types
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RefreshPolicy {
+    /// Refresh only at session start
+    SessionStart,
+    /// Refresh whenever content changes
+    OnChange,
+    /// Refresh only on explicit request
+    OnRequest,
+    /// Never automatically refresh
+    Never,
+}
+
+/// Rate limiter state for refresh operations
+#[derive(Debug, Clone)]
+pub struct RefreshRateLimit {
+    pub session_id: String,
+    pub last_refresh: Option<String>,
+    pub cooldown_secs: u64,
+}
+
+impl RefreshRateLimit {
+    pub const DEFAULT_COOLDOWN_SECS: u64 = 30;
+
+    pub fn new(session_id: &str) -> Self {
+        Self {
+            session_id: session_id.to_string(),
+            last_refresh: None,
+            cooldown_secs: Self::DEFAULT_COOLDOWN_SECS,
+        }
+    }
+
+    pub fn is_allowed(&self) -> bool {
+        match &self.last_refresh {
+            None => true,
+            Some(last) => {
+                if let Ok(last_time) = chrono::DateTime::parse_from_rfc3339(last) {
+                    let elapsed = chrono::Utc::now().signed_duration_since(last_time);
+                    elapsed.num_seconds() >= self.cooldown_secs as i64
+                } else {
+                    true
+                }
+            }
+        }
+    }
+}
+
 // ==================== Semantic Index Types (RFC 0010) ====================
 
 /// Current prompt version for indexing
@@ -672,6 +1072,9 @@ pub enum StoreError {
 
     #[error("Can't do that: {0}")]
     InvalidOperation(String),
+
+    #[error("File system error: {0}")]
+    IoError(String),
 }
 
 /// Check if an error is a busy/locked error
@@ -872,6 +1275,125 @@ impl DocumentStore {
             self.conn.execute_batch(FILE_INDEX_FTS5_SCHEMA)?;
         }
 
+        // Migration from v4 to v5: Add context injection audit table (RFC 0016)
+        if from_version < 5 {
+            debug!("Adding context injection audit table (RFC 0016)");
+
+            self.conn.execute(
+                "CREATE TABLE IF NOT EXISTS context_injections (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id TEXT NOT NULL,
+                    timestamp TEXT NOT NULL,
+                    tier TEXT NOT NULL,
+                    source_uri TEXT NOT NULL,
+                    content_hash TEXT NOT NULL,
+                    token_count INTEGER
+                )",
+                [],
+            )?;
+
+            self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_context_injections_session ON context_injections(session_id)",
+                [],
+            )?;
+            self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_context_injections_timestamp ON context_injections(timestamp)",
+                [],
+            )?;
+        }
+
+        // Migration from v5 to v6: Add relevance graph and staleness tracking (RFC 0017)
+        if from_version < 6 {
+            debug!("Adding relevance graph and staleness tracking (RFC 0017)");
+
+            // Create relevance_edges table
+            self.conn.execute(
+                "CREATE TABLE IF NOT EXISTS relevance_edges (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    source_uri TEXT NOT NULL,
+                    target_uri TEXT NOT NULL,
+                    edge_type TEXT NOT NULL,
+                    weight REAL DEFAULT 1.0,
+                    created_at TEXT NOT NULL,
+                    UNIQUE(source_uri, target_uri, edge_type)
+                )",
+                [],
+            )?;
+
+            self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_relevance_source ON relevance_edges(source_uri)",
+                [],
+            )?;
+            self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_relevance_target ON relevance_edges(target_uri)",
+                [],
+            )?;
+
+            // Add staleness tracking index
+            self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_documents_staleness ON documents(doc_type, updated_at) WHERE deleted_at IS NULL",
+                [],
+            )?;
+        }
+
+        // Migration from v6 to v7: Add plan_cache table (RFC 0017 - Plan File Authority)
+        if from_version < 7 {
+            debug!("Adding plan_cache table (RFC 0017)");
+
+            self.conn.execute(
+                "CREATE TABLE IF NOT EXISTS plan_cache (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    document_id INTEGER NOT NULL UNIQUE,
+                    cache_mtime TEXT NOT NULL,
+                    FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE
+                )",
+                [],
+            )?;
+
+            self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_plan_cache_document ON plan_cache(document_id)",
+                [],
+            )?;
+        }
+
+        // Migration from v7 to v8: Add content_hash and indexed_at columns (RFC 0018)
+        if from_version < 8 {
+            debug!("Adding content_hash and indexed_at columns (RFC 0018)");
+
+            // Check if columns exist first
+            let has_content_hash: bool = self.conn.query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('documents') WHERE name = 'content_hash'",
+                [],
+                |row| Ok(row.get::<_, i64>(0)? > 0),
+            )?;
+
+            if !has_content_hash {
+                self.conn.execute(
+                    "ALTER TABLE documents ADD COLUMN content_hash TEXT",
+                    [],
+                )?;
+            }
+
+            let has_indexed_at: bool = self.conn.query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('documents') WHERE name = 'indexed_at'",
+                [],
+                |row| Ok(row.get::<_, i64>(0)? > 0),
+            )?;
+
+            if !has_indexed_at {
+                self.conn.execute(
+                    "ALTER TABLE documents ADD COLUMN indexed_at TEXT",
+                    [],
+                )?;
+            }
+
+            // Add index for staleness checking
+            self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_documents_content_hash ON documents(content_hash)",
+                [],
+            )?;
+        }
+
         // Update schema version
         self.conn.execute(
             "UPDATE schema_version SET version = ?1",
@@ -915,8 +1437,8 @@ impl DocumentStore {
         self.with_retry(|| {
             let now = chrono::Utc::now().to_rfc3339();
             self.conn.execute(
-                "INSERT INTO documents (doc_type, number, title, status, file_path, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                "INSERT INTO documents (doc_type, number, title, status, file_path, created_at, updated_at, content_hash, indexed_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
                 params![
                     doc.doc_type.as_str(),
                     doc.number,
@@ -925,6 +1447,8 @@ impl DocumentStore {
                     doc.file_path,
                     now,
                     now,
+                    doc.content_hash,
+                    doc.indexed_at.as_ref().unwrap_or(&now),
                 ],
             )?;
             Ok(self.conn.last_insert_rowid())
@@ -935,7 +1459,7 @@ impl DocumentStore {
     pub fn get_document(&self, doc_type: DocType, title: &str) -> Result<Document, StoreError> {
         self.conn
             .query_row(
-                "SELECT id, doc_type, number, title, status, file_path, created_at, updated_at, deleted_at
+                "SELECT id, doc_type, number, title, status, file_path, created_at, updated_at, deleted_at, content_hash, indexed_at
                  FROM documents WHERE doc_type = ?1 AND title = ?2 AND deleted_at IS NULL",
                 params![doc_type.as_str(), title],
                 |row| {
@@ -949,6 +1473,8 @@ impl DocumentStore {
                         created_at: row.get(6)?,
                         updated_at: row.get(7)?,
                         deleted_at: row.get(8)?,
+                        content_hash: row.get(9)?,
+                        indexed_at: row.get(10)?,
                     })
                 },
             )
@@ -962,7 +1488,7 @@ impl DocumentStore {
     pub fn get_document_by_id(&self, id: i64) -> Result<Document, StoreError> {
         self.conn
             .query_row(
-                "SELECT id, doc_type, number, title, status, file_path, created_at, updated_at, deleted_at
+                "SELECT id, doc_type, number, title, status, file_path, created_at, updated_at, deleted_at, content_hash, indexed_at
                  FROM documents WHERE id = ?1",
                 params![id],
                 |row| {
@@ -976,6 +1502,8 @@ impl DocumentStore {
                         created_at: row.get(6)?,
                         updated_at: row.get(7)?,
                         deleted_at: row.get(8)?,
+                        content_hash: row.get(9)?,
+                        indexed_at: row.get(10)?,
                     })
                 },
             )
@@ -995,7 +1523,7 @@ impl DocumentStore {
     ) -> Result<Document, StoreError> {
         self.conn
             .query_row(
-                "SELECT id, doc_type, number, title, status, file_path, created_at, updated_at, deleted_at
+                "SELECT id, doc_type, number, title, status, file_path, created_at, updated_at, deleted_at, content_hash, indexed_at
                  FROM documents WHERE doc_type = ?1 AND number = ?2 AND deleted_at IS NULL",
                 params![doc_type.as_str(), number],
                 |row| {
@@ -1009,6 +1537,8 @@ impl DocumentStore {
                         created_at: row.get(6)?,
                         updated_at: row.get(7)?,
                         deleted_at: row.get(8)?,
+                        content_hash: row.get(9)?,
+                        indexed_at: row.get(10)?,
                     })
                 },
             )
@@ -1027,6 +1557,39 @@ impl DocumentStore {
             return Ok(doc);
         }
 
+        // Try slug match (RFC 0022) - "filesystem-authority" matches "Filesystem Authority"
+        let slug_as_title = query.replace('-', " ");
+        if slug_as_title != *query {
+            if let Ok(doc) = self.get_document(doc_type, &slug_as_title) {
+                return Ok(doc);
+            }
+            // Case-insensitive match on deslugified query
+            let pattern = format!("%{}%", slug_as_title.to_lowercase());
+            if let Ok(doc) = self.conn.query_row(
+                "SELECT id, doc_type, number, title, status, file_path, created_at, updated_at, deleted_at, content_hash, indexed_at
+                 FROM documents WHERE doc_type = ?1 AND LOWER(title) LIKE ?2 AND deleted_at IS NULL
+                 ORDER BY LENGTH(title) ASC LIMIT 1",
+                params![doc_type.as_str(), pattern],
+                |row| {
+                    Ok(Document {
+                        id: Some(row.get(0)?),
+                        doc_type: DocType::from_str(row.get::<_, String>(1)?.as_str()).unwrap(),
+                        number: row.get(2)?,
+                        title: row.get(3)?,
+                        status: row.get(4)?,
+                        file_path: row.get(5)?,
+                        created_at: row.get(6)?,
+                        updated_at: row.get(7)?,
+                        deleted_at: row.get(8)?,
+                        content_hash: row.get(9)?,
+                        indexed_at: row.get(10)?,
+                    })
+                },
+            ) {
+                return Ok(doc);
+            }
+        }
+
         // Try number match
         let trimmed = query.trim_start_matches('0');
         if let Ok(num) = if trimmed.is_empty() {
@@ -1042,7 +1605,7 @@ impl DocumentStore {
         // Try substring match
         let pattern = format!("%{}%", query.to_lowercase());
         if let Ok(doc) = self.conn.query_row(
-            "SELECT id, doc_type, number, title, status, file_path, created_at, updated_at, deleted_at
+            "SELECT id, doc_type, number, title, status, file_path, created_at, updated_at, deleted_at, content_hash, indexed_at
              FROM documents WHERE doc_type = ?1 AND LOWER(title) LIKE ?2 AND deleted_at IS NULL
              ORDER BY LENGTH(title) ASC LIMIT 1",
             params![doc_type.as_str(), pattern],
@@ -1057,6 +1620,8 @@ impl DocumentStore {
                     created_at: row.get(6)?,
                     updated_at: row.get(7)?,
                     deleted_at: row.get(8)?,
+                    content_hash: row.get(9)?,
+                    indexed_at: row.get(10)?,
                 })
             },
         ) {
@@ -1068,6 +1633,272 @@ impl DocumentStore {
             doc_type.as_str(),
             query
         )))
+    }
+
+    /// Find a document with filesystem fallback (RFC 0018)
+    ///
+    /// First tries the database, then falls back to scanning the filesystem
+    /// if the document isn't found. Any document found on filesystem is
+    /// automatically registered in the database.
+    pub fn find_document_with_fallback(
+        &self,
+        doc_type: DocType,
+        query: &str,
+        docs_path: &Path,
+    ) -> Result<Document, StoreError> {
+        // Try database first (fast path)
+        if let Ok(doc) = self.find_document(doc_type, query) {
+            return Ok(doc);
+        }
+
+        // Fall back to filesystem scan
+        self.scan_and_register(doc_type, query, docs_path)
+    }
+
+    /// Scan filesystem for a document and register it (RFC 0018)
+    pub fn scan_and_register(
+        &self,
+        doc_type: DocType,
+        query: &str,
+        docs_path: &Path,
+    ) -> Result<Document, StoreError> {
+        use std::fs;
+
+        let subdir = match doc_type {
+            DocType::Rfc => "rfcs",
+            DocType::Spike => "spikes",
+            DocType::Adr => "adrs",
+            DocType::Decision => "decisions",
+            DocType::Dialogue => "dialogues",
+            DocType::Audit => "audits",
+            DocType::Runbook => "runbooks",
+            DocType::Postmortem => "postmortems",
+            DocType::Prd => "prds",
+        };
+
+        let search_dir = docs_path.join(subdir);
+        if !search_dir.exists() {
+            return Err(StoreError::NotFound(format!(
+                "{} matching '{}' (directory {} not found)",
+                doc_type.as_str(),
+                query,
+                search_dir.display()
+            )));
+        }
+
+        let query_lower = query.to_lowercase();
+
+        // Try to parse query as a number
+        let query_num: Option<i32> = query.trim_start_matches('0')
+            .parse()
+            .ok()
+            .or_else(|| if query == "0" { Some(0) } else { None });
+
+        // Scan directory for matching files
+        let entries = fs::read_dir(&search_dir)
+            .map_err(|e| StoreError::IoError(e.to_string()))?;
+
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().map(|e| e == "md").unwrap_or(false) {
+                // Skip .plan.md files
+                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                    if name.ends_with(".plan.md") {
+                        continue;
+                    }
+                }
+
+                // Try to parse the file
+                if let Ok(parsed) = parse_document_from_file(&path) {
+                    if parsed.doc_type != doc_type {
+                        continue;
+                    }
+
+                    // Check if this file matches the query
+                    let matches = parsed.title.to_lowercase().contains(&query_lower)
+                        || query_num.map(|n| parsed.number == Some(n)).unwrap_or(false);
+
+                    if matches {
+                        // Register this document in the database
+                        let relative_path = path.strip_prefix(docs_path)
+                            .map(|p| p.to_string_lossy().to_string())
+                            .unwrap_or_else(|_| path.to_string_lossy().to_string());
+
+                        let doc = Document {
+                            id: None,
+                            doc_type: parsed.doc_type,
+                            number: parsed.number,
+                            title: parsed.title,
+                            status: parsed.status,
+                            file_path: Some(relative_path),
+                            created_at: None,
+                            updated_at: None,
+                            deleted_at: None,
+                            content_hash: Some(parsed.content_hash),
+                            indexed_at: Some(chrono::Utc::now().to_rfc3339()),
+                        };
+
+                        let id = self.add_document(&doc)?;
+                        return self.get_document_by_id(id);
+                    }
+                }
+            }
+        }
+
+        Err(StoreError::NotFound(format!(
+            "{} matching '{}'",
+            doc_type.as_str(),
+            query
+        )))
+    }
+
+    /// Register a document from a file path (RFC 0018)
+    pub fn register_from_file(&self, file_path: &Path, docs_path: &Path) -> Result<Document, StoreError> {
+        let parsed = parse_document_from_file(file_path)?;
+
+        let relative_path = file_path.strip_prefix(docs_path)
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|_| file_path.to_string_lossy().to_string());
+
+        let doc = Document {
+            id: None,
+            doc_type: parsed.doc_type,
+            number: parsed.number,
+            title: parsed.title,
+            status: parsed.status,
+            file_path: Some(relative_path),
+            created_at: None,
+            updated_at: None,
+            deleted_at: None,
+            content_hash: Some(parsed.content_hash),
+            indexed_at: Some(chrono::Utc::now().to_rfc3339()),
+        };
+
+        let id = self.add_document(&doc)?;
+        self.get_document_by_id(id)
+    }
+
+    /// Reconcile database with filesystem (RFC 0018)
+    ///
+    /// Scans the filesystem for documents and reconciles with the database:
+    /// - Files without DB records: create records
+    /// - DB records without files: soft-delete records
+    /// - Hash mismatch: update DB from file
+    pub fn reconcile(
+        &self,
+        docs_path: &Path,
+        doc_type: Option<DocType>,
+        dry_run: bool,
+    ) -> Result<ReconcileResult, StoreError> {
+        use std::collections::HashSet;
+        use std::fs;
+
+        let mut result = ReconcileResult::default();
+
+        let subdirs: Vec<(&str, DocType)> = match doc_type {
+            Some(dt) => vec![(dt.subdir(), dt)],
+            None => vec![
+                ("rfcs", DocType::Rfc),
+                ("spikes", DocType::Spike),
+                ("adrs", DocType::Adr),
+                ("decisions", DocType::Decision),
+                ("dialogues", DocType::Dialogue),
+                ("audits", DocType::Audit),
+                ("runbooks", DocType::Runbook),
+                ("postmortems", DocType::Postmortem),
+                ("prds", DocType::Prd),
+            ],
+        };
+
+        for (subdir, dt) in subdirs {
+            let search_dir = docs_path.join(subdir);
+            if !search_dir.exists() {
+                continue;
+            }
+
+            // Track files we've seen
+            let mut seen_files: HashSet<String> = HashSet::new();
+
+            // Scan filesystem
+            if let Ok(entries) = fs::read_dir(&search_dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.extension().map(|e| e == "md").unwrap_or(false) {
+                        // Skip .plan.md files
+                        if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                            if name.ends_with(".plan.md") {
+                                continue;
+                            }
+                        }
+
+                        let relative_path = path.strip_prefix(docs_path)
+                            .map(|p| p.to_string_lossy().to_string())
+                            .unwrap_or_else(|_| path.to_string_lossy().to_string());
+
+                        seen_files.insert(relative_path.clone());
+
+                        // Check if file is in database
+                        if let Ok(parsed) = parse_document_from_file(&path) {
+                            if parsed.doc_type != dt {
+                                continue;
+                            }
+
+                            // Try to find existing document
+                            let existing = self.list_documents(dt)
+                                .unwrap_or_default()
+                                .into_iter()
+                                .find(|d| d.file_path.as_ref() == Some(&relative_path));
+
+                            match existing {
+                                None => {
+                                    // File exists but no DB record
+                                    result.unindexed.push(relative_path.clone());
+                                    if !dry_run {
+                                        if let Ok(_doc) = self.register_from_file(&path, docs_path) {
+                                            result.added += 1;
+                                        }
+                                    }
+                                }
+                                Some(doc) => {
+                                    // Check if stale
+                                    if doc.content_hash.as_ref() != Some(&parsed.content_hash) {
+                                        result.stale.push(relative_path.clone());
+                                        if !dry_run {
+                                            if let Some(id) = doc.id {
+                                                let _ = self.update_document_index(id, &parsed.content_hash);
+                                                // Also update status if it changed
+                                                if doc.status.to_lowercase() != parsed.status.to_lowercase() {
+                                                    let _ = self.update_document_status(dt, &doc.title, &parsed.status);
+                                                }
+                                                result.updated += 1;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Check for orphan records
+            for doc in self.list_documents(dt).unwrap_or_default() {
+                if let Some(ref file_path) = doc.file_path {
+                    if !seen_files.contains(file_path) {
+                        let full_path = docs_path.join(file_path);
+                        if !full_path.exists() {
+                            result.orphaned.push(file_path.clone());
+                            if !dry_run {
+                                let _ = self.soft_delete_document(dt, &doc.title);
+                                result.soft_deleted += 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(result)
     }
 
     /// Update a document's status
@@ -1100,7 +1931,7 @@ impl DocumentStore {
             let now = chrono::Utc::now().to_rfc3339();
             let updated = self.conn.execute(
                 "UPDATE documents SET doc_type = ?1, number = ?2, title = ?3, status = ?4,
-                 file_path = ?5, updated_at = ?6 WHERE id = ?7",
+                 file_path = ?5, updated_at = ?6, content_hash = ?7, indexed_at = ?8 WHERE id = ?9",
                 params![
                     doc.doc_type.as_str(),
                     doc.number,
@@ -1108,8 +1939,29 @@ impl DocumentStore {
                     doc.status,
                     doc.file_path,
                     now,
+                    doc.content_hash,
+                    doc.indexed_at.as_ref().unwrap_or(&now),
                     id
                 ],
+            )?;
+            if updated == 0 {
+                return Err(StoreError::NotFound(format!("document #{}", id)));
+            }
+            Ok(())
+        })
+    }
+
+    /// Update a document's content hash and indexed_at timestamp (RFC 0018)
+    pub fn update_document_index(
+        &self,
+        id: i64,
+        content_hash: &str,
+    ) -> Result<(), StoreError> {
+        self.with_retry(|| {
+            let now = chrono::Utc::now().to_rfc3339();
+            let updated = self.conn.execute(
+                "UPDATE documents SET content_hash = ?1, indexed_at = ?2 WHERE id = ?3",
+                params![content_hash, now, id],
             )?;
             if updated == 0 {
                 return Err(StoreError::NotFound(format!("document #{}", id)));
@@ -1121,7 +1973,7 @@ impl DocumentStore {
     /// List all documents of a given type (excludes soft-deleted)
     pub fn list_documents(&self, doc_type: DocType) -> Result<Vec<Document>, StoreError> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, doc_type, number, title, status, file_path, created_at, updated_at, deleted_at
+            "SELECT id, doc_type, number, title, status, file_path, created_at, updated_at, deleted_at, content_hash, indexed_at
              FROM documents WHERE doc_type = ?1 AND deleted_at IS NULL ORDER BY number DESC, title ASC",
         )?;
 
@@ -1136,6 +1988,8 @@ impl DocumentStore {
                 created_at: row.get(6)?,
                 updated_at: row.get(7)?,
                 deleted_at: row.get(8)?,
+                content_hash: row.get(9)?,
+                indexed_at: row.get(10)?,
             })
         })?;
 
@@ -1150,7 +2004,7 @@ impl DocumentStore {
         status: &str,
     ) -> Result<Vec<Document>, StoreError> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, doc_type, number, title, status, file_path, created_at, updated_at, deleted_at
+            "SELECT id, doc_type, number, title, status, file_path, created_at, updated_at, deleted_at, content_hash, indexed_at
              FROM documents WHERE doc_type = ?1 AND status = ?2 AND deleted_at IS NULL ORDER BY number DESC, title ASC",
         )?;
 
@@ -1165,6 +2019,8 @@ impl DocumentStore {
                 created_at: row.get(6)?,
                 updated_at: row.get(7)?,
                 deleted_at: row.get(8)?,
+                content_hash: row.get(9)?,
+                indexed_at: row.get(10)?,
             })
         })?;
 
@@ -1226,7 +2082,7 @@ impl DocumentStore {
     pub fn get_deleted_document(&self, doc_type: DocType, title: &str) -> Result<Document, StoreError> {
         self.conn
             .query_row(
-                "SELECT id, doc_type, number, title, status, file_path, created_at, updated_at, deleted_at
+                "SELECT id, doc_type, number, title, status, file_path, created_at, updated_at, deleted_at, content_hash, indexed_at
                  FROM documents WHERE doc_type = ?1 AND title = ?2 AND deleted_at IS NOT NULL",
                 params![doc_type.as_str(), title],
                 |row| {
@@ -1240,6 +2096,8 @@ impl DocumentStore {
                         created_at: row.get(6)?,
                         updated_at: row.get(7)?,
                         deleted_at: row.get(8)?,
+                        content_hash: row.get(9)?,
+                        indexed_at: row.get(10)?,
                     })
                 },
             )
@@ -1257,12 +2115,12 @@ impl DocumentStore {
     pub fn list_deleted_documents(&self, doc_type: Option<DocType>) -> Result<Vec<Document>, StoreError> {
         let query = match doc_type {
             Some(dt) => format!(
-                "SELECT id, doc_type, number, title, status, file_path, created_at, updated_at, deleted_at
+                "SELECT id, doc_type, number, title, status, file_path, created_at, updated_at, deleted_at, content_hash, indexed_at
                  FROM documents WHERE doc_type = '{}' AND deleted_at IS NOT NULL
                  ORDER BY deleted_at DESC",
                 dt.as_str()
             ),
-            None => "SELECT id, doc_type, number, title, status, file_path, created_at, updated_at, deleted_at
+            None => "SELECT id, doc_type, number, title, status, file_path, created_at, updated_at, deleted_at, content_hash, indexed_at
                      FROM documents WHERE deleted_at IS NOT NULL
                      ORDER BY deleted_at DESC".to_string(),
         };
@@ -1279,6 +2137,8 @@ impl DocumentStore {
                 created_at: row.get(6)?,
                 updated_at: row.get(7)?,
                 deleted_at: row.get(8)?,
+                content_hash: row.get(9)?,
+                indexed_at: row.get(10)?,
             })
         })?;
 
@@ -1304,7 +2164,7 @@ impl DocumentStore {
     /// Check if a document has ADR dependents (documents that reference it via rfc_to_adr link)
     pub fn has_adr_dependents(&self, document_id: i64) -> Result<Vec<Document>, StoreError> {
         let mut stmt = self.conn.prepare(
-            "SELECT d.id, d.doc_type, d.number, d.title, d.status, d.file_path, d.created_at, d.updated_at, d.deleted_at
+            "SELECT d.id, d.doc_type, d.number, d.title, d.status, d.file_path, d.created_at, d.updated_at, d.deleted_at, d.content_hash, d.indexed_at
              FROM documents d
              JOIN document_links l ON l.source_id = d.id
              WHERE l.target_id = ?1 AND l.link_type = 'rfc_to_adr' AND d.deleted_at IS NULL",
@@ -1321,6 +2181,8 @@ impl DocumentStore {
                 created_at: row.get(6)?,
                 updated_at: row.get(7)?,
                 deleted_at: row.get(8)?,
+                content_hash: row.get(9)?,
+                indexed_at: row.get(10)?,
             })
         })?;
 
@@ -1328,14 +2190,70 @@ impl DocumentStore {
             .map_err(StoreError::Database)
     }
 
-    /// Get the next document number for a type
+    /// Get the next document number for a type (RFC 0022)
+    ///
+    /// Scans both database AND filesystem, taking the maximum.
+    /// Filesystem is truth - prevents numbering collisions when
+    /// files exist on disk but aren't yet indexed.
     pub fn next_number(&self, doc_type: DocType) -> Result<i32, StoreError> {
-        let max: Option<i32> = self.conn.query_row(
+        let db_max: Option<i32> = self.conn.query_row(
             "SELECT MAX(number) FROM documents WHERE doc_type = ?1",
             params![doc_type.as_str()],
             |row| row.get(0),
         )?;
-        Ok(max.unwrap_or(0) + 1)
+        Ok(db_max.unwrap_or(0) + 1)
+    }
+
+    /// Get the next document number, scanning filesystem too (RFC 0022)
+    ///
+    /// Use this instead of `next_number()` when you have access to the docs path.
+    pub fn next_number_with_fs(&self, doc_type: DocType, docs_path: &Path) -> Result<i32, StoreError> {
+        // Database max (fast, possibly stale)
+        let db_max: Option<i32> = self.conn.query_row(
+            "SELECT MAX(number) FROM documents WHERE doc_type = ?1",
+            params![doc_type.as_str()],
+            |row| row.get(0),
+        )?;
+
+        // Filesystem max (authoritative)
+        let fs_max = self.scan_filesystem_max(doc_type, docs_path)?;
+
+        // Take max of both - filesystem wins
+        Ok(std::cmp::max(db_max.unwrap_or(0), fs_max) + 1)
+    }
+
+    /// Scan filesystem directory for the highest document number (RFC 0022)
+    fn scan_filesystem_max(&self, doc_type: DocType, docs_path: &Path) -> Result<i32, StoreError> {
+        use regex::Regex;
+        use std::fs;
+
+        let dir = docs_path.join(doc_type.subdir());
+        if !dir.exists() {
+            return Ok(0);
+        }
+
+        let pattern = Regex::new(r"^(\d{4})-.*\.md$")
+            .map_err(|e| StoreError::IoError(e.to_string()))?;
+        let mut max = 0;
+
+        let entries = fs::read_dir(&dir)
+            .map_err(|e| StoreError::IoError(e.to_string()))?;
+
+        for entry in entries.flatten() {
+            if let Some(name) = entry.file_name().to_str() {
+                // Skip .plan.md files
+                if name.ends_with(".plan.md") {
+                    continue;
+                }
+                if let Some(caps) = pattern.captures(name) {
+                    if let Ok(num) = caps[1].parse::<i32>() {
+                        max = std::cmp::max(max, num);
+                    }
+                }
+            }
+        }
+
+        Ok(max)
     }
 
     // ==================== Link Operations ====================
@@ -1366,13 +2284,13 @@ impl DocumentStore {
     ) -> Result<Vec<Document>, StoreError> {
         let query = match link_type {
             Some(lt) => format!(
-                "SELECT d.id, d.doc_type, d.number, d.title, d.status, d.file_path, d.created_at, d.updated_at, d.deleted_at
+                "SELECT d.id, d.doc_type, d.number, d.title, d.status, d.file_path, d.created_at, d.updated_at, d.deleted_at, d.content_hash, d.indexed_at
                  FROM documents d
                  JOIN document_links l ON l.target_id = d.id
                  WHERE l.source_id = ?1 AND l.link_type = '{}' AND d.deleted_at IS NULL",
                 lt.as_str()
             ),
-            None => "SELECT d.id, d.doc_type, d.number, d.title, d.status, d.file_path, d.created_at, d.updated_at, d.deleted_at
+            None => "SELECT d.id, d.doc_type, d.number, d.title, d.status, d.file_path, d.created_at, d.updated_at, d.deleted_at, d.content_hash, d.indexed_at
                      FROM documents d
                      JOIN document_links l ON l.target_id = d.id
                      WHERE l.source_id = ?1 AND d.deleted_at IS NULL".to_string(),
@@ -1390,6 +2308,8 @@ impl DocumentStore {
                 created_at: row.get(6)?,
                 updated_at: row.get(7)?,
                 deleted_at: row.get(8)?,
+                content_hash: row.get(9)?,
+                indexed_at: row.get(10)?,
             })
         })?;
 
@@ -1481,6 +2401,68 @@ impl DocumentStore {
             .map_err(StoreError::Database)
     }
 
+    // ==================== Plan Cache Operations (RFC 0017) ====================
+
+    /// Get the cached mtime for a plan file
+    pub fn get_plan_cache_mtime(&self, document_id: i64) -> Result<Option<String>, StoreError> {
+        self.conn
+            .query_row(
+                "SELECT cache_mtime FROM plan_cache WHERE document_id = ?1",
+                params![document_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(StoreError::Database)
+    }
+
+    /// Update the cached mtime for a plan file
+    pub fn update_plan_cache_mtime(&self, document_id: i64, mtime: &str) -> Result<(), StoreError> {
+        self.with_retry(|| {
+            self.conn.execute(
+                "INSERT INTO plan_cache (document_id, cache_mtime) VALUES (?1, ?2)
+                 ON CONFLICT(document_id) DO UPDATE SET cache_mtime = excluded.cache_mtime",
+                params![document_id, mtime],
+            )?;
+            Ok(())
+        })
+    }
+
+    /// Rebuild tasks from plan file data (RFC 0017 - authority inversion)
+    pub fn rebuild_tasks_from_plan(
+        &self,
+        document_id: i64,
+        tasks: &[crate::plan::PlanTask],
+    ) -> Result<(), StoreError> {
+        self.with_retry(|| {
+            // Delete existing tasks
+            self.conn
+                .execute("DELETE FROM tasks WHERE document_id = ?1", params![document_id])?;
+
+            // Insert tasks from plan file
+            for (index, task) in tasks.iter().enumerate() {
+                let completed_at = if task.completed {
+                    Some(chrono::Utc::now().to_rfc3339())
+                } else {
+                    None
+                };
+
+                self.conn.execute(
+                    "INSERT INTO tasks (document_id, task_index, description, completed, completed_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                    params![
+                        document_id,
+                        index as i32,
+                        task.description,
+                        task.completed as i32,
+                        completed_at
+                    ],
+                )?;
+            }
+
+            Ok(())
+        })
+    }
+
     // ==================== Worktree Operations ====================
 
     /// Add a worktree for a document
@@ -1568,7 +2550,7 @@ impl DocumentStore {
         let sql = match doc_type {
             Some(dt) => format!(
                 "SELECT d.id, d.doc_type, d.number, d.title, d.status, d.file_path,
-                        d.created_at, d.updated_at, d.deleted_at, bm25(documents_fts) as score
+                        d.created_at, d.updated_at, d.deleted_at, d.content_hash, d.indexed_at, bm25(documents_fts) as score
                  FROM documents_fts fts
                  JOIN documents d ON d.id = fts.rowid
                  WHERE documents_fts MATCH ?1 AND d.doc_type = '{}' AND d.deleted_at IS NULL
@@ -1577,7 +2559,7 @@ impl DocumentStore {
                 dt.as_str()
             ),
             None => "SELECT d.id, d.doc_type, d.number, d.title, d.status, d.file_path,
-                            d.created_at, d.updated_at, d.deleted_at, bm25(documents_fts) as score
+                            d.created_at, d.updated_at, d.deleted_at, d.content_hash, d.indexed_at, bm25(documents_fts) as score
                      FROM documents_fts fts
                      JOIN documents d ON d.id = fts.rowid
                      WHERE documents_fts MATCH ?1 AND d.deleted_at IS NULL
@@ -1599,8 +2581,10 @@ impl DocumentStore {
                     created_at: row.get(6)?,
                     updated_at: row.get(7)?,
                     deleted_at: row.get(8)?,
+                    content_hash: row.get(9)?,
+                    indexed_at: row.get(10)?,
                 },
-                score: row.get(9)?,
+                score: row.get(11)?,
                 snippet: None,
             })
         })?;
@@ -2632,6 +3616,263 @@ impl DocumentStore {
             None => Ok(true), // Not indexed = stale
         }
     }
+
+    // ==================== Context Injection Methods (RFC 0016) ====================
+
+    /// Log a context injection event
+    pub fn log_injection(
+        &self,
+        session_id: &str,
+        tier: &str,
+        source_uri: &str,
+        content_hash: &str,
+        token_count: Option<i32>,
+    ) -> Result<i64, StoreError> {
+        self.with_retry(|| {
+            let now = chrono::Utc::now().to_rfc3339();
+            self.conn.execute(
+                "INSERT INTO context_injections (session_id, timestamp, tier, source_uri, content_hash, token_count)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![session_id, now, tier, source_uri, content_hash, token_count],
+            )?;
+            Ok(self.conn.last_insert_rowid())
+        })
+    }
+
+    /// Get injection history for a session
+    pub fn get_injection_history(&self, session_id: &str) -> Result<Vec<ContextInjection>, StoreError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, session_id, timestamp, tier, source_uri, content_hash, token_count
+             FROM context_injections
+             WHERE session_id = ?1
+             ORDER BY timestamp ASC",
+        )?;
+
+        let rows = stmt.query_map(params![session_id], |row| {
+            Ok(ContextInjection {
+                id: Some(row.get(0)?),
+                session_id: row.get(1)?,
+                timestamp: row.get(2)?,
+                tier: row.get(3)?,
+                source_uri: row.get(4)?,
+                content_hash: row.get(5)?,
+                token_count: row.get(6)?,
+            })
+        })?;
+
+        let mut results = Vec::new();
+        for row in rows {
+            results.push(row?);
+        }
+        Ok(results)
+    }
+
+    /// Get recent injections across all sessions (for debugging)
+    pub fn get_recent_injections(&self, limit: usize) -> Result<Vec<ContextInjection>, StoreError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, session_id, timestamp, tier, source_uri, content_hash, token_count
+             FROM context_injections
+             ORDER BY timestamp DESC
+             LIMIT ?1",
+        )?;
+
+        let rows = stmt.query_map(params![limit as i64], |row| {
+            Ok(ContextInjection {
+                id: Some(row.get(0)?),
+                session_id: row.get(1)?,
+                timestamp: row.get(2)?,
+                tier: row.get(3)?,
+                source_uri: row.get(4)?,
+                content_hash: row.get(5)?,
+                token_count: row.get(6)?,
+            })
+        })?;
+
+        let mut results = Vec::new();
+        for row in rows {
+            results.push(row?);
+        }
+        Ok(results)
+    }
+
+    /// Get injection stats for a session
+    pub fn get_injection_stats(&self, session_id: &str) -> Result<(usize, i64), StoreError> {
+        let result = self.conn.query_row(
+            "SELECT COUNT(*), COALESCE(SUM(token_count), 0)
+             FROM context_injections
+             WHERE session_id = ?1",
+            params![session_id],
+            |row| Ok((row.get::<_, i64>(0)? as usize, row.get::<_, i64>(1)?)),
+        )?;
+        Ok(result)
+    }
+
+    /// Get the last injection for a URI in a session
+    pub fn get_last_injection(&self, session_id: &str, uri: &str) -> Result<Option<ContextInjection>, StoreError> {
+        self.conn
+            .query_row(
+                "SELECT id, session_id, timestamp, tier, source_uri, content_hash, token_count
+                 FROM context_injections
+                 WHERE session_id = ?1 AND source_uri = ?2
+                 ORDER BY timestamp DESC
+                 LIMIT 1",
+                params![session_id, uri],
+                |row| {
+                    Ok(ContextInjection {
+                        id: Some(row.get(0)?),
+                        session_id: row.get(1)?,
+                        timestamp: row.get(2)?,
+                        tier: row.get(3)?,
+                        source_uri: row.get(4)?,
+                        content_hash: row.get(5)?,
+                        token_count: row.get(6)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(StoreError::Database)
+    }
+
+    /// Get the last refresh time for a session (for rate limiting)
+    pub fn get_last_refresh_time(&self, session_id: &str) -> Result<Option<String>, StoreError> {
+        self.conn
+            .query_row(
+                "SELECT MAX(timestamp) FROM context_injections WHERE session_id = ?1",
+                params![session_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(StoreError::Database)
+            .map(|opt| opt.flatten())
+    }
+
+    /// Get recent injections for a session
+    pub fn get_session_injections(&self, session_id: &str, limit: usize) -> Result<Vec<ContextInjection>, StoreError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, session_id, timestamp, tier, source_uri, content_hash, token_count
+             FROM context_injections
+             WHERE session_id = ?1
+             ORDER BY timestamp DESC
+             LIMIT ?2"
+        ).map_err(StoreError::Database)?;
+
+        let rows = stmt.query_map(params![session_id, limit as i64], |row| {
+            Ok(ContextInjection {
+                id: Some(row.get(0)?),
+                session_id: row.get(1)?,
+                timestamp: row.get(2)?,
+                tier: row.get(3)?,
+                source_uri: row.get(4)?,
+                content_hash: row.get(5)?,
+                token_count: row.get(6)?,
+            })
+        }).map_err(StoreError::Database)?;
+
+        rows.collect::<Result<Vec<_>, _>>().map_err(StoreError::Database)
+    }
+
+    // ==================== Relevance Graph Methods (RFC 0017) ====================
+
+    /// Add a relevance edge
+    pub fn add_relevance_edge(&self, edge: &RelevanceEdge) -> Result<i64, StoreError> {
+        self.with_retry(|| {
+            let now = chrono::Utc::now().to_rfc3339();
+            self.conn.execute(
+                "INSERT OR REPLACE INTO relevance_edges (source_uri, target_uri, edge_type, weight, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    edge.source_uri,
+                    edge.target_uri,
+                    edge.edge_type.as_str(),
+                    edge.weight,
+                    now,
+                ],
+            )?;
+            Ok(self.conn.last_insert_rowid())
+        })
+    }
+
+    /// Get relevance edges from a source URI
+    pub fn get_relevance_edges(&self, source_uri: &str) -> Result<Vec<RelevanceEdge>, StoreError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, source_uri, target_uri, edge_type, weight, created_at
+             FROM relevance_edges
+             WHERE source_uri = ?1
+             ORDER BY weight DESC",
+        )?;
+
+        let rows = stmt.query_map(params![source_uri], |row| {
+            Ok(RelevanceEdge {
+                id: Some(row.get(0)?),
+                source_uri: row.get(1)?,
+                target_uri: row.get(2)?,
+                edge_type: EdgeType::from_str(&row.get::<_, String>(3)?).unwrap_or(EdgeType::Explicit),
+                weight: row.get(4)?,
+                created_at: row.get(5)?,
+            })
+        })?;
+
+        let mut results = Vec::new();
+        for row in rows {
+            results.push(row?);
+        }
+        Ok(results)
+    }
+
+    /// Get all edges pointing to a target URI
+    pub fn get_incoming_edges(&self, target_uri: &str) -> Result<Vec<RelevanceEdge>, StoreError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, source_uri, target_uri, edge_type, weight, created_at
+             FROM relevance_edges
+             WHERE target_uri = ?1
+             ORDER BY weight DESC",
+        )?;
+
+        let rows = stmt.query_map(params![target_uri], |row| {
+            Ok(RelevanceEdge {
+                id: Some(row.get(0)?),
+                source_uri: row.get(1)?,
+                target_uri: row.get(2)?,
+                edge_type: EdgeType::from_str(&row.get::<_, String>(3)?).unwrap_or(EdgeType::Explicit),
+                weight: row.get(4)?,
+                created_at: row.get(5)?,
+            })
+        })?;
+
+        let mut results = Vec::new();
+        for row in rows {
+            results.push(row?);
+        }
+        Ok(results)
+    }
+
+    /// Remove a relevance edge
+    pub fn remove_relevance_edge(&self, source_uri: &str, target_uri: &str, edge_type: EdgeType) -> Result<bool, StoreError> {
+        let rows = self.conn.execute(
+            "DELETE FROM relevance_edges WHERE source_uri = ?1 AND target_uri = ?2 AND edge_type = ?3",
+            params![source_uri, target_uri, edge_type.as_str()],
+        )?;
+        Ok(rows > 0)
+    }
+
+    /// Clear all edges of a specific type
+    pub fn clear_edges_by_type(&self, edge_type: EdgeType) -> Result<usize, StoreError> {
+        let rows = self.conn.execute(
+            "DELETE FROM relevance_edges WHERE edge_type = ?1",
+            params![edge_type.as_str()],
+        )?;
+        Ok(rows)
+    }
+
+    /// Count relevance edges
+    pub fn count_relevance_edges(&self) -> Result<usize, StoreError> {
+        let count: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM relevance_edges",
+            [],
+            |row| row.get(0),
+        )?;
+        Ok(count as usize)
+    }
 }
 
 #[cfg(test)]
@@ -2671,5 +3912,168 @@ mod tests {
         let progress = store.get_task_progress(id).unwrap();
         assert_eq!(progress.completed, 1);
         assert_eq!(progress.percentage, 33);
+    }
+
+    // ==================== RFC 0022: Filesystem Authority Tests ====================
+
+    #[test]
+    fn test_title_to_slug() {
+        assert_eq!(title_to_slug("Filesystem Authority"), "filesystem-authority");
+        assert_eq!(title_to_slug("Plan File Authority"), "plan-file-authority");
+        assert_eq!(title_to_slug("already-slug"), "already-slug");
+        assert_eq!(title_to_slug("UPPER CASE"), "upper-case");
+        assert_eq!(title_to_slug("single"), "single");
+        assert_eq!(title_to_slug("  extra   spaces  "), "extra-spaces");
+    }
+
+    #[test]
+    fn test_find_document_by_slug() {
+        let store = DocumentStore::open_in_memory().unwrap();
+
+        let doc = Document::new(DocType::Rfc, "Filesystem Authority", "draft");
+        let id = store.add_document(&doc).unwrap();
+
+        // Exact title match
+        let found = store.find_document(DocType::Rfc, "Filesystem Authority").unwrap();
+        assert_eq!(found.id, Some(id));
+
+        // Slug match (RFC 0022)
+        let found = store.find_document(DocType::Rfc, "filesystem-authority").unwrap();
+        assert_eq!(found.id, Some(id));
+        assert_eq!(found.title, "Filesystem Authority");
+    }
+
+    #[test]
+    fn test_find_document_slug_with_multiple_words() {
+        let store = DocumentStore::open_in_memory().unwrap();
+
+        let doc = Document::new(DocType::Rfc, "Plan File Authority", "accepted");
+        let id = store.add_document(&doc).unwrap();
+
+        let found = store.find_document(DocType::Rfc, "plan-file-authority").unwrap();
+        assert_eq!(found.id, Some(id));
+    }
+
+    #[test]
+    fn test_next_number_with_fs_empty_dir() {
+        let store = DocumentStore::open_in_memory().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let docs_path = tmp.path();
+
+        // No directory at all - should return 1
+        let next = store.next_number_with_fs(DocType::Rfc, docs_path).unwrap();
+        assert_eq!(next, 1);
+    }
+
+    #[test]
+    fn test_next_number_with_fs_files_exist() {
+        let store = DocumentStore::open_in_memory().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let docs_path = tmp.path();
+
+        // Create rfcs directory with files
+        let rfcs_dir = docs_path.join("rfcs");
+        std::fs::create_dir_all(&rfcs_dir).unwrap();
+        std::fs::write(rfcs_dir.join("0001-first.md"), "# RFC 0001: First\n").unwrap();
+        std::fs::write(rfcs_dir.join("0005-fifth.md"), "# RFC 0005: Fifth\n").unwrap();
+        std::fs::write(rfcs_dir.join("0003-third.md"), "# RFC 0003: Third\n").unwrap();
+
+        // DB is empty, filesystem has max 5 → next should be 6
+        let next = store.next_number_with_fs(DocType::Rfc, docs_path).unwrap();
+        assert_eq!(next, 6);
+    }
+
+    #[test]
+    fn test_next_number_with_fs_takes_max_of_both() {
+        let store = DocumentStore::open_in_memory().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let docs_path = tmp.path();
+
+        // Add document to DB with number 10
+        let mut doc = Document::new(DocType::Rfc, "DB Document", "draft");
+        doc.number = Some(10);
+        store.add_document(&doc).unwrap();
+
+        // Create rfcs directory with file numbered 7
+        let rfcs_dir = docs_path.join("rfcs");
+        std::fs::create_dir_all(&rfcs_dir).unwrap();
+        std::fs::write(rfcs_dir.join("0007-seventh.md"), "# RFC\n").unwrap();
+
+        // DB has 10, filesystem has 7 → next should be 11 (max + 1)
+        let next = store.next_number_with_fs(DocType::Rfc, docs_path).unwrap();
+        assert_eq!(next, 11);
+    }
+
+    #[test]
+    fn test_next_number_with_fs_filesystem_wins() {
+        let store = DocumentStore::open_in_memory().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let docs_path = tmp.path();
+
+        // Add document to DB with number 3
+        let mut doc = Document::new(DocType::Rfc, "DB Document", "draft");
+        doc.number = Some(3);
+        store.add_document(&doc).unwrap();
+
+        // Create rfcs directory with files up to 20
+        let rfcs_dir = docs_path.join("rfcs");
+        std::fs::create_dir_all(&rfcs_dir).unwrap();
+        std::fs::write(rfcs_dir.join("0020-twentieth.md"), "# RFC\n").unwrap();
+
+        // DB has 3, filesystem has 20 → next should be 21
+        let next = store.next_number_with_fs(DocType::Rfc, docs_path).unwrap();
+        assert_eq!(next, 21);
+    }
+
+    #[test]
+    fn test_scan_filesystem_max_skips_plan_files() {
+        let store = DocumentStore::open_in_memory().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let docs_path = tmp.path();
+
+        let rfcs_dir = docs_path.join("rfcs");
+        std::fs::create_dir_all(&rfcs_dir).unwrap();
+        std::fs::write(rfcs_dir.join("0005-feature.md"), "# RFC\n").unwrap();
+        std::fs::write(rfcs_dir.join("0005-feature.plan.md"), "# Plan\n").unwrap();
+        std::fs::write(rfcs_dir.join("0010-big.plan.md"), "# Plan\n").unwrap();
+
+        // Should see 5 from the .md file, ignore .plan.md files
+        let max = store.scan_filesystem_max(DocType::Rfc, docs_path).unwrap();
+        assert_eq!(max, 5);
+    }
+
+    #[test]
+    fn test_next_number_regression_numbering_collision() {
+        // Regression test for the exact bug that caused RFC 0022:
+        // Files 0018 and 0019 existed on disk but not in DB.
+        // next_number() returned 0018, causing a collision.
+        let store = DocumentStore::open_in_memory().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let docs_path = tmp.path();
+
+        // Simulate: DB has RFCs 1-17
+        for i in 1..=17 {
+            let mut doc = Document::new(DocType::Rfc, &format!("rfc-{}", i), "draft");
+            doc.number = Some(i);
+            store.add_document(&doc).unwrap();
+        }
+
+        // Filesystem has 1-19 (18 and 19 are untracked)
+        let rfcs_dir = docs_path.join("rfcs");
+        std::fs::create_dir_all(&rfcs_dir).unwrap();
+        for i in 1..=19 {
+            std::fs::write(
+                rfcs_dir.join(format!("{:04}-rfc-{}.md", i, i)),
+                format!("# RFC {:04}\n", i),
+            ).unwrap();
+        }
+
+        // Old behavior: next_number() returns 18 (collision!)
+        let old_next = store.next_number(DocType::Rfc).unwrap();
+        assert_eq!(old_next, 18); // Bug: would collide with existing file
+
+        // New behavior: next_number_with_fs() returns 20 (safe!)
+        let new_next = store.next_number_with_fs(DocType::Rfc, docs_path).unwrap();
+        assert_eq!(new_next, 20); // Correct: max(17, 19) + 1
     }
 }

@@ -63,7 +63,7 @@ pub fn handle_create(state: &mut ProjectState, args: &Value) -> Result<Value, Se
     // Get next runbook number
     let runbook_number = state
         .store
-        .next_number(DocType::Runbook)
+        .next_number_with_fs(DocType::Runbook, &state.home.docs_path)
         .map_err(|e| ServerError::CommandFailed(e.to_string()))?;
 
     // Generate file path
@@ -86,6 +86,8 @@ pub fn handle_create(state: &mut ProjectState, args: &Value) -> Result<Value, Se
         created_at: None,
         updated_at: None,
         deleted_at: None,
+        content_hash: Some(blue_core::store::hash_content(&markdown)),
+        indexed_at: None,
     };
     let doc_id = state
         .store
@@ -394,12 +396,11 @@ pub fn handle_lookup(state: &ProjectState, args: &Value) -> Result<Value, Server
             // Calculate best match score for this runbook
             for action in &actions {
                 let score = calculate_match_score(&action_query, action);
-                if score > 0 {
-                    if best_match.as_ref().map_or(true, |(_, _, s)| score > *s) {
+                if score > 0
+                    && best_match.as_ref().is_none_or(|(_, _, s)| score > *s) {
                         best_match = Some((runbook.clone(), actions.clone(), score));
                         break; // This runbook matches, move to next
                     }
-                }
             }
         }
     }

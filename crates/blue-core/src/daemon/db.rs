@@ -278,7 +278,7 @@ impl DaemonDb {
         )?;
 
         let sessions = stmt
-            .query_map([], |row| Self::row_to_session(row))?
+            .query_map([], Self::row_to_session)?
             .collect::<Result<Vec<_>, _>>()?;
 
         Ok(sessions)
@@ -295,7 +295,7 @@ impl DaemonDb {
         )?;
 
         let sessions = stmt
-            .query_map([realm], |row| Self::row_to_session(row))?
+            .query_map([realm], Self::row_to_session)?
             .collect::<Result<Vec<_>, _>>()?;
 
         Ok(sessions)
@@ -312,7 +312,7 @@ impl DaemonDb {
         )?;
 
         let session = stmt
-            .query_row([id], |row| Self::row_to_session(row))
+            .query_row([id], Self::row_to_session)
             .optional()?;
 
         Ok(session)
@@ -392,7 +392,7 @@ impl DaemonDb {
         )?;
 
         let notifications = stmt
-            .query_map([], |row| Self::row_to_notification(row))?
+            .query_map([], Self::row_to_notification)?
             .collect::<Result<Vec<_>, _>>()?;
 
         Ok(notifications)
@@ -413,7 +413,7 @@ impl DaemonDb {
         )?;
 
         let notifications = stmt
-            .query_map([realm], |row| Self::row_to_notification(row))?
+            .query_map([realm], Self::row_to_notification)?
             .collect::<Result<Vec<_>, _>>()?;
 
         Ok(notifications)

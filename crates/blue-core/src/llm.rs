@@ -106,8 +106,10 @@ pub trait LlmProvider: Send + Sync {
 
 /// LLM backend selection
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Default)]
 pub enum LlmBackendChoice {
     /// Auto-detect best backend (CUDA > MPS > CPU)
+    #[default]
     Auto,
     /// Force CUDA (NVIDIA GPU)
     Cuda,
@@ -117,11 +119,6 @@ pub enum LlmBackendChoice {
     Cpu,
 }
 
-impl Default for LlmBackendChoice {
-    fn default() -> Self {
-        Self::Auto
-    }
-}
 
 /// LLM configuration
 #[derive(Debug, Clone)]

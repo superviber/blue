@@ -67,7 +67,7 @@ pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, Server
     // Get next ADR number
     let number = state
         .store
-        .next_number(DocType::Adr)
+        .next_number_with_fs(DocType::Adr, &state.home.docs_path)
         .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
 
     // Create ADR
@@ -368,7 +368,7 @@ fn load_adr_summaries(state: &ProjectState) -> Result<Vec<AdrSummary>, ServerErr
 
     for entry in entries.flatten() {
         let path = entry.path();
-        if path.extension().map_or(false, |e| e == "md") {
+        if path.extension().is_some_and(|e| e == "md") {
             if let Ok(content) = fs::read_to_string(&path) {
                 if let Some(summary) = parse_adr_file(&path, &content) {
                     summaries.push(summary);

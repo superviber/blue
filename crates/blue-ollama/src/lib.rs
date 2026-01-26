@@ -246,12 +246,7 @@ impl EmbeddedOllama {
     /// Find a free port starting from the given port
     #[allow(dead_code)]
     fn find_free_port(start: u16) -> Option<u16> {
-        for port in start..start + 100 {
-            if !Self::port_in_use(port) {
-                return Some(port);
-            }
-        }
-        None
+        (start..start + 100).find(|&port| !Self::port_in_use(port))
     }
 
     /// Get path to bundled Ollama binary

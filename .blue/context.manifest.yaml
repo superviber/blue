@@ -1,0 +1,42 @@
+# Blue Context Manifest (RFC 0016)
+#
+# This file configures what context gets injected into Claude's context window.
+# Three tiers: identity (always), workflow (activity-triggered), reference (on-demand).
+
+version: 1
+
+# Identity Tier - "Who am I" - Always injected at session start
+# Contains foundational beliefs and voice patterns
+identity:
+  sources:
+    - uri: blue://docs/adrs/
+      label: Architecture Decision Records
+    - uri: blue://context/voice
+      label: Voice and tone patterns
+  max_tokens: 500
+
+# Workflow Tier - "What should I do" - Triggered by activity
+# Contains current work context
+workflow:
+  sources:
+    - uri: blue://state/current-rfc
+      label: Active RFC
+  refresh_triggers:
+    - on_rfc_change
+  max_tokens: 2000
+
+# Reference Tier - "How does this work" - On-demand via MCP Resources
+# Contains full documentation for deep dives
+reference:
+  graph: blue://context/relevance
+  max_tokens: 4000
+  staleness_days: 30
+
+# Plugins - External context providers (optional)
+# plugins:
+#   - uri: blue://jira/
+#     provides:
+#       - ticket-context
+#       - acceptance-criteria
+#     salience_triggers:
+#       - commit_msg_pattern: "^[A-Z]+-\\d+"
