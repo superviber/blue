@@ -14,6 +14,42 @@ use serde_json::{json, Value};
 
 use crate::error::ServerError;
 
+// ==================== Alignment Mode Types ====================
+
+/// A pastry-themed expert agent for alignment dialogues
+#[derive(Debug, Clone, Serialize)]
+pub struct PastryAgent {
+    pub name: String,
+    pub role: String,
+    pub emoji: String,
+    pub tier: String,
+    pub relevance: f64,
+}
+
+/// Pastry names for alignment agents (ADR 0014)
+const PASTRY_NAMES: &[&str] = &[
+    "Muffin",
+    "Cupcake",
+    "Scone",
+    "Eclair",
+    "Donut",
+    "Brioche",
+    "Croissant",
+    "Macaron",
+    "Cannoli",
+    "Strudel",
+    "Beignet",
+    "Churro",
+    "Profiterole",
+    "Tartlet",
+    "Galette",
+    "Palmier",
+    "Kouign",
+    "Sfogliatella",
+    "Financier",
+    "Religieuse",
+];
+
 /// Extraction status
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -265,6 +301,29 @@ pub fn handle_create(state: &mut ProjectState, args: &Value) -> Result<Value, Se
     let summary = args.get("summary").and_then(|v| v.as_str());
     let content = args.get("content").and_then(|v| v.as_str());
 
+    // Alignment mode params
+    let alignment = args
+        .get("alignment")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let agent_count = args
+        .get("agents")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(3) as usize;
+    let model = args
+        .get("model")
+        .and_then(|v| v.as_str())
+        .unwrap_or("sonnet");
+    let sources: Vec<String> = args
+        .get("sources")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
+
     // Validate RFC exists if provided
     let rfc_doc = if let Some(rfc) = rfc_title {
         Some(
@@ -292,14 +351,26 @@ pub fn handle_create(state: &mut ProjectState, args: &Value) -> Result<Value, Se
     let docs_path = state.home.docs_path.clone();
     let dialogue_path = docs_path.join(&file_path);
 
-    // Generate markdown content
-    let markdown = generate_dialogue_markdown(
-        title,
-        dialogue_number,
-        rfc_title,
-        summary,
-        content,
-    );
+    // Generate markdown content — alignment mode gets a different scaffold
+    let (markdown, pastry_agents) = if alignment {
+        let agents = assign_pastry_agents(agent_count, title);
+        let md = generate_alignment_dialogue_markdown(
+            title,
+            dialogue_number,
+            rfc_title,
+            &agents,
+        );
+        (md, Some(agents))
+    } else {
+        let md = generate_dialogue_markdown(
+            title,
+            dialogue_number,
+            rfc_title,
+            summary,
+            content,
+        );
+        (md, None)
+    };
 
     // Create document in SQLite store
     let mut doc = Document::new(DocType::Dialogue, title, "recorded");
@@ -328,18 +399,46 @@ pub fn handle_create(state: &mut ProjectState, args: &Value) -> Result<Value, Se
     }
     fs::write(&dialogue_path, &markdown).map_err(|e| ServerError::CommandFailed(e.to_string()))?;
 
-    let hint = if rfc_title.is_some() {
-        "Dialogue recorded and linked to RFC."
+    // Build response — RFC 0023: inject protocol as prose in message field
+    let (message, judge_protocol) = if let Some(ref agents) = pastry_agents {
+        let protocol = build_judge_protocol(
+            agents,
+            &dialogue_path.display().to_string(),
+            model,
+            &sources,
+        );
+        // Extract instructions as prose so Claude reads them directly
+        let instructions = protocol["instructions"].as_str().unwrap_or("");
+        let template = protocol["agent_prompt_template"].as_str().unwrap_or("");
+        let msg = format!(
+            "Alignment dialogue created: {title}\n\
+             File: {file}\n\n\
+             ## JUDGE PROTOCOL — FOLLOW THESE INSTRUCTIONS\n\n\
+             {instructions}\n\n\
+             ## AGENT PROMPT TEMPLATE\n\n\
+             Substitute {{{{NAME}}}}, {{{{EMOJI}}}}, {{{{ROLE}}}} for each agent:\n\n\
+             {template}",
+            title = title,
+            file = dialogue_path.display(),
+            instructions = instructions,
+            template = template,
+        );
+        (msg, Some(protocol))
     } else {
-        "Dialogue recorded. Consider linking to an RFC."
+        let msg = blue_core::voice::info(
+            &format!("Dialogue recorded: {}", title),
+            Some(if rfc_title.is_some() {
+                "Dialogue recorded and linked to RFC."
+            } else {
+                "Dialogue recorded. Consider linking to an RFC."
+            }),
+        );
+        (msg, None)
     };
 
-    Ok(json!({
+    let mut response = json!({
         "status": "success",
-        "message": blue_core::voice::info(
-            &format!("Dialogue recorded: {}", title),
-            Some(hint)
-        ),
+        "message": message,
         "dialogue": {
             "id": dialogue_id,
             "number": dialogue_number,
@@ -348,7 +447,17 @@ pub fn handle_create(state: &mut ProjectState, args: &Value) -> Result<Value, Se
             "linked_rfc": rfc_title,
         },
         "content": markdown,
-    }))
+    });
+
+    // Also attach structured protocol for programmatic use
+    if let Some(protocol) = judge_protocol {
+        response
+            .as_object_mut()
+            .unwrap()
+            .insert("judge_protocol".to_string(), protocol);
+    }
+
+    Ok(response)
 }
 
 /// Handle blue_dialogue_get
@@ -601,6 +710,321 @@ fn to_kebab_case(s: &str) -> String {
         .join("-")
 }
 
+// ==================== Alignment Mode Helpers ====================
+
+/// Expert roles keyed by topic keywords
+const ROLE_KEYWORDS: &[(&[&str], &str)] = &[
+    (&["system", "architect", "infrastructure", "scale"], "Systems Architect"),
+    (&["security", "auth", "vulnerability", "trust"], "Security Architect"),
+    (&["api", "endpoint", "rest", "grpc", "protocol"], "API Designer"),
+    (&["data", "database", "storage", "schema", "model"], "Data Architect"),
+    (&["test", "quality", "qa", "reliability"], "Quality Engineer"),
+    (&["ux", "ui", "frontend", "user", "interface", "design"], "UX Architect"),
+    (&["perf", "performance", "latency", "throughput", "speed"], "Performance Engineer"),
+    (&["devops", "deploy", "ci", "cd", "pipeline", "ops"], "DevOps Architect"),
+    (&["ml", "ai", "model", "training", "inference"], "ML Engineer"),
+    (&["doc", "documentation", "spec", "rfc", "standard"], "Technical Writer"),
+];
+
+/// General-purpose roles used when keywords don't match
+const GENERAL_ROLES: &[&str] = &[
+    "Systems Thinker",
+    "Domain Expert",
+    "Devil's Advocate",
+    "Integration Specialist",
+    "Risk Analyst",
+    "First Principles Reasoner",
+    "Pattern Recognizer",
+    "Edge Case Hunter",
+];
+
+/// Select a role based on topic keywords
+fn select_role_for_topic(topic: &str, index: usize) -> &'static str {
+    let topic_lower = topic.to_lowercase();
+
+    // Try keyword matching first — pick the best match for this agent index
+    let mut matched_roles: Vec<&str> = Vec::new();
+    for (keywords, role) in ROLE_KEYWORDS {
+        if keywords.iter().any(|kw| topic_lower.contains(kw)) {
+            matched_roles.push(role);
+        }
+    }
+
+    if index < matched_roles.len() {
+        return matched_roles[index];
+    }
+
+    // Fall back to general roles
+    let general_idx = if matched_roles.is_empty() {
+        index
+    } else {
+        index - matched_roles.len()
+    };
+    GENERAL_ROLES[general_idx % GENERAL_ROLES.len()]
+}
+
+/// Compute tier boundaries for agent assignment
+fn tier_split(count: usize) -> (usize, usize, usize) {
+    if count <= 2 {
+        (count, 0, 0)
+    } else if count <= 5 {
+        let core = 1_usize.max(count / 3);
+        let wildcard = 1;
+        let adjacent = count - core - wildcard;
+        (core, adjacent, wildcard)
+    } else {
+        // ~33% core, ~42% adjacent, ~25% wildcard
+        let wildcard = count / 4;
+        let core = count / 3;
+        let adjacent = count - core - wildcard;
+        (core, adjacent, wildcard)
+    }
+}
+
+/// Assign pastry-themed agents with expert roles, tiers, and relevance
+pub fn assign_pastry_agents(count: usize, topic: &str) -> Vec<PastryAgent> {
+    let (core_count, adjacent_count, _wildcard_count) = tier_split(count);
+
+    (0..count)
+        .map(|i| {
+            let name = if i < PASTRY_NAMES.len() {
+                PASTRY_NAMES[i].to_string()
+            } else {
+                format!("Pastry{}", i + 1)
+            };
+            let role = select_role_for_topic(topic, i).to_string();
+            let (tier, relevance) = if i < core_count {
+                ("Core", 0.95 - (i as f64 * 0.05))
+            } else if i < core_count + adjacent_count {
+                let adj_idx = i - core_count;
+                ("Adjacent", 0.70 - (adj_idx as f64 * 0.05))
+            } else {
+                let wc_idx = i - core_count - adjacent_count;
+                ("Wildcard", 0.40 - (wc_idx as f64 * 0.05))
+            };
+            PastryAgent {
+                name,
+                role,
+                emoji: "🧁".to_string(),
+                tier: tier.to_string(),
+                relevance,
+            }
+        })
+        .collect()
+}
+
+/// Generate alignment dialogue markdown scaffold (ADR 0014 compliant)
+pub fn generate_alignment_dialogue_markdown(
+    title: &str,
+    number: i32,
+    rfc_title: Option<&str>,
+    agents: &[PastryAgent],
+) -> String {
+    let date = chrono::Local::now().format("%Y-%m-%d").to_string();
+    let time = chrono::Local::now().format("%H:%M").to_string();
+
+    let mut md = String::new();
+
+    // Title
+    md.push_str(&format!(
+        "# Alignment Dialogue: {}\n\n",
+        to_title_case(title)
+    ));
+
+    // Metadata
+    md.push_str(&format!("**Draft**: Dialogue {:04}\n", number));
+    md.push_str(&format!("**Date**: {} {}\n", date, time));
+    md.push_str("**Status**: In Progress\n");
+    md.push_str(&format!(
+        "**Participants**: 💙 Judge, {}\n",
+        agents
+            .iter()
+            .map(|a| format!("{} {}", a.emoji, a.name))
+            .collect::<Vec<_>>()
+            .join(", ")
+    ));
+    if let Some(rfc) = rfc_title {
+        md.push_str(&format!("**RFC**: {}\n", rfc));
+    }
+    md.push('\n');
+
+    // Expert Panel table
+    md.push_str("## Expert Panel\n\n");
+    md.push_str("| Agent | Role | Tier | Relevance | Emoji |\n");
+    md.push_str("|-------|------|------|-----------|-------|\n");
+    md.push_str("| 💙 Judge | Orchestrator | — | — | 💙 |\n");
+    for agent in agents {
+        md.push_str(&format!(
+            "| {} {} | {} | {} | {:.2} | {} |\n",
+            agent.emoji, agent.name, agent.role, agent.tier, agent.relevance, agent.emoji
+        ));
+    }
+    md.push('\n');
+
+    // Alignment Scoreboard (empty)
+    md.push_str("## Alignment Scoreboard\n\n");
+    md.push_str("| Agent | Wisdom | Consistency | Truth | Relationships | **Total** |\n");
+    md.push_str("|-------|--------|-------------|-------|---------------|----------|\n");
+    for agent in agents {
+        md.push_str(&format!(
+            "| {} {} | 0 | 0 | 0 | 0 | **0** |\n",
+            agent.emoji, agent.name
+        ));
+    }
+    md.push_str("\n**Total ALIGNMENT**: 0\n\n");
+
+    // Perspectives Inventory (empty)
+    md.push_str("## Perspectives Inventory\n\n");
+    md.push_str("| ID | Agent | Perspective | Round |\n");
+    md.push_str("|----|-------|-------------|-------|\n");
+    md.push_str("| — | — | [Awaiting Round 1] | — |\n\n");
+
+    // Tensions Tracker (empty)
+    md.push_str("## Tensions Tracker\n\n");
+    md.push_str("| ID | Tension | Status | Raised | Resolved |\n");
+    md.push_str("|----|---------|--------|--------|----------|\n");
+    md.push_str("| — | [Awaiting Round 1] | — | — | — |\n\n");
+
+    // Opening Arguments placeholder
+    md.push_str("## Round 0: Opening Arguments\n\n");
+    for agent in agents {
+        md.push_str(&format!("### {} {}\n\n", agent.name, agent.emoji));
+        md.push_str("[Awaiting response]\n\n");
+    }
+
+    md
+}
+
+/// Build the judge protocol JSON returned to the caller
+pub fn build_judge_protocol(
+    agents: &[PastryAgent],
+    dialogue_file: &str,
+    model: &str,
+    sources: &[String],
+) -> Value {
+    let agent_list: Vec<Value> = agents
+        .iter()
+        .map(|a| {
+            json!({
+                "name": a.name,
+                "role": a.role,
+                "emoji": a.emoji,
+                "tier": a.tier,
+                "relevance": a.relevance,
+            })
+        })
+        .collect();
+
+    let source_read_instructions = if sources.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "\n\nGROUNDING: Before responding, use the Read tool to read these files:\n{}",
+            sources
+                .iter()
+                .map(|s| format!("- {}", s))
+                .collect::<Vec<_>>()
+                .join("\n")
+        )
+    };
+
+    let agent_prompt_template = format!(
+        r##"You are {{{{NAME}}}} {{{{EMOJI}}}}, a {{{{ROLE}}}} in an ALIGNMENT-seeking dialogue.
+
+Your role:
+- SURFACE perspectives others may have missed
+- DEFEND valuable ideas with evidence, not ego
+- CHALLENGE assumptions with curiosity, not destruction
+- INTEGRATE perspectives that resonate
+- CONCEDE gracefully when others see something you missed
+
+You are in friendly competition: who can contribute MORE to the final ALIGNMENT?
+But you ALL win when the result is aligned. There are no losers here.
+
+FORMAT — use these markers:
+- [PERSPECTIVE Pnn: brief label] — new viewpoint you are surfacing
+- [TENSION Tn: brief description] — unresolved issue needing attention
+- [REFINEMENT: description] — improving a prior proposal
+- [CONCESSION: description] — acknowledging another was right
+- [RESOLVED Tn] — addressing a prior tension
+
+OUTPUT LIMIT — THIS IS MANDATORY:
+- MAXIMUM 400 words total per response
+- One or two [PERSPECTIVE] markers maximum
+- One [TENSION] marker maximum
+- If the topic needs more depth, save it for the next round
+- Aim for under 2000 characters total
+- DO NOT write essays, literature reviews, or exhaustive analyses
+- Be pointed and specific, not comprehensive{source_read_instructions}"##
+    );
+
+    let instructions = format!(
+        r##"You are the 💙 Judge. Orchestrate this alignment dialogue.
+
+=== HOW TO SPAWN EXPERT SUBAGENTS ===
+
+Spawn ALL {agent_count} experts in a SINGLE message with {agent_count} Task tool calls.
+Multiple Task calls in one message run as parallel subagents.
+
+Each Task call:
+- subagent_type: "alignment-expert"
+- description: "🧁 Muffin expert deliberation"
+- max_turns: 10
+- prompt: the AGENT PROMPT TEMPLATE with {{{{NAME}}}}, {{{{EMOJI}}}}, {{{{ROLE}}}} substituted
+- run_in_background: true
+
+All {agent_count} results return when complete. Read each agent's output from the results.
+
+=== ROUND WORKFLOW ===
+
+1. SPAWN: One message, {agent_count} Task calls (parallel subagents)
+2. READ: Each subagent returns its output directly
+3. SCORE: ALIGNMENT = Wisdom + Consistency + Truth + Relationships (UNBOUNDED)
+   - Score ONLY AFTER reading output — NEVER pre-fill scores
+4. UPDATE {dialogue_file}:
+   - Agent responses under the correct Round section
+   - Scoreboard with scores from this round
+   - Perspectives Inventory (one row per [PERSPECTIVE Pnn:] marker)
+   - Tensions Tracker (one row per [TENSION Tn:] marker)
+5. CONVERGE: If velocity approaches 0 OR all tensions resolved → declare convergence
+   Otherwise, start next round with updated prompt including prior perspectives
+   Maximum 5 rounds (safety valve)
+6. SAVE via blue_dialogue_save
+
+AGENTS: {agent_names}
+
+FORMAT RULES — MANDATORY:
+- ALWAYS prefix agent names with their emoji (🧁 Muffin) not bare name (Muffin)
+- The Judge is 💙 Judge — always include the 💙
+- Expert Panel table columns: Agent | Role | Tier | Relevance | Emoji
+- Round headers use emoji prefix (### 🧁 Muffin)
+- Scores start at 0 — only fill after reading round output
+
+IMPORTANT: Each agent has NO memory of other agents. They see only the topic and their role."##,
+        agent_count = agents.len(),
+        dialogue_file = dialogue_file,
+        agent_names = agents
+            .iter()
+            .map(|a| format!("{} {} ({})", a.emoji, a.name, a.role))
+            .collect::<Vec<_>>()
+            .join(", "),
+    );
+
+    json!({
+        "instructions": instructions,
+        "agent_prompt_template": agent_prompt_template,
+        "agents": agent_list,
+        "dialogue_file": dialogue_file,
+        "model": model,
+        "sources": sources,
+        "convergence": {
+            "max_rounds": 5,
+            "velocity_threshold": 0.1,
+            "tension_resolution_gate": true,
+        },
+    })
+}
+
 /// Convert slug to title case
 fn to_title_case(s: &str) -> String {
     s.split('-')
@@ -644,5 +1068,140 @@ mod tests {
         assert!(md.contains("| **RFC** | test-rfc |"));
         assert!(md.contains("A test summary"));
         assert!(md.contains("Some dialogue content"));
+    }
+
+    // ==================== Alignment Mode Tests ====================
+
+    #[test]
+    fn test_assign_pastry_agents() {
+        let agents = assign_pastry_agents(3, "system design");
+        assert_eq!(agents.len(), 3);
+        assert_eq!(agents[0].name, "Muffin");
+        assert_eq!(agents[1].name, "Cupcake");
+        assert_eq!(agents[2].name, "Scone");
+        for agent in &agents {
+            assert_eq!(agent.emoji, "🧁");
+            assert!(!agent.role.is_empty());
+        }
+    }
+
+    #[test]
+    fn test_assign_pastry_agents_overflow() {
+        let agents = assign_pastry_agents(25, "general topic");
+        assert_eq!(agents.len(), 25);
+        // First 20 use named pastries
+        assert_eq!(agents[0].name, "Muffin");
+        assert_eq!(agents[19].name, "Religieuse");
+        // Overflow agents get numbered names
+        assert_eq!(agents[20].name, "Pastry21");
+        assert_eq!(agents[24].name, "Pastry25");
+    }
+
+    #[test]
+    fn test_select_roles_for_topic() {
+        // Security topic should get Security Architect
+        let role = select_role_for_topic("security vulnerability assessment", 0);
+        assert_eq!(role, "Security Architect");
+
+        // API topic should get API Designer
+        let role = select_role_for_topic("api endpoint design", 0);
+        assert_eq!(role, "API Designer");
+
+        // Unknown topic falls back to general roles
+        let role = select_role_for_topic("something unusual", 0);
+        assert_eq!(role, "Systems Thinker");
+    }
+
+    #[test]
+    fn test_alignment_dialogue_markdown() {
+        let agents = assign_pastry_agents(3, "test topic");
+        let md = generate_alignment_dialogue_markdown(
+            "test-alignment",
+            1,
+            Some("test-rfc"),
+            &agents,
+        );
+
+        // Required sections
+        assert!(md.contains("# Alignment Dialogue:"));
+        assert!(md.contains("## Expert Panel"));
+        assert!(md.contains("## Alignment Scoreboard"));
+        assert!(md.contains("## Perspectives Inventory"));
+        assert!(md.contains("## Tensions Tracker"));
+        assert!(md.contains("## Round 0: Opening Arguments"));
+
+        // Agent names present
+        assert!(md.contains("Muffin"));
+        assert!(md.contains("Cupcake"));
+        assert!(md.contains("Scone"));
+
+        // Scoreboard structure
+        assert!(md.contains("| Wisdom | Consistency | Truth | Relationships |"));
+        assert!(md.contains("**Total ALIGNMENT**: 0"));
+
+        // Metadata
+        assert!(md.contains("**Draft**: Dialogue 0001"));
+        assert!(md.contains("**Status**: In Progress"));
+        assert!(md.contains("**RFC**: test-rfc"));
+        assert!(md.contains("💙 Judge"));
+    }
+
+    #[test]
+    fn test_build_judge_protocol() {
+        let agents = assign_pastry_agents(3, "system design");
+        let protocol = build_judge_protocol(
+            &agents,
+            "/tmp/test.dialogue.md",
+            "sonnet",
+            &["/tmp/source.rs".to_string()],
+        );
+
+        // Must have instructions
+        let instructions = protocol.get("instructions").unwrap().as_str().unwrap();
+        assert!(instructions.contains("run_in_background: true"));
+        assert!(instructions.contains("alignment-expert"));
+        assert!(instructions.contains("ALIGNMENT"));
+        assert!(instructions.contains("Wisdom"));
+        assert!(instructions.contains("convergence"));
+
+        // Must have agent prompt template with Read tool reference
+        let template = protocol.get("agent_prompt_template").unwrap().as_str().unwrap();
+        assert!(template.contains("{{NAME}}"));
+        assert!(template.contains("{{ROLE}}"));
+        assert!(template.contains("PERSPECTIVE"));
+        assert!(template.contains("TENSION"));
+        assert!(template.contains("Read tool"));
+
+        // Must have agents array
+        let agents_arr = protocol.get("agents").unwrap().as_array().unwrap();
+        assert_eq!(agents_arr.len(), 3);
+        assert_eq!(agents_arr[0]["name"], "Muffin");
+
+        // Must have model
+        assert_eq!(protocol["model"], "sonnet");
+
+        // Must have sources
+        let sources = protocol["sources"].as_array().unwrap();
+        assert_eq!(sources.len(), 1);
+        assert_eq!(sources[0], "/tmp/source.rs");
+
+        // Must have convergence params
+        assert_eq!(protocol["convergence"]["max_rounds"], 5);
+        assert!(protocol["convergence"]["tension_resolution_gate"].as_bool().unwrap());
+    }
+
+    #[test]
+    fn test_build_judge_protocol_no_sources() {
+        let agents = assign_pastry_agents(2, "quick topic");
+        let protocol = build_judge_protocol(
+            &agents,
+            "/tmp/test.dialogue.md",
+            "haiku",
+            &[],
+        );
+
+        // Template should NOT contain grounding instructions when no sources
+        let template = protocol.get("agent_prompt_template").unwrap().as_str().unwrap();
+        assert!(!template.contains("GROUNDING"));
     }
 }

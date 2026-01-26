@@ -234,7 +234,22 @@ impl BlueServer {
             "serverInfo": {
                 "name": "blue",
                 "version": env!("CARGO_PKG_VERSION")
-            }
+            },
+            "instructions": concat!(
+                "You are working with Blue, a project management and workflow tool.\n\n",
+                "HOW BLUE SPEAKS — follow these patterns when writing responses:\n",
+                "Do: Keep it to 2 sentences before action. Put questions at the end. ",
+                "Suggest what to do next when something goes wrong. Trust the user's competence.\n",
+                "Don't: Use exclamation marks in errors. Apologize for system behavior. ",
+                "Hedge with \"maybe\" or \"perhaps\" or \"I think\". Over-explain.\n\n",
+                "THE 14 ADRs — beliefs this project is built on (in .blue/docs/adrs/):\n",
+                "0. Never Give Up  1. Purpose  2. Presence  3. Home  ",
+                "4. Evidence  5. Single Source  6. Relationships  7. Integrity  ",
+                "8. Honor  9. Courage  10. No Dead Code  ",
+                "11. Freedom Through Constraint  12. Faith  13. Overflow\n",
+                "Arc: Ground (0) → Welcome (1-3) → Integrity (4-7) → Commitment (8-10) → Flourishing (11-13)\n\n",
+                "All docs live in .blue/docs/ — use blue_status to see what's happening, blue_next for what's next."
+            )
         }))
     }
 
@@ -1468,7 +1483,7 @@ impl BlueServer {
                 },
                 {
                     "name": "blue_dialogue_create",
-                    "description": "Create a new dialogue document with SQLite metadata. Dialogues capture agent conversations and can be linked to RFCs.",
+                    "description": "Create a new dialogue document. Pass alignment: true for multi-agent alignment dialogues (ADR 0014). When alignment is enabled, the response message contains a JUDGE PROTOCOL section — you MUST follow those instructions exactly to orchestrate the dialogue. The protocol tells you how to spawn background agents, score them, and run convergence rounds.",
                     "inputSchema": {
                         "type": "object",
                         "properties": {
@@ -1487,6 +1502,23 @@ impl BlueServer {
                             "content": {
                                 "type": "string",
                                 "description": "Full dialogue content"
+                            },
+                            "alignment": {
+                                "type": "boolean",
+                                "description": "Enable alignment mode — returns a judge protocol with pastry-themed expert agents"
+                            },
+                            "agents": {
+                                "type": "integer",
+                                "description": "Number of cupcake agents (alignment mode only, default 3)"
+                            },
+                            "model": {
+                                "type": "string",
+                                "description": "Model for agents: sonnet, opus, or haiku (alignment mode only, default sonnet)"
+                            },
+                            "sources": {
+                                "type": "array",
+                                "items": { "type": "string" },
+                                "description": "File paths agents must Read for grounding (alignment mode only)"
                             }
                         },
                         "required": ["title"]

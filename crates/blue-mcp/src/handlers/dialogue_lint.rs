@@ -71,6 +71,9 @@ struct ParsedDialogue {
 
     // For emoji consistency
     agent_emojis: HashMap<String, String>,
+
+    // Expert panel (alignment dialogues)
+    has_expert_panel: bool,
 }
 
 /// Handle blue_dialogue_lint
@@ -116,6 +119,7 @@ pub fn handle_dialogue_lint(args: &Value) -> Result<Value, ServerError> {
     checks.push(check_scoreboard_math(&parsed));
     checks.push(check_round_numbering(&parsed));
     checks.push(check_emoji_consistency(&parsed));
+    checks.push(check_expert_panel(&parsed, &content));
 
     // Calculate weighted score
     let mut total_weight = 0u32;
@@ -240,6 +244,10 @@ fn parse_dialogue(content: &str) -> ParsedDialogue {
     let tensions_re = Regex::new(r"(?i)##\s*Tensions\s+Tracker").unwrap();
     parsed.has_perspectives_inventory = perspectives_re.is_match(content);
     parsed.has_tensions_tracker = tensions_re.is_match(content);
+
+    // Expert panel
+    let expert_panel_re = Regex::new(r"(?i)##\s*Expert\s+Panel").unwrap();
+    parsed.has_expert_panel = expert_panel_re.is_match(content);
 
     // Rounds (case-insensitive)
     let round_re = Regex::new(r"(?i)##\s*Round\s+(\d+)").unwrap();
@@ -619,6 +627,38 @@ fn check_emoji_consistency(parsed: &ParsedDialogue) -> CheckResult {
             None
         } else {
             Some("Add emoji to agent headers: ### Muffin 🧁".to_string())
+        },
+    }
+}
+
+/// Check for Expert Panel section (alignment dialogues only).
+/// Only fires when "Alignment Scoreboard" is present (indicating alignment mode).
+fn check_expert_panel(parsed: &ParsedDialogue, content: &str) -> CheckResult {
+    let is_alignment = content.contains("Alignment Scoreboard");
+
+    if !is_alignment {
+        return CheckResult {
+            name: "expert-panel",
+            severity: Severity::Minor,
+            pass: true,
+            message: "Not an alignment dialogue, expert panel not required".to_string(),
+            fix_hint: None,
+        };
+    }
+
+    CheckResult {
+        name: "expert-panel",
+        severity: Severity::Minor,
+        pass: parsed.has_expert_panel,
+        message: if parsed.has_expert_panel {
+            "Expert Panel section present".to_string()
+        } else {
+            "Alignment dialogue missing '## Expert Panel' section".to_string()
+        },
+        fix_hint: if parsed.has_expert_panel {
+            None
+        } else {
+            Some("Add '## Expert Panel' table with Agent/Role/Emoji columns".to_string())
         },
     }
 }

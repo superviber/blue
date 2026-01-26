@@ -2,7 +2,8 @@
 
 | | |
 |---|---|
-| **Status** | Approved |
+| **Status** | Superseded |
+| **Superseded By** | [RFC 0022: Filesystem Authority](./0022-filesystem-authority.md) |
 | **Date** | 2026-01-25 |
 | **Dialogue** | [rfc-document-import-sync](../dialogues/rfc-document-import-sync.dialogue.md) |
 
