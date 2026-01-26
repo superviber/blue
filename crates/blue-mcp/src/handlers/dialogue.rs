@@ -8,7 +8,7 @@ use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use blue_core::{DocType, Document, LinkType, ProjectState};
+use blue_core::{DocType, Document, LinkType, ProjectState, title_to_slug};
 use serde::Serialize;
 use serde_json::{json, Value};
 
@@ -344,9 +344,9 @@ pub fn handle_create(state: &mut ProjectState, args: &Value) -> Result<Value, Se
         .next_number_with_fs(DocType::Dialogue, &state.home.docs_path)
         .map_err(|e| ServerError::CommandFailed(e.to_string()))?;
 
-    // Generate file path with date prefix
-    let date = chrono::Local::now().format("%Y-%m-%d").to_string();
-    let file_name = format!("{}-{}.dialogue.md", date, to_kebab_case(title));
+    // Generate file path with ISO 8601 timestamp prefix (RFC 0031)
+    let timestamp = blue_core::utc_timestamp();
+    let file_name = format!("{}-{}.dialogue.recorded.md", timestamp, title_to_slug(title));
     let file_path = PathBuf::from("dialogues").join(&file_name);
     let docs_path = state.home.docs_path.clone();
     let dialogue_path = docs_path.join(&file_path);
@@ -372,6 +372,19 @@ pub fn handle_create(state: &mut ProjectState, args: &Value) -> Result<Value, Se
         (md, None)
     };
 
+    // Create dialogues directory if it doesn't exist
+    if let Some(parent) = dialogue_path.parent() {
+        fs::create_dir_all(parent).map_err(|e| ServerError::CommandFailed(e.to_string()))?;
+    }
+
+    // Overwrite protection (RFC 0031)
+    if dialogue_path.exists() {
+        return Err(ServerError::CommandFailed(format!(
+            "File already exists: {}",
+            dialogue_path.display()
+        )));
+    }
+
     // Create document in SQLite store
     let mut doc = Document::new(DocType::Dialogue, title, "recorded");
     doc.number = Some(dialogue_number);
@@ -393,10 +406,6 @@ pub fn handle_create(state: &mut ProjectState, args: &Value) -> Result<Value, Se
         }
     }
 
-    // Create dialogues directory if it doesn't exist
-    if let Some(parent) = dialogue_path.parent() {
-        fs::create_dir_all(parent).map_err(|e| ServerError::CommandFailed(e.to_string()))?;
-    }
     fs::write(&dialogue_path, &markdown).map_err(|e| ServerError::CommandFailed(e.to_string()))?;
 
     // Build response — RFC 0023: inject protocol as prose in message field
@@ -647,8 +656,8 @@ fn generate_dialogue_markdown(
     summary: Option<&str>,
     content: Option<&str>,
 ) -> String {
-    let date = chrono::Local::now().format("%Y-%m-%d").to_string();
-    let time = chrono::Local::now().format("%H:%M").to_string();
+    let date = chrono::Utc::now().format("%Y-%m-%d").to_string();
+    let time = chrono::Utc::now().format("%H:%MZ").to_string();
 
     let mut md = String::new();
 
@@ -698,17 +707,6 @@ fn generate_dialogue_markdown(
     md
 }
 
-/// Convert a string to kebab-case for filenames
-fn to_kebab_case(s: &str) -> String {
-    s.to_lowercase()
-        .chars()
-        .map(|c| if c.is_alphanumeric() { c } else { '-' })
-        .collect::<String>()
-        .split('-')
-        .filter(|s| !s.is_empty())
-        .collect::<Vec<_>>()
-        .join("-")
-}
 
 // ==================== Alignment Mode Helpers ====================
 
@@ -820,8 +818,8 @@ pub fn generate_alignment_dialogue_markdown(
     rfc_title: Option<&str>,
     agents: &[PastryAgent],
 ) -> String {
-    let date = chrono::Local::now().format("%Y-%m-%d").to_string();
-    let time = chrono::Local::now().format("%H:%M").to_string();
+    let date = chrono::Utc::now().format("%Y-%m-%d").to_string();
+    let time = chrono::Utc::now().format("%H:%MZ").to_string();
 
     let mut md = String::new();
 
@@ -877,16 +875,16 @@ pub fn generate_alignment_dialogue_markdown(
     md.push_str("## Perspectives Inventory\n\n");
     md.push_str("| ID | Agent | Perspective | Round |\n");
     md.push_str("|----|-------|-------------|-------|\n");
-    md.push_str("| — | — | [Awaiting Round 1] | — |\n\n");
+    md.push_str("| — | — | [Awaiting Round 0] | — |\n\n");
 
     // Tensions Tracker (empty)
     md.push_str("## Tensions Tracker\n\n");
     md.push_str("| ID | Tension | Status | Raised | Resolved |\n");
     md.push_str("|----|---------|--------|--------|----------|\n");
-    md.push_str("| — | [Awaiting Round 1] | — | — | — |\n\n");
+    md.push_str("| — | [Awaiting Round 0] | — | — | — |\n\n");
 
     // Opening Arguments placeholder
-    md.push_str("## Round 1: Opening Arguments\n\n");
+    md.push_str("## Round 0: Opening Arguments\n\n");
     for agent in agents {
         md.push_str(&format!("### {} {}\n\n", agent.name, agent.emoji));
         md.push_str("[Awaiting response]\n\n");
@@ -1050,9 +1048,9 @@ mod tests {
     }
 
     #[test]
-    fn test_to_kebab_case() {
-        assert_eq!(to_kebab_case("RFC Implementation Discussion"), "rfc-implementation-discussion");
-        assert_eq!(to_kebab_case("quick-chat"), "quick-chat");
+    fn test_title_to_slug() {
+        assert_eq!(title_to_slug("RFC Implementation Discussion"), "rfc-implementation-discussion");
+        assert_eq!(title_to_slug("quick-chat"), "quick-chat");
     }
 
     #[test]
@@ -1128,7 +1126,7 @@ mod tests {
         assert!(md.contains("## Alignment Scoreboard"));
         assert!(md.contains("## Perspectives Inventory"));
         assert!(md.contains("## Tensions Tracker"));
-        assert!(md.contains("## Round 1: Opening Arguments"));
+        assert!(md.contains("## Round 0: Opening Arguments"));
 
         // Agent names present
         assert!(md.contains("Muffin"));

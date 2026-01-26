@@ -101,11 +101,10 @@ pub fn handle_dialogue_lint(args: &Value) -> Result<Value, ServerError> {
     let parsed = parse_dialogue(&content);
 
     // Run all checks
-    let mut checks = Vec::new();
-
-    // Critical checks
-    checks.push(check_rounds_present(&parsed));
-    checks.push(check_markers_parseable(&content));
+    let mut checks = vec![
+        check_rounds_present(&parsed),
+        check_markers_parseable(&content),
+    ];
 
     // Major checks
     checks.push(check_convergence_gate(&parsed));
@@ -478,12 +477,12 @@ fn check_round_sequencing(parsed: &ParsedDialogue) -> CheckResult {
             severity: Severity::Major,
             pass: false,
             message: "No rounds to check".to_string(),
-            fix_hint: Some("Add '## Round 1' section".to_string()),
+            fix_hint: Some("Add '## Round 0' section".to_string()),
         };
     }
 
-    // Check rounds are sequential starting from 1
-    let expected: Vec<u32> = (1..=parsed.rounds.len() as u32).collect();
+    // Check rounds are sequential starting from 0
+    let expected: Vec<u32> = (0..parsed.rounds.len() as u32).collect();
     let pass = parsed.rounds == expected;
 
     CheckResult {
@@ -491,7 +490,7 @@ fn check_round_sequencing(parsed: &ParsedDialogue) -> CheckResult {
         severity: Severity::Major,
         pass,
         message: if pass {
-            format!("Rounds 1-{} sequential", parsed.rounds.len())
+            format!("Rounds 0-{} sequential", parsed.rounds.len().saturating_sub(1))
         } else {
             format!(
                 "Round sequence gap: found {:?}, expected {:?}",
@@ -501,7 +500,7 @@ fn check_round_sequencing(parsed: &ParsedDialogue) -> CheckResult {
         fix_hint: if pass {
             None
         } else {
-            Some("Renumber rounds sequentially starting from 1".to_string())
+            Some("Renumber rounds sequentially starting from 0".to_string())
         },
     }
 }
@@ -592,21 +591,21 @@ fn check_round_numbering(parsed: &ParsedDialogue) -> CheckResult {
         };
     }
 
-    let starts_at_one = parsed.rounds.first() == Some(&1);
+    let starts_at_zero = parsed.rounds.first() == Some(&0);
 
     CheckResult {
         name: "round-numbering",
         severity: Severity::Minor,
-        pass: starts_at_one,
-        message: if starts_at_one {
-            "Rounds start at 1".to_string()
+        pass: starts_at_zero,
+        message: if starts_at_zero {
+            "Rounds start at 0".to_string()
         } else {
-            format!("Rounds don't start at 1: {:?}", parsed.rounds)
+            format!("Rounds don't start at 0: {:?}", parsed.rounds)
         },
-        fix_hint: if starts_at_one {
+        fix_hint: if starts_at_zero {
             None
         } else {
-            Some("Start round numbering at 1".to_string())
+            Some("Start round numbering at 0".to_string())
         },
     }
 }
@@ -670,21 +669,21 @@ mod tests {
     #[test]
     fn test_parse_dialogue_rounds() {
         let content = r#"
-## Round 1
+## Round 0
 ### Muffin 🧁
 Some content
-## Round 2
+## Round 1
 ### Cupcake 🧁
 More content
 "#;
         let parsed = parse_dialogue(content);
-        assert_eq!(parsed.rounds, vec![1, 2]);
+        assert_eq!(parsed.rounds, vec![0, 1]);
     }
 
     #[test]
     fn test_check_rounds_present_pass() {
         let mut parsed = ParsedDialogue::default();
-        parsed.rounds = vec![1, 2];
+        parsed.rounds = vec![0, 1];
         let result = check_rounds_present(&parsed);
         assert!(result.pass);
     }

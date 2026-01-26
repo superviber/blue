@@ -138,7 +138,7 @@ impl AuditType {
         }
     }
 
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
             "repository" => Some(AuditType::Repository),
             "security" => Some(AuditType::Security),
@@ -509,6 +509,11 @@ impl Audit {
 /// Get current date in YYYY-MM-DD format
 fn today() -> String {
     chrono::Utc::now().format("%Y-%m-%d").to_string()
+}
+
+/// Get current UTC timestamp in ISO 8601 compact format: `YYYY-MM-DDTHHmmZ`
+pub fn utc_timestamp() -> String {
+    chrono::Utc::now().format("%Y-%m-%dT%H%MZ").to_string()
 }
 
 /// Convert kebab-case to Title Case

@@ -108,15 +108,16 @@ pub fn handle_mock(args: &Value, repo_path: &Path) -> Result<Value, ServerError>
     }))
 }
 
-fn detect_dependencies(
-    path: &Path,
-) -> (
+/// Result of dependency detection scan
+type DependencyDetection = (
     Vec<Dependency>,
     Vec<String>,
     Option<String>,
     bool,
     HashMap<String, String>,
-) {
+);
+
+fn detect_dependencies(path: &Path) -> DependencyDetection {
     let mut dependencies = Vec::new();
     let mut env_files = Vec::new();
     let mut mock_config = HashMap::new();

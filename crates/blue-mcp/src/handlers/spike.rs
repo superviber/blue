@@ -4,7 +4,7 @@
 
 use std::fs;
 
-use blue_core::{DocType, Document, ProjectState, Spike, SpikeOutcome};
+use blue_core::{DocType, Document, ProjectState, Spike, SpikeOutcome, title_to_slug};
 use serde_json::{json, Value};
 
 use crate::error::ServerError;
@@ -29,9 +29,9 @@ pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, Server
         spike.time_box = Some(tb.to_string());
     }
 
-    // Generate filename with date
-    let date = chrono::Utc::now().format("%Y-%m-%d").to_string();
-    let filename = format!("spikes/{}-{}.md", date, to_kebab_case(title));
+    // Generate filename with ISO 8601 timestamp (RFC 0031)
+    let timestamp = blue_core::utc_timestamp();
+    let filename = format!("spikes/{}-{}.wip.md", timestamp, title_to_slug(title));
 
     // Generate markdown
     let markdown = spike.to_markdown();
@@ -41,6 +41,12 @@ pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, Server
     let spike_path = docs_path.join(&filename);
     if let Some(parent) = spike_path.parent() {
         fs::create_dir_all(parent).map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+    }
+    if spike_path.exists() {
+        return Err(ServerError::CommandFailed(format!(
+            "File already exists: {}",
+            spike_path.display()
+        )));
     }
     fs::write(&spike_path, &markdown).map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
 
@@ -57,7 +63,7 @@ pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, Server
         "status": "success",
         "id": id,
         "title": title,
-        "date": date,
+        "date": timestamp,
         "file": spike_path.display().to_string(),
         "markdown": markdown,
         "message": blue_core::voice::success(
@@ -121,10 +127,14 @@ pub fn handle_complete(state: &ProjectState, args: &Value) -> Result<Value, Serv
         .update_document_status(DocType::Spike, title, "complete")
         .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
 
-    // Update markdown file (RFC 0008: use shared helper)
-    if let Some(ref file_path) = doc.file_path {
-        let full_path = state.home.docs_path.join(file_path);
-        let _ = blue_core::update_markdown_status(&full_path, "complete");
+    // Rename file for new status (RFC 0031)
+    let final_path = blue_core::rename_for_status(&state.home.docs_path, &state.store, &doc, "complete")
+        .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+
+    // Update markdown at effective path
+    let effective_path = final_path.as_deref().or(doc.file_path.as_deref());
+    if let Some(p) = effective_path {
+        let _ = blue_core::update_markdown_status(&state.home.docs_path.join(p), "complete");
     }
 
     let hint = match outcome {
@@ -144,14 +154,3 @@ pub fn handle_complete(state: &ProjectState, args: &Value) -> Result<Value, Serv
     }))
 }
 
-/// Convert a string to kebab-case for filenames
-fn to_kebab_case(s: &str) -> String {
-    s.to_lowercase()
-        .chars()
-        .map(|c| if c.is_alphanumeric() { c } else { '-' })
-        .collect::<String>()
-        .split('-')
-        .filter(|s| !s.is_empty())
-        .collect::<Vec<_>>()
-        .join("-")
-}

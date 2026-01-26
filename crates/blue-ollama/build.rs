@@ -7,7 +7,7 @@
 use std::env;
 use std::fs::{self, File};
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Ollama version to download
 const OLLAMA_VERSION: &str = "v0.5.4";
@@ -121,7 +121,7 @@ fn download_binary(url: &str, dest: &PathBuf) -> Result<(), Box<dyn std::error::
 }
 
 /// Write the binary path to a file for runtime discovery
-fn write_binary_path(out_dir: &PathBuf, binary_path: &PathBuf) {
+fn write_binary_path(out_dir: &Path, binary_path: &Path) {
     let path_file = out_dir.join("ollama_binary_path.txt");
     if let Ok(mut file) = File::create(&path_file) {
         let _ = writeln!(file, "{}", binary_path.display());

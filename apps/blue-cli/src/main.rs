@@ -767,9 +767,7 @@ async fn handle_realm_command(command: RealmCommands) -> Result<()> {
                 }
             }
 
-            if has_errors {
-                std::process::exit(1);
-            } else if strict && has_warnings {
+            if has_errors || (strict && has_warnings) {
                 std::process::exit(1);
             }
         }

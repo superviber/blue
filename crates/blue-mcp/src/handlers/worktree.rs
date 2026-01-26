@@ -406,23 +406,16 @@ pub fn handle_remove(state: &ProjectState, args: &Value) -> Result<Value, Server
     if !force {
         let repo_path = state.home.root.clone();
         if let Ok(repo) = git2::Repository::open(&repo_path) {
-            match blue_core::repo::is_branch_merged(&repo, &worktree.branch_name, "main") {
-                Ok(false) => {
-                    // Also check develop
-                    match blue_core::repo::is_branch_merged(&repo, &worktree.branch_name, "develop") {
-                        Ok(false) => {
-                            return Ok(json!({
-                                "status": "error",
-                                "message": blue_core::voice::error(
-                                    &format!("Branch '{}' isn't merged yet", worktree.branch_name),
-                                    "Merge first, or use force=true to remove anyway"
-                                )
-                            }));
-                        }
-                        _ => {} // Merged into develop, ok
-                    }
+            if let Ok(false) = blue_core::repo::is_branch_merged(&repo, &worktree.branch_name, "main") {
+                if let Ok(false) = blue_core::repo::is_branch_merged(&repo, &worktree.branch_name, "develop") {
+                    return Ok(json!({
+                        "status": "error",
+                        "message": blue_core::voice::error(
+                            &format!("Branch '{}' isn't merged yet", worktree.branch_name),
+                            "Merge first, or use force=true to remove anyway"
+                        )
+                    }));
                 }
-                _ => {} // Merged into main, ok
             }
         }
     }

@@ -5,7 +5,7 @@
 
 use std::fs;
 
-use blue_core::{DocType, Document, ProjectState};
+use blue_core::{DocType, Document, ProjectState, title_to_slug};
 use serde_json::{json, Value};
 
 use crate::error::ServerError;
@@ -39,7 +39,7 @@ pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, Server
         .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
 
     // Generate file path
-    let file_name = format!("{:04}-{}.md", prd_number, to_kebab_case(title));
+    let file_name = format!("{:04}-{}.draft.md", prd_number, title_to_slug(title));
     let file_path = state.home.docs_path.join("prds").join(&file_name);
 
     // Ensure directory exists
@@ -53,8 +53,9 @@ pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, Server
     // Write file
     fs::write(&file_path, &markdown).map_err(|e| ServerError::CommandFailed(e.to_string()))?;
 
-    // Add to store
-    let doc = Document::new(DocType::Prd, title, "draft");
+    // Add to store (RFC 0031: set file_path for rename support)
+    let mut doc = Document::new(DocType::Prd, title, "draft");
+    doc.file_path = Some(format!("prds/{}", file_name));
     state
         .store
         .add_document(&doc)
@@ -150,6 +151,16 @@ pub fn handle_approve(state: &ProjectState, args: &Value) -> Result<Value, Serve
         .update_document_status(DocType::Prd, title, "approved")
         .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
 
+    // Rename file for new status (RFC 0031)
+    let final_path = blue_core::rename_for_status(&state.home.docs_path, &state.store, &doc, "approved")
+        .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+
+    // Update markdown at effective path
+    let effective_path = final_path.as_deref().or(doc.file_path.as_deref());
+    if let Some(p) = effective_path {
+        let _ = blue_core::update_markdown_status(&state.home.docs_path.join(p), "approved");
+    }
+
     Ok(json!({
         "status": "success",
         "message": blue_core::voice::success(
@@ -209,6 +220,16 @@ pub fn handle_complete(state: &ProjectState, args: &Value) -> Result<Value, Serv
         .update_document_status(DocType::Prd, title, "implemented")
         .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
 
+    // Rename file for new status (RFC 0031)
+    let final_path = blue_core::rename_for_status(&state.home.docs_path, &state.store, &doc, "implemented")
+        .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+
+    // Update markdown at effective path
+    let effective_path = final_path.as_deref().or(doc.file_path.as_deref());
+    if let Some(p) = effective_path {
+        let _ = blue_core::update_markdown_status(&state.home.docs_path.join(p), "implemented");
+    }
+
     Ok(json!({
         "status": "success",
         "message": blue_core::voice::success(
@@ -264,16 +285,6 @@ pub fn handle_list(state: &ProjectState, args: &Value) -> Result<Value, ServerEr
 
 // ===== Helper Functions =====
 
-fn to_kebab_case(s: &str) -> String {
-    s.to_lowercase()
-        .chars()
-        .map(|c| if c.is_alphanumeric() { c } else { '-' })
-        .collect::<String>()
-        .split('-')
-        .filter(|s| !s.is_empty())
-        .collect::<Vec<_>>()
-        .join("-")
-}
 
 fn generate_prd_markdown(
     title: &str,
@@ -397,9 +408,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_to_kebab_case() {
-        assert_eq!(to_kebab_case("Hello World"), "hello-world");
-        assert_eq!(to_kebab_case("user-auth"), "user-auth");
+    fn test_title_to_slug() {
+        assert_eq!(title_to_slug("Hello World"), "hello-world");
+        assert_eq!(title_to_slug("user-auth"), "user-auth");
     }
 
     #[test]

@@ -36,7 +36,7 @@ impl PlanStatus {
         }
     }
 
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse(s: &str) -> Option<Self> {
         match s.to_lowercase().replace(' ', "-").as_str() {
             "in-progress" => Some(PlanStatus::InProgress),
             "complete" => Some(PlanStatus::Complete),
@@ -103,7 +103,7 @@ pub fn parse_plan_markdown(content: &str) -> Result<PlanFile, PlanError> {
         })
         .unwrap_or_else(|| "in-progress".to_string());
 
-    let status = PlanStatus::from_str(&status_str).unwrap_or(PlanStatus::InProgress);
+    let status = PlanStatus::parse(&status_str).unwrap_or(PlanStatus::InProgress);
 
     // Extract updated_at from table: | **Updated** | {timestamp} |
     let updated_re = Regex::new(r"\| \*\*Updated\*\* \| ([^|]+) \|").unwrap();
@@ -162,7 +162,7 @@ pub fn generate_plan_markdown(plan: &PlanFile) -> String {
     md.push_str(&format!("| **RFC** | {} |\n", plan.rfc_title));
     md.push_str(&format!("| **Status** | {} |\n", plan.status.as_str()));
     md.push_str(&format!("| **Updated** | {} |\n", plan.updated_at));
-    md.push_str("\n");
+    md.push('\n');
 
     // Tasks section
     md.push_str("## Tasks\n\n");
@@ -207,7 +207,7 @@ pub fn is_cache_stale(plan_path: &Path, cache_mtime: Option<&str>) -> bool {
     let file_mtime_str = file_mtime.to_rfc3339();
 
     // Cache is stale if file is newer
-    file_mtime_str > cache_mtime.to_string()
+    file_mtime_str.as_str() > cache_mtime
 }
 
 /// Read and parse a plan file from disk
@@ -366,18 +366,18 @@ mod tests {
     #[test]
     fn test_status_from_str() {
         assert_eq!(
-            PlanStatus::from_str("in-progress"),
+            PlanStatus::parse("in-progress"),
             Some(PlanStatus::InProgress)
         );
         assert_eq!(
-            PlanStatus::from_str("In Progress"),
+            PlanStatus::parse("In Progress"),
             Some(PlanStatus::InProgress)
         );
-        assert_eq!(PlanStatus::from_str("complete"), Some(PlanStatus::Complete));
+        assert_eq!(PlanStatus::parse("complete"), Some(PlanStatus::Complete));
         assert_eq!(
-            PlanStatus::from_str("updating-plan"),
+            PlanStatus::parse("updating-plan"),
             Some(PlanStatus::UpdatingPlan)
         );
-        assert_eq!(PlanStatus::from_str("invalid"), None);
+        assert_eq!(PlanStatus::parse("invalid"), None);
     }
 }

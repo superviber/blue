@@ -105,10 +105,14 @@ pub fn handle_complete(state: &ProjectState, args: &Value) -> Result<Value, Serv
         .update_document_status(DocType::Rfc, title, "implemented")
         .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
 
-    // Update markdown file (RFC 0008)
-    if let Some(ref file_path) = doc.file_path {
-        let full_path = state.home.docs_path.join(file_path);
-        let _ = blue_core::update_markdown_status(&full_path, "implemented");
+    // Rename file for new status (RFC 0031)
+    let final_path = blue_core::rename_for_status(&state.home.docs_path, &state.store, &doc, "implemented")
+        .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+
+    // Update markdown at effective path
+    let effective_path = final_path.as_deref().or(doc.file_path.as_deref());
+    if let Some(p) = effective_path {
+        let _ = blue_core::update_markdown_status(&state.home.docs_path.join(p), "implemented");
     }
 
     // Determine follow-up needs

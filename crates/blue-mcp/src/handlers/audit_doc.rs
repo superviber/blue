@@ -27,15 +27,15 @@ pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, Server
         .and_then(|v| v.as_str())
         .unwrap_or("Project audit");
 
-    let audit_type = AuditType::from_str(audit_type_str)
+    let audit_type = AuditType::parse(audit_type_str)
         .unwrap_or(AuditType::Custom);
 
     // Create the audit
     let audit = Audit::new(title, audit_type, scope);
 
-    // Generate filename with date
-    let date = chrono::Utc::now().format("%Y-%m-%d").to_string();
-    let filename = format!("audits/{}-{}.md", date, title);
+    // Generate filename with ISO 8601 timestamp (RFC 0031)
+    let timestamp = blue_core::utc_timestamp();
+    let filename = format!("audits/{}-{}.wip.md", timestamp, title);
 
     // Generate markdown
     let markdown = audit.to_markdown();
@@ -45,6 +45,12 @@ pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, Server
     let audit_path = docs_path.join(&filename);
     if let Some(parent) = audit_path.parent() {
         fs::create_dir_all(parent).map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+    }
+    if audit_path.exists() {
+        return Err(ServerError::CommandFailed(format!(
+            "File already exists: {}",
+            audit_path.display()
+        )));
     }
     fs::write(&audit_path, &markdown).map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
 
@@ -62,7 +68,7 @@ pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, Server
         "id": id,
         "title": title,
         "audit_type": audit_type_str,
-        "date": date,
+        "date": timestamp,
         "file": audit_path.display().to_string(),
         "markdown": markdown,
         "message": blue_core::voice::success(
@@ -158,10 +164,14 @@ pub fn handle_complete(state: &ProjectState, args: &Value) -> Result<Value, Serv
         .update_document_status(DocType::Audit, title, "complete")
         .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
 
-    // Update markdown file (RFC 0008)
-    if let Some(ref file_path) = doc.file_path {
-        let full_path = state.home.docs_path.join(file_path);
-        let _ = blue_core::update_markdown_status(&full_path, "complete");
+    // Rename file for new status (RFC 0031)
+    let final_path = blue_core::rename_for_status(&state.home.docs_path, &state.store, &doc, "complete")
+        .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+
+    // Update markdown at effective path
+    let effective_path = final_path.as_deref().or(doc.file_path.as_deref());
+    if let Some(p) = effective_path {
+        let _ = blue_core::update_markdown_status(&state.home.docs_path.join(p), "complete");
     }
 
     Ok(json!({

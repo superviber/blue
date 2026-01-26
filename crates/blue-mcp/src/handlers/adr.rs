@@ -6,7 +6,7 @@
 use std::fs;
 use std::path::Path;
 
-use blue_core::{Adr, DocType, Document, ProjectState};
+use blue_core::{Adr, DocType, Document, ProjectState, title_to_slug};
 use serde_json::{json, Value};
 
 use crate::error::ServerError;
@@ -87,7 +87,7 @@ pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, Server
     let markdown = adr.to_markdown(number as u32);
 
     // Compute file path
-    let file_name = format!("{:04}-{}.md", number, to_kebab_case(title));
+    let file_name = format!("{:04}-{}.accepted.md", number, title_to_slug(title));
     let file_path = format!("adrs/{}", file_name);
 
     // Write the file
@@ -730,26 +730,15 @@ fn check_dead_code(project_root: &Path) -> DeadCodeResult {
     }
 }
 
-/// Convert a string to kebab-case
-fn to_kebab_case(s: &str) -> String {
-    s.to_lowercase()
-        .chars()
-        .map(|c| if c.is_alphanumeric() { c } else { '-' })
-        .collect::<String>()
-        .split('-')
-        .filter(|s| !s.is_empty())
-        .collect::<Vec<_>>()
-        .join("-")
-}
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn test_to_kebab_case() {
-        assert_eq!(to_kebab_case("Evidence Based"), "evidence-based");
-        assert_eq!(to_kebab_case("No Dead Code"), "no-dead-code");
+    fn test_title_to_slug() {
+        assert_eq!(title_to_slug("Evidence Based"), "evidence-based");
+        assert_eq!(title_to_slug("No Dead Code"), "no-dead-code");
     }
 
     #[test]

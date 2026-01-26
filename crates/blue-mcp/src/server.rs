@@ -9,7 +9,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use tracing::{debug, info};
 
-use blue_core::{detect_blue, DocType, Document, ProjectState, Rfc, RfcStatus, validate_rfc_transition};
+use blue_core::{detect_blue, DocType, Document, ProjectState, Rfc, RfcStatus, title_to_slug, validate_rfc_transition};
 
 use crate::error::ServerError;
 
@@ -2520,13 +2520,23 @@ impl BlueServer {
                     rfc.problem = Some(p.to_string());
                 }
                 if let Some(s) = source_spike {
-                    rfc.source_spike = Some(s.to_string());
+                    // Resolve spike file path for markdown link
+                    let link = if let Ok(spike_doc) = state.store.find_document(DocType::Spike, s) {
+                        if let Some(ref file_path) = spike_doc.file_path {
+                            format!("[{}](../{})", s, file_path)
+                        } else {
+                            s.to_string()
+                        }
+                    } else {
+                        s.to_string()
+                    };
+                    rfc.source_spike = Some(link);
                 }
 
                 let markdown = rfc.to_markdown(number as u32);
 
                 // Generate filename and write file
-                let filename = format!("rfcs/{:04}-{}.md", number, title);
+                let filename = format!("rfcs/{:04}-{}.draft.md", number, title_to_slug(title));
                 let docs_path = state.home.docs_path.clone();
                 let rfc_path = docs_path.join(&filename);
                 if let Some(parent) = rfc_path.parent() {
@@ -2722,9 +2732,14 @@ impl BlueServer {
         state.store.update_document_status(DocType::Rfc, title, status_str)
             .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
 
-        // Update markdown file (RFC 0008)
-        let file_updated = if let Some(ref file_path) = doc.file_path {
-            let full_path = state.home.docs_path.join(file_path);
+        // Rename file for new status (RFC 0031)
+        let final_path = blue_core::rename_for_status(&state.home.docs_path, &state.store, &doc, status_str)
+            .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+
+        // Update markdown file (RFC 0008) at effective path
+        let effective_path = final_path.as_deref().or(doc.file_path.as_deref());
+        let file_updated = if let Some(p) = effective_path {
+            let full_path = state.home.docs_path.join(p);
             blue_core::update_markdown_status(&full_path, status_str).unwrap_or(false)
         } else {
             false
@@ -3002,7 +3017,7 @@ impl BlueServer {
             .and_then(|v| v.as_str())
             .ok_or(ServerError::InvalidParams)?;
 
-        let doc_type = args.get("doc_type").and_then(|v| v.as_str()).and_then(DocType::from_str);
+        let doc_type = args.get("doc_type").and_then(|v| v.as_str()).and_then(DocType::parse);
         let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(10) as usize;
 
         let state = self.ensure_state()?;
@@ -3362,7 +3377,7 @@ impl BlueServer {
 
         let doc_type = args.get("doc_type")
             .and_then(|v| v.as_str())
-            .and_then(DocType::from_str);
+            .and_then(DocType::parse);
 
         let dry_run = args.get("dry_run")
             .and_then(|v| v.as_bool())
@@ -3626,7 +3641,7 @@ impl BlueServer {
             .get("doc_type")
             .and_then(|v| v.as_str())
             .ok_or(ServerError::InvalidParams)?;
-        let doc_type = DocType::from_str(doc_type_str)
+        let doc_type = DocType::parse(doc_type_str)
             .ok_or(ServerError::InvalidParams)?;
 
         let title = args
@@ -3665,7 +3680,7 @@ impl BlueServer {
             .get("doc_type")
             .and_then(|v| v.as_str())
             .ok_or(ServerError::InvalidParams)?;
-        let doc_type = DocType::from_str(doc_type_str)
+        let doc_type = DocType::parse(doc_type_str)
             .ok_or(ServerError::InvalidParams)?;
 
         let title = args
@@ -3682,7 +3697,7 @@ impl BlueServer {
             .as_ref()
             .and_then(|a| a.get("doc_type"))
             .and_then(|v| v.as_str())
-            .and_then(DocType::from_str);
+            .and_then(DocType::parse);
 
         let state = self.ensure_state()?;
         crate::handlers::delete::handle_list_deleted(state, doc_type)
