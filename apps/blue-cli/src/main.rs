@@ -56,7 +56,11 @@ enum Commands {
     },
 
     /// Run as MCP server
-    Mcp,
+    Mcp {
+        /// Enable debug logging to /tmp/blue-mcp-debug.log
+        #[arg(long)]
+        debug: bool,
+    },
 
     /// Daemon commands
     Daemon {
@@ -415,14 +419,27 @@ enum IndexCommands {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::from_default_env()
-                .add_directive(tracing::Level::INFO.into()),
-        )
-        .init();
-
     let cli = Cli::parse();
+
+    // RFC 0020: MCP debug mode logs to file at DEBUG level
+    let is_mcp_debug = matches!(&cli.command, Some(Commands::Mcp { debug: true }));
+    if is_mcp_debug {
+        let log_file = std::fs::File::create("/tmp/blue-mcp-debug.log")?;
+        tracing_subscriber::fmt()
+            .with_writer(log_file)
+            .with_env_filter(
+                tracing_subscriber::EnvFilter::from_default_env()
+                    .add_directive(tracing::Level::DEBUG.into()),
+            )
+            .init();
+    } else {
+        tracing_subscriber::fmt()
+            .with_env_filter(
+                tracing_subscriber::EnvFilter::from_default_env()
+                    .add_directive(tracing::Level::INFO.into()),
+            )
+            .init();
+    }
 
     match cli.command {
         None | Some(Commands::Status) => {
@@ -436,7 +453,7 @@ async fn main() -> Result<()> {
             println!("Looking at what's ready. One moment.");
             // TODO: Implement next
         }
-        Some(Commands::Mcp) => {
+        Some(Commands::Mcp { .. }) => {
             blue_mcp::run().await?;
         }
         Some(Commands::Daemon { command }) => {

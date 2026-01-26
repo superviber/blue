@@ -15,25 +15,78 @@ use crate::error::ServerError;
 
 /// Blue MCP Server state
 pub struct BlueServer {
-    /// Current working directory
+    /// Current working directory (set explicitly via tool args)
     cwd: Option<PathBuf>,
+    /// MCP root from initialize handshake (RFC 0020)
+    mcp_root: Option<PathBuf>,
     /// Cached project state
     state: Option<ProjectState>,
+    /// Raw initialize params (for diagnostics)
+    init_params: Option<Value>,
 }
 
 impl BlueServer {
     pub fn new() -> Self {
         Self {
             cwd: None,
+            mcp_root: None,
             state: None,
+            init_params: None,
         }
     }
 
+    /// Walk up directory tree to find Blue project root
+    fn find_blue_root(&self) -> Option<PathBuf> {
+        Self::find_blue_root_static()
+    }
+
+    /// Static version for use in contexts without &self
+    fn find_blue_root_static() -> Option<PathBuf> {
+        let mut dir = std::env::current_dir().ok()?;
+        for _ in 0..20 {
+            if dir.join(".blue").exists() {
+                return Some(dir);
+            }
+            if !dir.pop() {
+                return None;
+            }
+        }
+        None
+    }
+
+    /// Build RFC 0020 "not found" error with attempted paths and guidance
+    fn not_found_error(&self) -> ServerError {
+        let process_cwd = std::env::current_dir()
+            .ok()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "<unknown>".to_string());
+
+        let mut msg = format!("Blue project not found. Process cwd: {process_cwd}");
+
+        if let Some(ref root) = self.mcp_root {
+            msg.push_str(&format!(", mcp_root: {}", root.display()));
+        }
+
+        msg.push_str(". Run 'blue init' or pass 'cwd' parameter.");
+        ServerError::BlueNotDetected(msg)
+    }
+
     /// Try to load project state for the current directory
+    ///
+    /// RFC 0020 fallback chain: cwd → mcp_root → walk tree → fail with guidance
     fn ensure_state(&mut self) -> Result<&ProjectState, ServerError> {
         if self.state.is_none() {
-            let cwd = self.cwd.as_ref().ok_or(ServerError::BlueNotDetected)?;
-            let home = detect_blue(cwd).map_err(|_| ServerError::BlueNotDetected)?;
+            // RFC 0020: explicit cwd → MCP roots → walk tree → fail with guidance
+            let cwd = self.cwd.clone()
+                .or_else(|| self.mcp_root.clone())
+                .or_else(|| self.find_blue_root())
+                .ok_or_else(|| self.not_found_error())?;
+            let home = detect_blue(&cwd).map_err(|_| {
+                ServerError::BlueNotDetected(format!(
+                    "Blue not detected in: {}. Expected .blue/ directory. Run 'blue init' or pass 'cwd' parameter.",
+                    cwd.display()
+                ))
+            })?;
 
             // Try to get project name from the current path
             let project = home.project_name.clone().unwrap_or_else(|| "default".to_string());
@@ -44,13 +97,22 @@ impl BlueServer {
             self.state = Some(state);
         }
 
-        self.state.as_ref().ok_or(ServerError::BlueNotDetected)
+        self.state.as_ref().ok_or_else(|| self.not_found_error())
     }
 
     fn ensure_state_mut(&mut self) -> Result<&mut ProjectState, ServerError> {
         if self.state.is_none() {
-            let cwd = self.cwd.as_ref().ok_or(ServerError::BlueNotDetected)?;
-            let home = detect_blue(cwd).map_err(|_| ServerError::BlueNotDetected)?;
+            // RFC 0020: explicit cwd → MCP roots → walk tree → fail with guidance
+            let cwd = self.cwd.clone()
+                .or_else(|| self.mcp_root.clone())
+                .or_else(|| self.find_blue_root())
+                .ok_or_else(|| self.not_found_error())?;
+            let home = detect_blue(&cwd).map_err(|_| {
+                ServerError::BlueNotDetected(format!(
+                    "Blue not detected in: {}. Expected .blue/ directory. Run 'blue init' or pass 'cwd' parameter.",
+                    cwd.display()
+                ))
+            })?;
 
             // Try to get project name from the current path
             let project = home.project_name.clone().unwrap_or_else(|| "default".to_string());
@@ -61,7 +123,8 @@ impl BlueServer {
             self.state = Some(state);
         }
 
-        self.state.as_mut().ok_or(ServerError::BlueNotDetected)
+        let err = self.not_found_error();
+        self.state.as_mut().ok_or(err)
     }
 
     /// Handle a JSON-RPC request
@@ -117,13 +180,54 @@ impl BlueServer {
     }
 
     /// Handle initialize request
-    fn handle_initialize(&mut self, _params: &Option<Value>) -> Result<Value, ServerError> {
-        info!("MCP initialize");
+    fn handle_initialize(&mut self, params: &Option<Value>) -> Result<Value, ServerError> {
+        info!("MCP initialize with params: {:?}", params);
+        self.init_params = params.clone();
+
+        // RFC 0020: Write diagnostics for debugging
+        let diag = json!({
+            "init_params": params,
+            "process_cwd": std::env::current_dir().ok().map(|p| p.display().to_string()),
+            "mcp_root": self.mcp_root.as_ref().map(|p| p.display().to_string()),
+            "blue_found_via_walk": Self::find_blue_root_static().map(|p| p.display().to_string()),
+        });
+        let _ = std::fs::write("/tmp/blue-mcp-diag.json", serde_json::to_string_pretty(&diag).unwrap_or_default());
+
+        // RFC 0020: Extract roots from client capabilities (MCP spec)
+        if let Some(p) = params {
+            // Check for roots in clientInfo or capabilities
+            if let Some(roots) = p.get("roots").and_then(|r| r.as_array()) {
+                if let Some(first_root) = roots.first() {
+                    if let Some(uri) = first_root.get("uri").and_then(|u| u.as_str()) {
+                        // Convert file:// URI to path
+                        let path = uri.strip_prefix("file://").unwrap_or(uri);
+                        info!("Setting mcp_root from roots: {}", path);
+                        self.mcp_root = Some(PathBuf::from(path));
+                    }
+                }
+            }
+            // Also check workspaceFolders (some clients use this)
+            if self.mcp_root.is_none() {
+                if let Some(folders) = p.get("workspaceFolders").and_then(|f| f.as_array()) {
+                    if let Some(first) = folders.first() {
+                        if let Some(uri) = first.get("uri").and_then(|u| u.as_str()) {
+                            let path = uri.strip_prefix("file://").unwrap_or(uri);
+                            info!("Setting mcp_root from workspaceFolders: {}", path);
+                            self.mcp_root = Some(PathBuf::from(path));
+                        }
+                    }
+                }
+            }
+        }
+
         Ok(json!({
             "protocolVersion": "2024-11-05",
             "capabilities": {
                 "tools": {},
                 "resources": {
+                    "listChanged": true
+                },
+                "roots": {
                     "listChanged": true
                 }
             },
@@ -3621,4 +3725,288 @@ struct JsonRpcRequest {
 struct ToolCallParams {
     name: String,
     arguments: Option<Value>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // --- BlueServer construction ---
+
+    #[test]
+    fn test_new_server_fields_are_none() {
+        let server = BlueServer::new();
+        assert!(server.cwd.is_none());
+        assert!(server.mcp_root.is_none());
+        assert!(server.state.is_none());
+        assert!(server.init_params.is_none());
+    }
+
+    // --- handle_initialize: roots extraction ---
+
+    #[test]
+    fn test_initialize_extracts_roots_uri() {
+        let mut server = BlueServer::new();
+        let params = Some(json!({
+            "roots": [{"uri": "file:///home/user/project"}]
+        }));
+        let _ = server.handle_initialize(&params);
+        assert_eq!(server.mcp_root, Some(PathBuf::from("/home/user/project")));
+        assert!(server.cwd.is_none(), "cwd must not be set from initialize");
+    }
+
+    #[test]
+    fn test_initialize_extracts_workspace_folders() {
+        let mut server = BlueServer::new();
+        let params = Some(json!({
+            "workspaceFolders": [{"uri": "file:///home/user/workspace"}]
+        }));
+        let _ = server.handle_initialize(&params);
+        assert_eq!(server.mcp_root, Some(PathBuf::from("/home/user/workspace")));
+        assert!(server.cwd.is_none());
+    }
+
+    #[test]
+    fn test_initialize_roots_takes_precedence_over_workspace_folders() {
+        let mut server = BlueServer::new();
+        let params = Some(json!({
+            "roots": [{"uri": "file:///from/roots"}],
+            "workspaceFolders": [{"uri": "file:///from/workspace"}]
+        }));
+        let _ = server.handle_initialize(&params);
+        assert_eq!(server.mcp_root, Some(PathBuf::from("/from/roots")));
+    }
+
+    #[test]
+    fn test_initialize_strips_file_prefix() {
+        let mut server = BlueServer::new();
+        let params = Some(json!({
+            "roots": [{"uri": "file:///some/path"}]
+        }));
+        let _ = server.handle_initialize(&params);
+        assert_eq!(server.mcp_root, Some(PathBuf::from("/some/path")));
+    }
+
+    #[test]
+    fn test_initialize_handles_uri_without_file_prefix() {
+        let mut server = BlueServer::new();
+        let params = Some(json!({
+            "roots": [{"uri": "/direct/path"}]
+        }));
+        let _ = server.handle_initialize(&params);
+        assert_eq!(server.mcp_root, Some(PathBuf::from("/direct/path")));
+    }
+
+    #[test]
+    fn test_initialize_empty_roots_leaves_mcp_root_none() {
+        let mut server = BlueServer::new();
+        let params = Some(json!({ "roots": [] }));
+        let _ = server.handle_initialize(&params);
+        assert!(server.mcp_root.is_none());
+    }
+
+    #[test]
+    fn test_initialize_no_roots_leaves_mcp_root_none() {
+        let mut server = BlueServer::new();
+        let params = Some(json!({ "clientInfo": {"name": "test"} }));
+        let _ = server.handle_initialize(&params);
+        assert!(server.mcp_root.is_none());
+    }
+
+    #[test]
+    fn test_initialize_none_params_leaves_mcp_root_none() {
+        let mut server = BlueServer::new();
+        let _ = server.handle_initialize(&None);
+        assert!(server.mcp_root.is_none());
+    }
+
+    #[test]
+    fn test_initialize_stores_raw_params() {
+        let mut server = BlueServer::new();
+        let params = Some(json!({"test": "value"}));
+        let _ = server.handle_initialize(&params);
+        assert_eq!(server.init_params.unwrap()["test"], "value");
+    }
+
+    // --- Field isolation: cwd vs mcp_root ---
+
+    #[test]
+    fn test_cwd_and_mcp_root_are_independent() {
+        let mut server = BlueServer::new();
+
+        // Set mcp_root via initialize
+        let params = Some(json!({
+            "roots": [{"uri": "file:///mcp/root"}]
+        }));
+        let _ = server.handle_initialize(&params);
+
+        // Set cwd as tool args would
+        server.cwd = Some(PathBuf::from("/explicit/cwd"));
+
+        // Both should exist independently
+        assert_eq!(server.cwd, Some(PathBuf::from("/explicit/cwd")));
+        assert_eq!(server.mcp_root, Some(PathBuf::from("/mcp/root")));
+    }
+
+    // --- ensure_state fallback chain ---
+
+    #[test]
+    fn test_ensure_state_uses_cwd_first() {
+        let mut server = BlueServer::new();
+        server.cwd = Some(PathBuf::from("/nonexistent/cwd"));
+        server.mcp_root = Some(PathBuf::from("/nonexistent/mcp"));
+
+        let result = server.ensure_state();
+        // Should fail, but error references cwd path (first in chain)
+        match result {
+            Err(ServerError::BlueNotDetected(msg)) => {
+                assert!(
+                    msg.contains("/nonexistent/cwd"),
+                    "Expected cwd path in error, got: {msg}"
+                );
+            }
+            other => panic!("Expected BlueNotDetected with cwd path, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_ensure_state_falls_back_to_mcp_root() {
+        let mut server = BlueServer::new();
+        // No cwd set, only mcp_root
+        server.mcp_root = Some(PathBuf::from("/nonexistent/mcp"));
+
+        let result = server.ensure_state();
+        match result {
+            Err(ServerError::BlueNotDetected(msg)) => {
+                assert!(
+                    msg.contains("/nonexistent/mcp"),
+                    "Expected mcp_root path in error, got: {msg}"
+                );
+            }
+            other => panic!("Expected BlueNotDetected with mcp_root path, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_ensure_state_no_paths_falls_through_to_walk() {
+        let mut server = BlueServer::new();
+        // No cwd, no mcp_root — will try find_blue_root (walk-up)
+        // Since tests run from within the blue project, walk-up should find .blue/
+        // and ensure_state should succeed
+        let result = server.ensure_state();
+        // If running from within blue project, this succeeds.
+        // If not, it fails with BlueNotDetected. Either is valid.
+        match result {
+            Ok(state) => {
+                // Walk-up found the project
+                assert!(!state.home.root.as_os_str().is_empty());
+            }
+            Err(ServerError::BlueNotDetected(_)) => {
+                // Not running from within a blue project — walk-up returned None
+            }
+            Err(other) => panic!("Unexpected error variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_not_found_error_includes_process_cwd() {
+        let server = BlueServer::new();
+        let err = server.not_found_error();
+        let msg = err.to_string();
+        assert!(msg.contains("Blue project not found"), "Missing lead: {msg}");
+        assert!(msg.contains("Process cwd:"), "Missing process cwd: {msg}");
+        assert!(msg.contains("blue init"), "Missing fix suggestion: {msg}");
+    }
+
+    #[test]
+    fn test_not_found_error_includes_mcp_root_when_set() {
+        let mut server = BlueServer::new();
+        server.mcp_root = Some(PathBuf::from("/some/mcp/root"));
+        let msg = server.not_found_error().to_string();
+        assert!(msg.contains("/some/mcp/root"), "Missing mcp_root in error: {msg}");
+    }
+
+    #[test]
+    fn test_detect_blue_failure_shows_path_and_guidance() {
+        let mut server = BlueServer::new();
+        server.cwd = Some(PathBuf::from("/nonexistent/no-blue-here"));
+
+        let result = server.ensure_state();
+        match result {
+            Err(ServerError::BlueNotDetected(msg)) => {
+                assert!(msg.contains("/nonexistent/no-blue-here"), "Missing attempted path: {msg}");
+                assert!(msg.contains(".blue/"), "Missing expected dir: {msg}");
+                assert!(msg.contains("blue init"), "Missing fix suggestion: {msg}");
+            }
+            other => panic!("Expected BlueNotDetected, got: {other:?}"),
+        }
+    }
+
+    // --- find_blue_root_static ---
+
+    #[test]
+    fn test_find_blue_root_static_returns_dir_with_blue() {
+        // When running from within the blue project, should find .blue/
+        if let Some(root) = BlueServer::find_blue_root_static() {
+            assert!(
+                root.join(".blue").exists(),
+                "Found root {} but .blue/ doesn't exist there",
+                root.display()
+            );
+        }
+        // If not in a blue project, None is fine — no assertion needed
+    }
+
+    // --- Full request/response integration ---
+
+    #[test]
+    fn test_initialize_request_returns_capabilities() {
+        let mut server = BlueServer::new();
+        let request = json!({
+            "jsonrpc": "2.0",
+            "method": "initialize",
+            "params": {
+                "roots": [{"uri": "file:///test/project"}]
+            },
+            "id": 1
+        });
+
+        let response_str = server.handle_request(&serde_json::to_string(&request).unwrap());
+        let response: Value = serde_json::from_str(&response_str).unwrap();
+
+        assert_eq!(response["result"]["protocolVersion"], "2024-11-05");
+        assert!(response["result"]["capabilities"]["tools"].is_object());
+        assert_eq!(response["result"]["serverInfo"]["name"], "blue");
+        assert_eq!(server.mcp_root, Some(PathBuf::from("/test/project")));
+    }
+
+    #[test]
+    fn test_tool_call_sets_cwd_not_mcp_root() {
+        let mut server = BlueServer::new();
+
+        // Initialize with roots first
+        let init = json!({
+            "jsonrpc": "2.0",
+            "method": "initialize",
+            "params": { "roots": [{"uri": "file:///mcp/root"}] },
+            "id": 1
+        });
+        server.handle_request(&serde_json::to_string(&init).unwrap());
+
+        // Tool call with cwd arg
+        let call = json!({
+            "jsonrpc": "2.0",
+            "method": "tools/call",
+            "params": {
+                "name": "blue_status",
+                "arguments": {"cwd": "/tool/cwd"}
+            },
+            "id": 2
+        });
+        server.handle_request(&serde_json::to_string(&call).unwrap());
+
+        // cwd set from tool arg, mcp_root preserved from initialize
+        assert_eq!(server.cwd, Some(PathBuf::from("/tool/cwd")));
+        assert_eq!(server.mcp_root, Some(PathBuf::from("/mcp/root")));
+    }
 }
