@@ -76,7 +76,7 @@ pub fn handle_create(state: &mut ProjectState, args: &Value) -> Result<Value, Se
     // Get next postmortem number
     let pm_number = state
         .store
-        .next_number(DocType::Postmortem)
+        .next_number_with_fs(DocType::Postmortem, &state.home.docs_path)
         .map_err(|e| ServerError::CommandFailed(e.to_string()))?;
 
     // Generate file path with date prefix
@@ -185,7 +185,7 @@ pub fn handle_action_to_rfc(state: &mut ProjectState, args: &Value) -> Result<Va
     // Get next RFC number
     let rfc_number = state
         .store
-        .next_number(DocType::Rfc)
+        .next_number_with_fs(DocType::Rfc, &state.home.docs_path)
         .map_err(|e| ServerError::CommandFailed(e.to_string()))?;
 
     // Generate file path

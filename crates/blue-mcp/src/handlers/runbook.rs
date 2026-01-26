@@ -63,7 +63,7 @@ pub fn handle_create(state: &mut ProjectState, args: &Value) -> Result<Value, Se
     // Get next runbook number
     let runbook_number = state
         .store
-        .next_number(DocType::Runbook)
+        .next_number_with_fs(DocType::Runbook, &state.home.docs_path)
         .map_err(|e| ServerError::CommandFailed(e.to_string()))?;
 
     // Generate file path

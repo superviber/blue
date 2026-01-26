@@ -2375,7 +2375,7 @@ impl BlueServer {
         match self.ensure_state() {
             Ok(state) => {
                 // Get next RFC number
-                let number = state.store.next_number(DocType::Rfc)
+                let number = state.store.next_number_with_fs(DocType::Rfc, &state.home.docs_path)
                     .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
 
                 // Generate markdown

@@ -67,7 +67,7 @@ pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, Server
     // Get next ADR number
     let number = state
         .store
-        .next_number(DocType::Adr)
+        .next_number_with_fs(DocType::Adr, &state.home.docs_path)
         .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
 
     // Create ADR

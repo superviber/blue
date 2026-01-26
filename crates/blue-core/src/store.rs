@@ -379,6 +379,16 @@ impl DocType {
     }
 }
 
+/// Convert a title to a kebab-case slug for matching (RFC 0022)
+/// "Filesystem Authority" → "filesystem-authority"
+pub fn title_to_slug(title: &str) -> String {
+    title
+        .to_lowercase()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join("-")
+}
+
 /// Link types between documents
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LinkType {
@@ -1547,6 +1557,39 @@ impl DocumentStore {
             return Ok(doc);
         }
 
+        // Try slug match (RFC 0022) - "filesystem-authority" matches "Filesystem Authority"
+        let slug_as_title = query.replace('-', " ");
+        if slug_as_title != *query {
+            if let Ok(doc) = self.get_document(doc_type, &slug_as_title) {
+                return Ok(doc);
+            }
+            // Case-insensitive match on deslugified query
+            let pattern = format!("%{}%", slug_as_title.to_lowercase());
+            if let Ok(doc) = self.conn.query_row(
+                "SELECT id, doc_type, number, title, status, file_path, created_at, updated_at, deleted_at, content_hash, indexed_at
+                 FROM documents WHERE doc_type = ?1 AND LOWER(title) LIKE ?2 AND deleted_at IS NULL
+                 ORDER BY LENGTH(title) ASC LIMIT 1",
+                params![doc_type.as_str(), pattern],
+                |row| {
+                    Ok(Document {
+                        id: Some(row.get(0)?),
+                        doc_type: DocType::from_str(row.get::<_, String>(1)?.as_str()).unwrap(),
+                        number: row.get(2)?,
+                        title: row.get(3)?,
+                        status: row.get(4)?,
+                        file_path: row.get(5)?,
+                        created_at: row.get(6)?,
+                        updated_at: row.get(7)?,
+                        deleted_at: row.get(8)?,
+                        content_hash: row.get(9)?,
+                        indexed_at: row.get(10)?,
+                    })
+                },
+            ) {
+                return Ok(doc);
+            }
+        }
+
         // Try number match
         let trimmed = query.trim_start_matches('0');
         if let Ok(num) = if trimmed.is_empty() {
@@ -2147,14 +2190,70 @@ impl DocumentStore {
             .map_err(StoreError::Database)
     }
 
-    /// Get the next document number for a type
+    /// Get the next document number for a type (RFC 0022)
+    ///
+    /// Scans both database AND filesystem, taking the maximum.
+    /// Filesystem is truth - prevents numbering collisions when
+    /// files exist on disk but aren't yet indexed.
     pub fn next_number(&self, doc_type: DocType) -> Result<i32, StoreError> {
-        let max: Option<i32> = self.conn.query_row(
+        let db_max: Option<i32> = self.conn.query_row(
             "SELECT MAX(number) FROM documents WHERE doc_type = ?1",
             params![doc_type.as_str()],
             |row| row.get(0),
         )?;
-        Ok(max.unwrap_or(0) + 1)
+        Ok(db_max.unwrap_or(0) + 1)
+    }
+
+    /// Get the next document number, scanning filesystem too (RFC 0022)
+    ///
+    /// Use this instead of `next_number()` when you have access to the docs path.
+    pub fn next_number_with_fs(&self, doc_type: DocType, docs_path: &Path) -> Result<i32, StoreError> {
+        // Database max (fast, possibly stale)
+        let db_max: Option<i32> = self.conn.query_row(
+            "SELECT MAX(number) FROM documents WHERE doc_type = ?1",
+            params![doc_type.as_str()],
+            |row| row.get(0),
+        )?;
+
+        // Filesystem max (authoritative)
+        let fs_max = self.scan_filesystem_max(doc_type, docs_path)?;
+
+        // Take max of both - filesystem wins
+        Ok(std::cmp::max(db_max.unwrap_or(0), fs_max) + 1)
+    }
+
+    /// Scan filesystem directory for the highest document number (RFC 0022)
+    fn scan_filesystem_max(&self, doc_type: DocType, docs_path: &Path) -> Result<i32, StoreError> {
+        use regex::Regex;
+        use std::fs;
+
+        let dir = docs_path.join(doc_type.subdir());
+        if !dir.exists() {
+            return Ok(0);
+        }
+
+        let pattern = Regex::new(r"^(\d{4})-.*\.md$")
+            .map_err(|e| StoreError::IoError(e.to_string()))?;
+        let mut max = 0;
+
+        let entries = fs::read_dir(&dir)
+            .map_err(|e| StoreError::IoError(e.to_string()))?;
+
+        for entry in entries.flatten() {
+            if let Some(name) = entry.file_name().to_str() {
+                // Skip .plan.md files
+                if name.ends_with(".plan.md") {
+                    continue;
+                }
+                if let Some(caps) = pattern.captures(name) {
+                    if let Ok(num) = caps[1].parse::<i32>() {
+                        max = std::cmp::max(max, num);
+                    }
+                }
+            }
+        }
+
+        Ok(max)
     }
 
     // ==================== Link Operations ====================
@@ -3813,5 +3912,168 @@ mod tests {
         let progress = store.get_task_progress(id).unwrap();
         assert_eq!(progress.completed, 1);
         assert_eq!(progress.percentage, 33);
+    }
+
+    // ==================== RFC 0022: Filesystem Authority Tests ====================
+
+    #[test]
+    fn test_title_to_slug() {
+        assert_eq!(title_to_slug("Filesystem Authority"), "filesystem-authority");
+        assert_eq!(title_to_slug("Plan File Authority"), "plan-file-authority");
+        assert_eq!(title_to_slug("already-slug"), "already-slug");
+        assert_eq!(title_to_slug("UPPER CASE"), "upper-case");
+        assert_eq!(title_to_slug("single"), "single");
+        assert_eq!(title_to_slug("  extra   spaces  "), "extra-spaces");
+    }
+
+    #[test]
+    fn test_find_document_by_slug() {
+        let store = DocumentStore::open_in_memory().unwrap();
+
+        let doc = Document::new(DocType::Rfc, "Filesystem Authority", "draft");
+        let id = store.add_document(&doc).unwrap();
+
+        // Exact title match
+        let found = store.find_document(DocType::Rfc, "Filesystem Authority").unwrap();
+        assert_eq!(found.id, Some(id));
+
+        // Slug match (RFC 0022)
+        let found = store.find_document(DocType::Rfc, "filesystem-authority").unwrap();
+        assert_eq!(found.id, Some(id));
+        assert_eq!(found.title, "Filesystem Authority");
+    }
+
+    #[test]
+    fn test_find_document_slug_with_multiple_words() {
+        let store = DocumentStore::open_in_memory().unwrap();
+
+        let doc = Document::new(DocType::Rfc, "Plan File Authority", "accepted");
+        let id = store.add_document(&doc).unwrap();
+
+        let found = store.find_document(DocType::Rfc, "plan-file-authority").unwrap();
+        assert_eq!(found.id, Some(id));
+    }
+
+    #[test]
+    fn test_next_number_with_fs_empty_dir() {
+        let store = DocumentStore::open_in_memory().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let docs_path = tmp.path();
+
+        // No directory at all - should return 1
+        let next = store.next_number_with_fs(DocType::Rfc, docs_path).unwrap();
+        assert_eq!(next, 1);
+    }
+
+    #[test]
+    fn test_next_number_with_fs_files_exist() {
+        let store = DocumentStore::open_in_memory().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let docs_path = tmp.path();
+
+        // Create rfcs directory with files
+        let rfcs_dir = docs_path.join("rfcs");
+        std::fs::create_dir_all(&rfcs_dir).unwrap();
+        std::fs::write(rfcs_dir.join("0001-first.md"), "# RFC 0001: First\n").unwrap();
+        std::fs::write(rfcs_dir.join("0005-fifth.md"), "# RFC 0005: Fifth\n").unwrap();
+        std::fs::write(rfcs_dir.join("0003-third.md"), "# RFC 0003: Third\n").unwrap();
+
+        // DB is empty, filesystem has max 5 → next should be 6
+        let next = store.next_number_with_fs(DocType::Rfc, docs_path).unwrap();
+        assert_eq!(next, 6);
+    }
+
+    #[test]
+    fn test_next_number_with_fs_takes_max_of_both() {
+        let store = DocumentStore::open_in_memory().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let docs_path = tmp.path();
+
+        // Add document to DB with number 10
+        let mut doc = Document::new(DocType::Rfc, "DB Document", "draft");
+        doc.number = Some(10);
+        store.add_document(&doc).unwrap();
+
+        // Create rfcs directory with file numbered 7
+        let rfcs_dir = docs_path.join("rfcs");
+        std::fs::create_dir_all(&rfcs_dir).unwrap();
+        std::fs::write(rfcs_dir.join("0007-seventh.md"), "# RFC\n").unwrap();
+
+        // DB has 10, filesystem has 7 → next should be 11 (max + 1)
+        let next = store.next_number_with_fs(DocType::Rfc, docs_path).unwrap();
+        assert_eq!(next, 11);
+    }
+
+    #[test]
+    fn test_next_number_with_fs_filesystem_wins() {
+        let store = DocumentStore::open_in_memory().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let docs_path = tmp.path();
+
+        // Add document to DB with number 3
+        let mut doc = Document::new(DocType::Rfc, "DB Document", "draft");
+        doc.number = Some(3);
+        store.add_document(&doc).unwrap();
+
+        // Create rfcs directory with files up to 20
+        let rfcs_dir = docs_path.join("rfcs");
+        std::fs::create_dir_all(&rfcs_dir).unwrap();
+        std::fs::write(rfcs_dir.join("0020-twentieth.md"), "# RFC\n").unwrap();
+
+        // DB has 3, filesystem has 20 → next should be 21
+        let next = store.next_number_with_fs(DocType::Rfc, docs_path).unwrap();
+        assert_eq!(next, 21);
+    }
+
+    #[test]
+    fn test_scan_filesystem_max_skips_plan_files() {
+        let store = DocumentStore::open_in_memory().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let docs_path = tmp.path();
+
+        let rfcs_dir = docs_path.join("rfcs");
+        std::fs::create_dir_all(&rfcs_dir).unwrap();
+        std::fs::write(rfcs_dir.join("0005-feature.md"), "# RFC\n").unwrap();
+        std::fs::write(rfcs_dir.join("0005-feature.plan.md"), "# Plan\n").unwrap();
+        std::fs::write(rfcs_dir.join("0010-big.plan.md"), "# Plan\n").unwrap();
+
+        // Should see 5 from the .md file, ignore .plan.md files
+        let max = store.scan_filesystem_max(DocType::Rfc, docs_path).unwrap();
+        assert_eq!(max, 5);
+    }
+
+    #[test]
+    fn test_next_number_regression_numbering_collision() {
+        // Regression test for the exact bug that caused RFC 0022:
+        // Files 0018 and 0019 existed on disk but not in DB.
+        // next_number() returned 0018, causing a collision.
+        let store = DocumentStore::open_in_memory().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let docs_path = tmp.path();
+
+        // Simulate: DB has RFCs 1-17
+        for i in 1..=17 {
+            let mut doc = Document::new(DocType::Rfc, &format!("rfc-{}", i), "draft");
+            doc.number = Some(i);
+            store.add_document(&doc).unwrap();
+        }
+
+        // Filesystem has 1-19 (18 and 19 are untracked)
+        let rfcs_dir = docs_path.join("rfcs");
+        std::fs::create_dir_all(&rfcs_dir).unwrap();
+        for i in 1..=19 {
+            std::fs::write(
+                rfcs_dir.join(format!("{:04}-rfc-{}.md", i, i)),
+                format!("# RFC {:04}\n", i),
+            ).unwrap();
+        }
+
+        // Old behavior: next_number() returns 18 (collision!)
+        let old_next = store.next_number(DocType::Rfc).unwrap();
+        assert_eq!(old_next, 18); // Bug: would collide with existing file
+
+        // New behavior: next_number_with_fs() returns 20 (safe!)
+        let new_next = store.next_number_with_fs(DocType::Rfc, docs_path).unwrap();
+        assert_eq!(new_next, 20); // Correct: max(17, 19) + 1
     }
 }

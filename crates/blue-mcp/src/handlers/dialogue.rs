@@ -282,7 +282,7 @@ pub fn handle_create(state: &mut ProjectState, args: &Value) -> Result<Value, Se
     // Get next dialogue number
     let dialogue_number = state
         .store
-        .next_number(DocType::Dialogue)
+        .next_number_with_fs(DocType::Dialogue, &state.home.docs_path)
         .map_err(|e| ServerError::CommandFailed(e.to_string()))?;
 
     // Generate file path with date prefix
