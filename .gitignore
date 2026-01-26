@@ -14,14 +14,6 @@ Cargo.lock
 .DS_Store
 Thumbs.db
 
-# Blue database (derived index, rebuilt from filesystem) - RFC 0022
-.blue/blue.db
-.blue/blue.db-journal
-
-# Blue SQLite WAL files (transient)
-*.db-shm
-*.db-wal
-
 # Environment
 .env
 .env.local
@@ -30,5 +22,6 @@ Thumbs.db
 # Playwright
 .playwright-mcp/
 
-# Blue worktrees
+# Blue
 .blue/worktrees/
+.blue/blue.db*
