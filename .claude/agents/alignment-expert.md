@@ -1,7 +1,7 @@
 ---
 name: alignment-expert
 description: Expert agent for alignment dialogues. Produces focused perspectives with inline markers. Use when orchestrating multi-expert alignment dialogues via blue_dialogue_create.
-tools: Read, Grep, Glob
+tools: Read, Grep, Glob, Write
 model: sonnet
 ---
 

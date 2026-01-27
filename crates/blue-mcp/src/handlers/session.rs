@@ -24,7 +24,7 @@ pub fn handle_ping(state: &ProjectState, args: &Value) -> Result<Value, ServerEr
         .and_then(|v| v.as_str())
         .unwrap_or("implementation");
 
-    let session_type = SessionType::from_str(session_type_str).unwrap_or(SessionType::Implementation);
+    let session_type = SessionType::parse(session_type_str).unwrap_or(SessionType::Implementation);
 
     // Verify the RFC exists
     let rfc = match state.store.find_document(DocType::Rfc, title) {

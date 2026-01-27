@@ -591,13 +591,13 @@ fn parse_test_plan(body: &str) -> Vec<(String, bool, TaskCategory)> {
 }
 
 fn parse_checkbox_line(line: &str) -> Option<(String, bool)> {
-    if line.starts_with("- [x]") || line.starts_with("- [X]") {
-        Some((line[5..].trim().to_string(), true))
-    } else if line.starts_with("- [ ]") {
-        Some((line[5..].trim().to_string(), false))
-    } else {
-        None
-    }
+    line.strip_prefix("- [x]")
+        .or_else(|| line.strip_prefix("- [X]"))
+        .map(|rest| (rest.trim().to_string(), true))
+        .or_else(|| {
+            line.strip_prefix("- [ ]")
+                .map(|rest| (rest.trim().to_string(), false))
+        })
 }
 
 fn categorize_task(description: &str) -> TaskCategory {

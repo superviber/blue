@@ -4,7 +4,7 @@
 
 use std::fs;
 
-use blue_core::{Decision, DocType, Document, ProjectState};
+use blue_core::{Decision, DocType, Document, ProjectState, title_to_slug};
 use serde_json::{json, Value};
 
 use crate::error::ServerError;
@@ -38,9 +38,9 @@ pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, Server
     // Generate markdown
     let markdown = decision.to_markdown();
 
-    // Compute file path (date-based)
-    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
-    let file_name = format!("{}-{}.md", today, to_kebab_case(title));
+    // Compute file path with ISO 8601 timestamp (RFC 0031)
+    let today = blue_core::utc_timestamp();
+    let file_name = format!("{}-{}.recorded.md", today, title_to_slug(title));
     let file_path = format!("decisions/{}", file_name);
 
     // Write the file
@@ -85,14 +85,3 @@ pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, Server
     }))
 }
 
-/// Convert a string to kebab-case
-fn to_kebab_case(s: &str) -> String {
-    s.to_lowercase()
-        .chars()
-        .map(|c| if c.is_alphanumeric() { c } else { '-' })
-        .collect::<String>()
-        .split('-')
-        .filter(|s| !s.is_empty())
-        .collect::<Vec<_>>()
-        .join("-")
-}

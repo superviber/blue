@@ -333,7 +333,7 @@ impl DocType {
         }
     }
 
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
             "rfc" => Some(DocType::Rfc),
             "spike" => Some(DocType::Spike),
@@ -379,14 +379,187 @@ impl DocType {
     }
 }
 
-/// Convert a title to a kebab-case slug for matching (RFC 0022)
+/// Convert a title to a kebab-case slug for filenames and matching (RFC 0022)
 /// "Filesystem Authority" → "filesystem-authority"
+/// "foo's bar!" → "foo-s-bar"
 pub fn title_to_slug(title: &str) -> String {
     title
         .to_lowercase()
-        .split_whitespace()
+        .chars()
+        .map(|c| if c.is_alphanumeric() { c } else { '-' })
+        .collect::<String>()
+        .split('-')
+        .filter(|s| !s.is_empty())
         .collect::<Vec<_>>()
         .join("-")
+}
+
+/// Known status suffixes that can appear in filenames (RFC 0031)
+const KNOWN_SUFFIXES: &[&str] = &[
+    "done", "impl", "super", "accepted", "approved", "wip", "resolved",
+    "closed", "pub", "archived", "draft", "open", "recorded", "active",
+];
+
+/// Map (DocType, status) → optional filename suffix (RFC 0031)
+///
+/// Returns `None` for the default/initial status of each doc type,
+/// meaning no suffix should be appended.
+pub fn status_suffix(doc_type: DocType, status: &str) -> Option<&'static str> {
+    match (doc_type, status.to_lowercase().as_str()) {
+        // Spike
+        (DocType::Spike, "in-progress") => Some("wip"),
+        (DocType::Spike, "complete") => Some("done"),
+        (DocType::Spike, "resolved") => Some("resolved"),
+
+        // RFC
+        (DocType::Rfc, "draft") => Some("draft"),
+        (DocType::Rfc, "accepted") => Some("accepted"),
+        (DocType::Rfc, "in-progress") => Some("wip"),
+        (DocType::Rfc, "implemented") => Some("impl"),
+        (DocType::Rfc, "superseded") => Some("super"),
+
+        // ADR
+        (DocType::Adr, "accepted") => Some("accepted"),
+        (DocType::Adr, "superseded") => Some("super"),
+
+        // Decision
+        (DocType::Decision, "recorded") => Some("recorded"),
+
+        // PRD
+        (DocType::Prd, "draft") => Some("draft"),
+        (DocType::Prd, "approved") => Some("approved"),
+        (DocType::Prd, "implemented") => Some("impl"),
+
+        // Postmortem
+        (DocType::Postmortem, "open") => Some("open"),
+        (DocType::Postmortem, "closed") => Some("closed"),
+
+        // Runbook
+        (DocType::Runbook, "active") => Some("active"),
+        (DocType::Runbook, "published") => Some("pub"),
+        (DocType::Runbook, "archived") => Some("archived"),
+
+        // Dialogue
+        (DocType::Dialogue, "recorded") => Some("recorded"),
+        (DocType::Dialogue, "published") => Some("pub"),
+
+        // Audit
+        (DocType::Audit, "in-progress") => Some("wip"),
+        (DocType::Audit, "complete") => Some("done"),
+
+        // Anything else: no suffix
+        _ => None,
+    }
+}
+
+/// Rebuild a filename with a new status suffix (RFC 0031)
+///
+/// Handles:
+/// - Regular files: `spikes/2026-01-26T0856Z-slug.md` → `spikes/2026-01-26T0856Z-slug.done.md`
+/// - Dialogue double extension: `dialogues/2026-01-26T0856Z-slug.dialogue.md` → `dialogues/2026-01-26T0856Z-slug.dialogue.done.md`
+/// - Stripping old suffix before adding new one
+pub fn rebuild_filename(old_path: &str, doc_type: DocType, new_status: &str) -> String {
+    let suffix = status_suffix(doc_type, new_status);
+
+    // Detect dialogue double extension
+    let is_dialogue = old_path.ends_with(".dialogue.md")
+        || KNOWN_SUFFIXES.iter().any(|s| old_path.ends_with(&format!(".dialogue.{}.md", s)));
+
+    if is_dialogue {
+        // Strip old suffix: foo.dialogue.done.md → foo.dialogue.md
+        let base = strip_dialogue_suffix(old_path);
+        match suffix {
+            Some(s) => {
+                // foo.dialogue.md → foo.dialogue.{suffix}.md
+                let without_md = base.strip_suffix(".dialogue.md").unwrap_or(&base);
+                format!("{}.dialogue.{}.md", without_md, s)
+            }
+            None => base,
+        }
+    } else {
+        // Strip old suffix: foo.done.md → foo.md
+        let base = strip_regular_suffix(old_path);
+        match suffix {
+            Some(s) => {
+                let without_md = base.strip_suffix(".md").unwrap_or(&base);
+                format!("{}.{}.md", without_md, s)
+            }
+            None => base,
+        }
+    }
+}
+
+/// Strip a known status suffix from a dialogue filename
+/// `foo.dialogue.done.md` → `foo.dialogue.md`
+fn strip_dialogue_suffix(path: &str) -> String {
+    for suffix in KNOWN_SUFFIXES {
+        let pattern = format!(".dialogue.{}.md", suffix);
+        if path.ends_with(&pattern) {
+            let base = &path[..path.len() - pattern.len()];
+            return format!("{}.dialogue.md", base);
+        }
+    }
+    path.to_string()
+}
+
+/// Strip a known status suffix from a regular filename
+/// `foo.done.md` → `foo.md`
+fn strip_regular_suffix(path: &str) -> String {
+    for suffix in KNOWN_SUFFIXES {
+        let pattern = format!(".{}.md", suffix);
+        if path.ends_with(&pattern) {
+            let base = &path[..path.len() - pattern.len()];
+            return format!("{}.md", base);
+        }
+    }
+    path.to_string()
+}
+
+/// Rename a document file to reflect its new status (RFC 0031)
+///
+/// Filesystem-first with store rollback:
+/// 1. Compute new filename via `rebuild_filename()`
+/// 2. `fs::rename()` old → new
+/// 3. `store.update_document_file_path()` — on failure, rollback the rename
+///
+/// Returns `Ok(Some(new_relative_path))` if renamed, `Ok(None)` if no change needed.
+pub fn rename_for_status(
+    docs_path: &Path,
+    store: &DocumentStore,
+    doc: &Document,
+    new_status: &str,
+) -> Result<Option<String>, StoreError> {
+    let old_rel = match doc.file_path.as_ref() {
+        Some(p) => p.clone(),
+        None => return Ok(None),
+    };
+
+    let new_rel = rebuild_filename(&old_rel, doc.doc_type, new_status);
+    if new_rel == old_rel {
+        return Ok(None);
+    }
+
+    let old_abs = docs_path.join(&old_rel);
+    let new_abs = docs_path.join(&new_rel);
+
+    // Only rename if the old file actually exists
+    if !old_abs.exists() {
+        return Ok(None);
+    }
+
+    // Filesystem rename
+    std::fs::rename(&old_abs, &new_abs).map_err(|e| {
+        StoreError::InvalidOperation(format!("Failed to rename {} → {}: {}", old_rel, new_rel, e))
+    })?;
+
+    // Update store
+    if let Err(e) = store.update_document_file_path(doc.doc_type, &doc.title, &new_rel) {
+        // Rollback filesystem rename
+        let _ = std::fs::rename(&new_abs, &old_abs);
+        return Err(e);
+    }
+
+    Ok(Some(new_rel))
 }
 
 /// Link types between documents
@@ -679,7 +852,7 @@ impl SessionType {
         }
     }
 
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
             "implementation" => Some(SessionType::Implementation),
             "review" => Some(SessionType::Review),
@@ -717,7 +890,7 @@ impl ReminderStatus {
         }
     }
 
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
             "pending" => Some(ReminderStatus::Pending),
             "snoozed" => Some(ReminderStatus::Snoozed),
@@ -812,6 +985,18 @@ pub struct StagingDeployment {
     pub metadata: Option<String>,
 }
 
+/// Parameters for recording a new staging deployment
+pub struct StagingDeploymentParams<'a> {
+    pub name: &'a str,
+    pub iac_type: &'a str,
+    pub deploy_command: &'a str,
+    pub stacks: Option<&'a str>,
+    pub deployed_by: &'a str,
+    pub agent_id: Option<&'a str>,
+    pub ttl_hours: u32,
+    pub metadata: Option<&'a str>,
+}
+
 /// Result of staging resource cleanup operation
 #[derive(Debug, Clone)]
 pub struct StagingCleanupResult {
@@ -895,7 +1080,7 @@ impl EdgeType {
         }
     }
 
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
             "explicit" => Some(EdgeType::Explicit),
             "keyword" => Some(EdgeType::Keyword),
@@ -1465,7 +1650,7 @@ impl DocumentStore {
                 |row| {
                     Ok(Document {
                         id: Some(row.get(0)?),
-                        doc_type: DocType::from_str(row.get::<_, String>(1)?.as_str()).unwrap(),
+                        doc_type: DocType::parse(row.get::<_, String>(1)?.as_str()).unwrap(),
                         number: row.get(2)?,
                         title: row.get(3)?,
                         status: row.get(4)?,
@@ -1494,7 +1679,7 @@ impl DocumentStore {
                 |row| {
                     Ok(Document {
                         id: Some(row.get(0)?),
-                        doc_type: DocType::from_str(row.get::<_, String>(1)?.as_str()).unwrap(),
+                        doc_type: DocType::parse(row.get::<_, String>(1)?.as_str()).unwrap(),
                         number: row.get(2)?,
                         title: row.get(3)?,
                         status: row.get(4)?,
@@ -1529,7 +1714,7 @@ impl DocumentStore {
                 |row| {
                     Ok(Document {
                         id: Some(row.get(0)?),
-                        doc_type: DocType::from_str(row.get::<_, String>(1)?.as_str()).unwrap(),
+                        doc_type: DocType::parse(row.get::<_, String>(1)?.as_str()).unwrap(),
                         number: row.get(2)?,
                         title: row.get(3)?,
                         status: row.get(4)?,
@@ -1573,7 +1758,7 @@ impl DocumentStore {
                 |row| {
                     Ok(Document {
                         id: Some(row.get(0)?),
-                        doc_type: DocType::from_str(row.get::<_, String>(1)?.as_str()).unwrap(),
+                        doc_type: DocType::parse(row.get::<_, String>(1)?.as_str()).unwrap(),
                         number: row.get(2)?,
                         title: row.get(3)?,
                         status: row.get(4)?,
@@ -1612,7 +1797,7 @@ impl DocumentStore {
             |row| {
                 Ok(Document {
                     id: Some(row.get(0)?),
-                    doc_type: DocType::from_str(row.get::<_, String>(1)?.as_str()).unwrap(),
+                    doc_type: DocType::parse(row.get::<_, String>(1)?.as_str()).unwrap(),
                     number: row.get(2)?,
                     title: row.get(3)?,
                     status: row.get(4)?,
@@ -1921,6 +2106,26 @@ impl DocumentStore {
         })
     }
 
+    /// Update a document's file_path in the store (RFC 0031)
+    pub fn update_document_file_path(
+        &self,
+        doc_type: DocType,
+        title: &str,
+        new_file_path: &str,
+    ) -> Result<(), StoreError> {
+        self.with_retry(|| {
+            let now = chrono::Utc::now().to_rfc3339();
+            let updated = self.conn.execute(
+                "UPDATE documents SET file_path = ?1, updated_at = ?2 WHERE doc_type = ?3 AND title = ?4",
+                params![new_file_path, now, doc_type.as_str(), title],
+            )?;
+            if updated == 0 {
+                return Err(StoreError::NotFound(title.to_string()));
+            }
+            Ok(())
+        })
+    }
+
     /// Update a document
     pub fn update_document(&self, doc: &Document) -> Result<(), StoreError> {
         let id = doc
@@ -1980,7 +2185,7 @@ impl DocumentStore {
         let rows = stmt.query_map(params![doc_type.as_str()], |row| {
             Ok(Document {
                 id: Some(row.get(0)?),
-                doc_type: DocType::from_str(row.get::<_, String>(1)?.as_str()).unwrap(),
+                doc_type: DocType::parse(row.get::<_, String>(1)?.as_str()).unwrap(),
                 number: row.get(2)?,
                 title: row.get(3)?,
                 status: row.get(4)?,
@@ -2011,7 +2216,7 @@ impl DocumentStore {
         let rows = stmt.query_map(params![doc_type.as_str(), status], |row| {
             Ok(Document {
                 id: Some(row.get(0)?),
-                doc_type: DocType::from_str(row.get::<_, String>(1)?.as_str()).unwrap(),
+                doc_type: DocType::parse(row.get::<_, String>(1)?.as_str()).unwrap(),
                 number: row.get(2)?,
                 title: row.get(3)?,
                 status: row.get(4)?,
@@ -2088,7 +2293,7 @@ impl DocumentStore {
                 |row| {
                     Ok(Document {
                         id: Some(row.get(0)?),
-                        doc_type: DocType::from_str(row.get::<_, String>(1)?.as_str()).unwrap(),
+                        doc_type: DocType::parse(row.get::<_, String>(1)?.as_str()).unwrap(),
                         number: row.get(2)?,
                         title: row.get(3)?,
                         status: row.get(4)?,
@@ -2129,7 +2334,7 @@ impl DocumentStore {
         let rows = stmt.query_map([], |row| {
             Ok(Document {
                 id: Some(row.get(0)?),
-                doc_type: DocType::from_str(row.get::<_, String>(1)?.as_str()).unwrap(),
+                doc_type: DocType::parse(row.get::<_, String>(1)?.as_str()).unwrap(),
                 number: row.get(2)?,
                 title: row.get(3)?,
                 status: row.get(4)?,
@@ -2173,7 +2378,7 @@ impl DocumentStore {
         let rows = stmt.query_map(params![document_id], |row| {
             Ok(Document {
                 id: Some(row.get(0)?),
-                doc_type: DocType::from_str(row.get::<_, String>(1)?.as_str()).unwrap(),
+                doc_type: DocType::parse(row.get::<_, String>(1)?.as_str()).unwrap(),
                 number: row.get(2)?,
                 title: row.get(3)?,
                 status: row.get(4)?,
@@ -2300,7 +2505,7 @@ impl DocumentStore {
         let rows = stmt.query_map(params![source_id], |row| {
             Ok(Document {
                 id: Some(row.get(0)?),
-                doc_type: DocType::from_str(row.get::<_, String>(1)?.as_str()).unwrap(),
+                doc_type: DocType::parse(row.get::<_, String>(1)?.as_str()).unwrap(),
                 number: row.get(2)?,
                 title: row.get(3)?,
                 status: row.get(4)?,
@@ -2573,7 +2778,7 @@ impl DocumentStore {
             Ok(SearchResult {
                 document: Document {
                     id: Some(row.get(0)?),
-                    doc_type: DocType::from_str(row.get::<_, String>(1)?.as_str()).unwrap(),
+                    doc_type: DocType::parse(row.get::<_, String>(1)?.as_str()).unwrap(),
                     number: row.get(2)?,
                     title: row.get(3)?,
                     status: row.get(4)?,
@@ -2662,7 +2867,7 @@ impl DocumentStore {
                     Ok(Session {
                         id: Some(row.get(0)?),
                         rfc_title: row.get(1)?,
-                        session_type: SessionType::from_str(&row.get::<_, String>(2)?).unwrap_or(SessionType::Implementation),
+                        session_type: SessionType::parse(&row.get::<_, String>(2)?).unwrap_or(SessionType::Implementation),
                         started_at: row.get(3)?,
                         last_heartbeat: row.get(4)?,
                         ended_at: row.get(5)?,
@@ -2684,7 +2889,7 @@ impl DocumentStore {
             Ok(Session {
                 id: Some(row.get(0)?),
                 rfc_title: row.get(1)?,
-                session_type: SessionType::from_str(&row.get::<_, String>(2)?).unwrap_or(SessionType::Implementation),
+                session_type: SessionType::parse(&row.get::<_, String>(2)?).unwrap_or(SessionType::Implementation),
                 started_at: row.get(3)?,
                 last_heartbeat: row.get(4)?,
                 ended_at: row.get(5)?,
@@ -2750,7 +2955,7 @@ impl DocumentStore {
                         gate: row.get(3)?,
                         due_date: row.get(4)?,
                         snooze_until: row.get(5)?,
-                        status: ReminderStatus::from_str(&row.get::<_, String>(6)?).unwrap_or(ReminderStatus::Pending),
+                        status: ReminderStatus::parse(&row.get::<_, String>(6)?).unwrap_or(ReminderStatus::Pending),
                         linked_doc_id: row.get(7)?,
                         created_at: row.get(8)?,
                         cleared_at: row.get(9)?,
@@ -2779,7 +2984,7 @@ impl DocumentStore {
                     gate: row.get(3)?,
                     due_date: row.get(4)?,
                     snooze_until: row.get(5)?,
-                    status: ReminderStatus::from_str(&row.get::<_, String>(6)?).unwrap_or(ReminderStatus::Pending),
+                    status: ReminderStatus::parse(&row.get::<_, String>(6)?).unwrap_or(ReminderStatus::Pending),
                     linked_doc_id: row.get(7)?,
                     created_at: row.get(8)?,
                     cleared_at: row.get(9)?,
@@ -2806,7 +3011,7 @@ impl DocumentStore {
                         gate: row.get(3)?,
                         due_date: row.get(4)?,
                         snooze_until: row.get(5)?,
-                        status: ReminderStatus::from_str(&row.get::<_, String>(6)?).unwrap_or(ReminderStatus::Pending),
+                        status: ReminderStatus::parse(&row.get::<_, String>(6)?).unwrap_or(ReminderStatus::Pending),
                         linked_doc_id: row.get(7)?,
                         created_at: row.get(8)?,
                         cleared_at: row.get(9)?,
@@ -2855,7 +3060,7 @@ impl DocumentStore {
                 gate: row.get(3)?,
                 due_date: row.get(4)?,
                 snooze_until: row.get(5)?,
-                status: ReminderStatus::from_str(&row.get::<_, String>(6)?).unwrap_or(ReminderStatus::Pending),
+                status: ReminderStatus::parse(&row.get::<_, String>(6)?).unwrap_or(ReminderStatus::Pending),
                 linked_doc_id: row.get(7)?,
                 created_at: row.get(8)?,
                 cleared_at: row.get(9)?,
@@ -3110,49 +3315,42 @@ impl DocumentStore {
     /// Record a new staging deployment
     pub fn record_staging_deployment(
         &self,
-        name: &str,
-        iac_type: &str,
-        deploy_command: &str,
-        stacks: Option<&str>,
-        deployed_by: &str,
-        agent_id: Option<&str>,
-        ttl_hours: u32,
-        metadata: Option<&str>,
+        params: &StagingDeploymentParams<'_>,
     ) -> Result<StagingDeployment, StoreError> {
         self.with_retry(|| {
             let now = chrono::Utc::now();
-            let ttl_expires = now + chrono::Duration::hours(ttl_hours as i64);
+            let ttl_expires = now + chrono::Duration::hours(params.ttl_hours as i64);
 
             self.conn.execute(
                 "INSERT OR REPLACE INTO staging_deployments
                  (name, iac_type, deploy_command, stacks, deployed_by, agent_id, deployed_at, ttl_expires_at, status, metadata)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'deployed', ?9)",
                 params![
-                    name,
-                    iac_type,
-                    deploy_command,
-                    stacks,
-                    deployed_by,
-                    agent_id,
+                    params.name,
+                    params.iac_type,
+                    params.deploy_command,
+                    params.stacks,
+                    params.deployed_by,
+                    params.agent_id,
                     now.to_rfc3339(),
                     ttl_expires.to_rfc3339(),
-                    metadata
+                    params.metadata
                 ],
             )?;
 
             Ok(StagingDeployment {
                 id: Some(self.conn.last_insert_rowid()),
-                name: name.to_string(),
-                iac_type: iac_type.to_string(),
-                deploy_command: deploy_command.to_string(),
-                stacks: stacks.map(|s| s.to_string()),
-                deployed_by: deployed_by.to_string(),
-                agent_id: agent_id.map(|s| s.to_string()),
+                name: params.name.to_string(),
+                iac_type: params.iac_type.to_string(),
+                deploy_command: params.deploy_command.to_string(),
+                stacks: params.stacks.map(|s| s.to_string()),
+                deployed_by: params.deployed_by.to_string(),
+                agent_id: params.agent_id.map(|s| s.to_string()),
                 deployed_at: now.to_rfc3339(),
                 ttl_expires_at: ttl_expires.to_rfc3339(),
                 status: "deployed".to_string(),
                 destroyed_at: None,
-                metadata: metadata.map(|s| s.to_string()),
+                metadata: params.metadata.map(|s| s.to_string()),
             })
         })
     }
@@ -3806,7 +4004,7 @@ impl DocumentStore {
                 id: Some(row.get(0)?),
                 source_uri: row.get(1)?,
                 target_uri: row.get(2)?,
-                edge_type: EdgeType::from_str(&row.get::<_, String>(3)?).unwrap_or(EdgeType::Explicit),
+                edge_type: EdgeType::parse(&row.get::<_, String>(3)?).unwrap_or(EdgeType::Explicit),
                 weight: row.get(4)?,
                 created_at: row.get(5)?,
             })
@@ -3833,7 +4031,7 @@ impl DocumentStore {
                 id: Some(row.get(0)?),
                 source_uri: row.get(1)?,
                 target_uri: row.get(2)?,
-                edge_type: EdgeType::from_str(&row.get::<_, String>(3)?).unwrap_or(EdgeType::Explicit),
+                edge_type: EdgeType::parse(&row.get::<_, String>(3)?).unwrap_or(EdgeType::Explicit),
                 weight: row.get(4)?,
                 created_at: row.get(5)?,
             })
@@ -4075,5 +4273,145 @@ mod tests {
         // New behavior: next_number_with_fs() returns 20 (safe!)
         let new_next = store.next_number_with_fs(DocType::Rfc, docs_path).unwrap();
         assert_eq!(new_next, 20); // Correct: max(17, 19) + 1
+    }
+
+    // ==================== RFC 0031: Document Lifecycle Filename Tests ====================
+
+    #[test]
+    fn test_utc_timestamp_format() {
+        let ts = crate::documents::utc_timestamp();
+        let re = regex::Regex::new(r"^\d{4}-\d{2}-\d{2}T\d{4}Z$").unwrap();
+        assert!(re.is_match(&ts), "timestamp '{}' doesn't match expected format", ts);
+    }
+
+    #[test]
+    fn test_status_suffix_all_types() {
+        // Spike
+        assert_eq!(status_suffix(DocType::Spike, "in-progress"), Some("wip"));
+        assert_eq!(status_suffix(DocType::Spike, "complete"), Some("done"));
+        assert_eq!(status_suffix(DocType::Spike, "resolved"), Some("resolved"));
+
+        // RFC
+        assert_eq!(status_suffix(DocType::Rfc, "draft"), Some("draft"));
+        assert_eq!(status_suffix(DocType::Rfc, "accepted"), Some("accepted"));
+        assert_eq!(status_suffix(DocType::Rfc, "in-progress"), Some("wip"));
+        assert_eq!(status_suffix(DocType::Rfc, "implemented"), Some("impl"));
+        assert_eq!(status_suffix(DocType::Rfc, "superseded"), Some("super"));
+
+        // ADR
+        assert_eq!(status_suffix(DocType::Adr, "accepted"), Some("accepted"));
+        assert_eq!(status_suffix(DocType::Adr, "superseded"), Some("super"));
+
+        // Decision
+        assert_eq!(status_suffix(DocType::Decision, "recorded"), Some("recorded"));
+
+        // PRD
+        assert_eq!(status_suffix(DocType::Prd, "draft"), Some("draft"));
+        assert_eq!(status_suffix(DocType::Prd, "approved"), Some("approved"));
+        assert_eq!(status_suffix(DocType::Prd, "implemented"), Some("impl"));
+
+        // Postmortem
+        assert_eq!(status_suffix(DocType::Postmortem, "open"), Some("open"));
+        assert_eq!(status_suffix(DocType::Postmortem, "closed"), Some("closed"));
+
+        // Runbook
+        assert_eq!(status_suffix(DocType::Runbook, "active"), Some("active"));
+        assert_eq!(status_suffix(DocType::Runbook, "published"), Some("pub"));
+        assert_eq!(status_suffix(DocType::Runbook, "archived"), Some("archived"));
+
+        // Dialogue
+        assert_eq!(status_suffix(DocType::Dialogue, "recorded"), Some("recorded"));
+        assert_eq!(status_suffix(DocType::Dialogue, "published"), Some("pub"));
+
+        // Audit
+        assert_eq!(status_suffix(DocType::Audit, "in-progress"), Some("wip"));
+        assert_eq!(status_suffix(DocType::Audit, "complete"), Some("done"));
+
+        // Unknown status → None
+        assert_eq!(status_suffix(DocType::Rfc, "unknown-status"), None);
+    }
+
+    #[test]
+    fn test_rebuild_filename_simple() {
+        let result = rebuild_filename(
+            "spikes/2026-01-26T0856Z-my-spike.md",
+            DocType::Spike,
+            "complete",
+        );
+        assert_eq!(result, "spikes/2026-01-26T0856Z-my-spike.done.md");
+    }
+
+    #[test]
+    fn test_rebuild_filename_dialogue() {
+        let result = rebuild_filename(
+            "dialogues/2026-01-26T0856Z-my-dialogue.dialogue.md",
+            DocType::Dialogue,
+            "published",
+        );
+        assert_eq!(result, "dialogues/2026-01-26T0856Z-my-dialogue.dialogue.pub.md");
+    }
+
+    #[test]
+    fn test_rebuild_filename_strip_old() {
+        // Already has a suffix — strip it and add the new one
+        let result = rebuild_filename(
+            "rfcs/0001-my-rfc.accepted.md",
+            DocType::Rfc,
+            "implemented",
+        );
+        assert_eq!(result, "rfcs/0001-my-rfc.impl.md");
+    }
+
+    #[test]
+    fn test_rebuild_filename_strip_dialogue_old() {
+        let result = rebuild_filename(
+            "dialogues/2026-01-26T0856Z-slug.dialogue.pub.md",
+            DocType::Dialogue,
+            "recorded",
+        );
+        // recorded now gets .recorded suffix
+        assert_eq!(result, "dialogues/2026-01-26T0856Z-slug.dialogue.recorded.md");
+    }
+
+    #[test]
+    fn test_rebuild_filename_noop() {
+        // draft now gets .draft suffix
+        let result = rebuild_filename(
+            "rfcs/0001-my-rfc.draft.md",
+            DocType::Rfc,
+            "draft",
+        );
+        assert_eq!(result, "rfcs/0001-my-rfc.draft.md");
+    }
+
+    #[test]
+    fn test_rebuild_filename_remove_suffix() {
+        // in-progress now gets .wip suffix
+        let result = rebuild_filename(
+            "spikes/2026-01-26T0856Z-spike.done.md",
+            DocType::Spike,
+            "in-progress",
+        );
+        assert_eq!(result, "spikes/2026-01-26T0856Z-spike.wip.md");
+    }
+
+    #[test]
+    fn test_update_document_file_path() {
+        let store = DocumentStore::open_in_memory().unwrap();
+        let mut doc = Document::new(DocType::Spike, "test-spike", "in-progress");
+        doc.file_path = Some("spikes/2026-01-26T0856Z-test-spike.wip.md".to_string());
+        store.add_document(&doc).unwrap();
+
+        store.update_document_file_path(
+            DocType::Spike,
+            "test-spike",
+            "spikes/2026-01-26T0856Z-test-spike.done.md",
+        ).unwrap();
+
+        let updated = store.find_document(DocType::Spike, "test-spike").unwrap();
+        assert_eq!(
+            updated.file_path.as_deref(),
+            Some("spikes/2026-01-26T0856Z-test-spike.done.md")
+        );
     }
 }

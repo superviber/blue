@@ -8,11 +8,21 @@ use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use blue_core::{DocType, Document, LinkType, ProjectState};
+use blue_core::{DocType, Document, LinkType, ProjectState, title_to_slug};
 use serde::Serialize;
 use serde_json::{json, Value};
 
 use crate::error::ServerError;
+
+/// Coerce a JSON value to bool, accepting both `true` and `"true"`.
+/// MCP clients sometimes send booleans as strings.
+fn coerce_bool(v: &Value) -> Option<bool> {
+    v.as_bool().or_else(|| match v.as_str() {
+        Some("true") => Some(true),
+        Some("false") => Some(false),
+        _ => None,
+    })
+}
 
 // ==================== Alignment Mode Types ====================
 
@@ -304,7 +314,7 @@ pub fn handle_create(state: &mut ProjectState, args: &Value) -> Result<Value, Se
     // Alignment mode params
     let alignment = args
         .get("alignment")
-        .and_then(|v| v.as_bool())
+        .and_then(coerce_bool)
         .unwrap_or(false);
     let agent_count = args
         .get("agents")
@@ -344,9 +354,10 @@ pub fn handle_create(state: &mut ProjectState, args: &Value) -> Result<Value, Se
         .next_number_with_fs(DocType::Dialogue, &state.home.docs_path)
         .map_err(|e| ServerError::CommandFailed(e.to_string()))?;
 
-    // Generate file path with date prefix
-    let date = chrono::Local::now().format("%Y-%m-%d").to_string();
-    let file_name = format!("{}-{}.dialogue.md", date, to_kebab_case(title));
+    // Generate file path with ISO 8601 timestamp prefix (RFC 0031)
+    let timestamp = blue_core::utc_timestamp();
+    let slug = title_to_slug(title);
+    let file_name = format!("{}-{}.dialogue.recorded.md", timestamp, slug);
     let file_path = PathBuf::from("dialogues").join(&file_name);
     let docs_path = state.home.docs_path.clone();
     let dialogue_path = docs_path.join(&file_path);
@@ -372,6 +383,19 @@ pub fn handle_create(state: &mut ProjectState, args: &Value) -> Result<Value, Se
         (md, None)
     };
 
+    // Create dialogues directory if it doesn't exist
+    if let Some(parent) = dialogue_path.parent() {
+        fs::create_dir_all(parent).map_err(|e| ServerError::CommandFailed(e.to_string()))?;
+    }
+
+    // Overwrite protection (RFC 0031)
+    if dialogue_path.exists() {
+        return Err(ServerError::CommandFailed(format!(
+            "File already exists: {}",
+            dialogue_path.display()
+        )));
+    }
+
     // Create document in SQLite store
     let mut doc = Document::new(DocType::Dialogue, title, "recorded");
     doc.number = Some(dialogue_number);
@@ -393,19 +417,22 @@ pub fn handle_create(state: &mut ProjectState, args: &Value) -> Result<Value, Se
         }
     }
 
-    // Create dialogues directory if it doesn't exist
-    if let Some(parent) = dialogue_path.parent() {
-        fs::create_dir_all(parent).map_err(|e| ServerError::CommandFailed(e.to_string()))?;
-    }
     fs::write(&dialogue_path, &markdown).map_err(|e| ServerError::CommandFailed(e.to_string()))?;
 
     // Build response — RFC 0023: inject protocol as prose in message field
     let (message, judge_protocol) = if let Some(ref agents) = pastry_agents {
+        // RFC 0029: Create output directory for file-based subagent output
+        let output_dir = format!("/tmp/blue-dialogue/{}", slug);
+        fs::create_dir_all(&output_dir).map_err(|e| {
+            ServerError::CommandFailed(format!("Failed to create output dir {}: {}", output_dir, e))
+        })?;
+
         let protocol = build_judge_protocol(
             agents,
             &dialogue_path.display().to_string(),
             model,
             &sources,
+            &output_dir,
         );
         // Extract instructions as prose so Claude reads them directly
         let instructions = protocol["instructions"].as_str().unwrap_or("");
@@ -416,7 +443,7 @@ pub fn handle_create(state: &mut ProjectState, args: &Value) -> Result<Value, Se
              ## JUDGE PROTOCOL — FOLLOW THESE INSTRUCTIONS\n\n\
              {instructions}\n\n\
              ## AGENT PROMPT TEMPLATE\n\n\
-             Substitute {{{{NAME}}}}, {{{{EMOJI}}}}, {{{{ROLE}}}} for each agent:\n\n\
+             Substitute {{{{NAME}}}}, {{{{EMOJI}}}}, {{{{ROLE}}}}, {{{{OUTPUT_FILE}}}} for each agent:\n\n\
              {template}",
             title = title,
             file = dialogue_path.display(),
@@ -647,8 +674,8 @@ fn generate_dialogue_markdown(
     summary: Option<&str>,
     content: Option<&str>,
 ) -> String {
-    let date = chrono::Local::now().format("%Y-%m-%d").to_string();
-    let time = chrono::Local::now().format("%H:%M").to_string();
+    let date = chrono::Utc::now().format("%Y-%m-%d").to_string();
+    let time = chrono::Utc::now().format("%H:%MZ").to_string();
 
     let mut md = String::new();
 
@@ -698,17 +725,6 @@ fn generate_dialogue_markdown(
     md
 }
 
-/// Convert a string to kebab-case for filenames
-fn to_kebab_case(s: &str) -> String {
-    s.to_lowercase()
-        .chars()
-        .map(|c| if c.is_alphanumeric() { c } else { '-' })
-        .collect::<String>()
-        .split('-')
-        .filter(|s| !s.is_empty())
-        .collect::<Vec<_>>()
-        .join("-")
-}
 
 // ==================== Alignment Mode Helpers ====================
 
@@ -820,8 +836,8 @@ pub fn generate_alignment_dialogue_markdown(
     rfc_title: Option<&str>,
     agents: &[PastryAgent],
 ) -> String {
-    let date = chrono::Local::now().format("%Y-%m-%d").to_string();
-    let time = chrono::Local::now().format("%H:%M").to_string();
+    let date = chrono::Utc::now().format("%Y-%m-%d").to_string();
+    let time = chrono::Utc::now().format("%H:%MZ").to_string();
 
     let mut md = String::new();
 
@@ -877,16 +893,16 @@ pub fn generate_alignment_dialogue_markdown(
     md.push_str("## Perspectives Inventory\n\n");
     md.push_str("| ID | Agent | Perspective | Round |\n");
     md.push_str("|----|-------|-------------|-------|\n");
-    md.push_str("| — | — | [Awaiting Round 1] | — |\n\n");
+    md.push_str("| — | — | [Awaiting Round 0] | — |\n\n");
 
     // Tensions Tracker (empty)
     md.push_str("## Tensions Tracker\n\n");
     md.push_str("| ID | Tension | Status | Raised | Resolved |\n");
     md.push_str("|----|---------|--------|--------|----------|\n");
-    md.push_str("| — | [Awaiting Round 1] | — | — | — |\n\n");
+    md.push_str("| — | [Awaiting Round 0] | — | — | — |\n\n");
 
     // Opening Arguments placeholder
-    md.push_str("## Round 1: Opening Arguments\n\n");
+    md.push_str("## Round 0: Opening Arguments\n\n");
     for agent in agents {
         md.push_str(&format!("### {} {}\n\n", agent.name, agent.emoji));
         md.push_str("[Awaiting response]\n\n");
@@ -901,6 +917,7 @@ pub fn build_judge_protocol(
     dialogue_file: &str,
     model: &str,
     sources: &[String],
+    output_dir: &str,
 ) -> Value {
     let agent_list: Vec<Value> = agents
         .iter()
@@ -911,6 +928,7 @@ pub fn build_judge_protocol(
                 "emoji": a.emoji,
                 "tier": a.tier,
                 "relevance": a.relevance,
+                "name_lowercase": a.name.to_lowercase(),
             })
         })
         .collect();
@@ -955,13 +973,43 @@ OUTPUT LIMIT — THIS IS MANDATORY:
 - If the topic needs more depth, save it for the next round
 - Aim for under 2000 characters total
 - DO NOT write essays, literature reviews, or exhaustive analyses
-- Be pointed and specific, not comprehensive{source_read_instructions}"##
+- Be pointed and specific, not comprehensive
+
+WRITE YOUR OUTPUT — THIS IS MANDATORY:
+Use the Write tool to write your COMPLETE response to:
+  {{{{OUTPUT_FILE}}}}
+
+Write your full perspective to this file. This is your primary output mechanism.
+
+RETURN SUMMARY — THIS IS MANDATORY:
+After writing the file, return a brief summary to the Judge:
+- Key perspective(s) raised (P01, P02...)
+- Tension(s) identified (T01, T02...)
+- Concession(s) made
+This ensures the Judge can synthesize without re-reading your full file.{source_read_instructions}"##
     );
 
     let instructions = format!(
         r##"You are the 💙 Judge. Orchestrate this alignment dialogue.
 
+=== FILE ARCHITECTURE (RFC 0033) ===
+
+```
+{output_dir}/
+├─ scoreboard.md              ← You write + read (~500 bytes)
+├─ tensions.md                ← You write, agents read (~1-2KB)
+├─ round-0/
+│  └─ {{agent}}.md            ← Agents write, peers read (~2-3KB each)
+├─ round-0.summary.md         ← You write, agents read (~1-2KB)
+└─ round-1/...
+```
+
+Every file has exactly one writer and at least one reader.
+
 === HOW TO SPAWN EXPERT SUBAGENTS ===
+
+BEFORE spawning each round, create the round directory:
+  Use Bash: mkdir -p {output_dir}/round-N
 
 Spawn ALL {agent_count} experts in a SINGLE message with {agent_count} Task tool calls.
 Multiple Task calls in one message run as parallel subagents.
@@ -970,39 +1018,52 @@ Each Task call:
 - subagent_type: "alignment-expert"
 - description: "🧁 Muffin expert deliberation"
 - max_turns: 10
-- prompt: the AGENT PROMPT TEMPLATE with {{{{NAME}}}}, {{{{EMOJI}}}}, {{{{ROLE}}}} substituted
-- run_in_background: true
+- prompt: the AGENT PROMPT TEMPLATE with {{{{NAME}}}}, {{{{EMOJI}}}}, {{{{ROLE}}}}, {{{{OUTPUT_FILE}}}} substituted
+  - {{{{OUTPUT_FILE}}}} → {output_dir}/round-N/AGENT_NAME_LOWERCASE.md
 
-All {agent_count} results return when complete. Read each agent's output from the results.
+All {agent_count} results return when complete WITH SUMMARIES (key perspectives, tensions, concessions).
 
 === ROUND WORKFLOW ===
 
-1. SPAWN: One message, {agent_count} Task calls (parallel subagents)
-2. READ: Each subagent returns its output directly
-3. SCORE: ALIGNMENT = Wisdom + Consistency + Truth + Relationships (UNBOUNDED)
-   - Score ONLY AFTER reading output — NEVER pre-fill scores
-4. UPDATE {dialogue_file}:
+1. MKDIR: Create round directory via Bash: mkdir -p {output_dir}/round-N
+2. SPAWN: One message, {agent_count} Task calls (parallel subagents)
+3. COLLECT: Agents return summaries — use these for synthesis (avoid re-reading full files)
+   If summary is insufficient, read the file with Read tool as fallback
+4. SCORE: ALIGNMENT = Wisdom + Consistency + Truth + Relationships (UNBOUNDED)
+   - Score ONLY AFTER reading agent returns — NEVER pre-fill scores
+5. WRITE ARTIFACTS:
+   - Update scoreboard.md with new scores
+   - Update tensions.md with new/resolved tensions
+   - Write round-N.summary.md with your synthesis
+6. UPDATE {dialogue_file}:
    - Agent responses under the correct Round section
    - Scoreboard with scores from this round
    - Perspectives Inventory (one row per [PERSPECTIVE Pnn:] marker)
    - Tensions Tracker (one row per [TENSION Tn:] marker)
-5. CONVERGE: If velocity approaches 0 OR all tensions resolved → declare convergence
-   Otherwise, start next round with updated prompt including prior perspectives
+7. CONVERGE: If velocity approaches 0 OR all tensions resolved → declare convergence
+   Otherwise, start next round with updated prompt including prior summary
    Maximum 5 rounds (safety valve)
-6. SAVE via blue_dialogue_save
+
+=== TOKEN BUDGET ===
+
+Your reads per round: ~5KB (scoreboard + tensions + prior summary)
+Agent reads per round: ~15KB (tensions + peer files + prior summary)
+Both well under 25K limit. Opus usage minimized.
 
 AGENTS: {agent_names}
+OUTPUT DIR: {output_dir}
 
 FORMAT RULES — MANDATORY:
 - ALWAYS prefix agent names with their emoji (🧁 Muffin) not bare name (Muffin)
 - The Judge is 💙 Judge — always include the 💙
 - Expert Panel table columns: Agent | Role | Tier | Relevance | Emoji
 - Round headers use emoji prefix (### 🧁 Muffin)
-- Scores start at 0 — only fill after reading round output
+- Scores start at 0 — only fill after reading agent returns
 
 IMPORTANT: Each agent has NO memory of other agents. They see only the topic and their role."##,
         agent_count = agents.len(),
         dialogue_file = dialogue_file,
+        output_dir = output_dir,
         agent_names = agents
             .iter()
             .map(|a| format!("{} {} ({})", a.emoji, a.name, a.role))
@@ -1017,6 +1078,7 @@ IMPORTANT: Each agent has NO memory of other agents. They see only the topic and
         "dialogue_file": dialogue_file,
         "model": model,
         "sources": sources,
+        "output_dir": output_dir,
         "convergence": {
             "max_rounds": 5,
             "velocity_threshold": 0.1,
@@ -1050,9 +1112,9 @@ mod tests {
     }
 
     #[test]
-    fn test_to_kebab_case() {
-        assert_eq!(to_kebab_case("RFC Implementation Discussion"), "rfc-implementation-discussion");
-        assert_eq!(to_kebab_case("quick-chat"), "quick-chat");
+    fn test_title_to_slug() {
+        assert_eq!(title_to_slug("RFC Implementation Discussion"), "rfc-implementation-discussion");
+        assert_eq!(title_to_slug("quick-chat"), "quick-chat");
     }
 
     #[test]
@@ -1128,7 +1190,7 @@ mod tests {
         assert!(md.contains("## Alignment Scoreboard"));
         assert!(md.contains("## Perspectives Inventory"));
         assert!(md.contains("## Tensions Tracker"));
-        assert!(md.contains("## Round 1: Opening Arguments"));
+        assert!(md.contains("## Round 0: Opening Arguments"));
 
         // Agent names present
         assert!(md.contains("Muffin"));
@@ -1154,6 +1216,7 @@ mod tests {
             "/tmp/test.dialogue.md",
             "sonnet",
             &["/tmp/source.rs".to_string()],
+            "/tmp/blue-dialogue/system-design",
         );
 
         // Must have instructions
@@ -1163,6 +1226,10 @@ mod tests {
         assert!(instructions.contains("ALIGNMENT"));
         assert!(instructions.contains("Wisdom"));
         assert!(instructions.contains("convergence"));
+        // RFC 0029: file-based output instructions
+        assert!(instructions.contains("/tmp/blue-dialogue/system-design"));
+        assert!(instructions.contains("mkdir"));
+        assert!(instructions.contains("Read tool"));
 
         // Must have agent prompt template with Read tool reference
         let template = protocol.get("agent_prompt_template").unwrap().as_str().unwrap();
@@ -1171,11 +1238,15 @@ mod tests {
         assert!(template.contains("PERSPECTIVE"));
         assert!(template.contains("TENSION"));
         assert!(template.contains("Read tool"));
+        // RFC 0029: WRITE YOUR OUTPUT section
+        assert!(template.contains("WRITE YOUR OUTPUT"));
+        assert!(template.contains("{{OUTPUT_FILE}}"));
 
-        // Must have agents array
+        // Must have agents array with name_lowercase
         let agents_arr = protocol.get("agents").unwrap().as_array().unwrap();
         assert_eq!(agents_arr.len(), 3);
         assert_eq!(agents_arr[0]["name"], "Muffin");
+        assert_eq!(agents_arr[0]["name_lowercase"], "muffin");
 
         // Must have model
         assert_eq!(protocol["model"], "sonnet");
@@ -1184,6 +1255,9 @@ mod tests {
         let sources = protocol["sources"].as_array().unwrap();
         assert_eq!(sources.len(), 1);
         assert_eq!(sources[0], "/tmp/source.rs");
+
+        // Must have output_dir
+        assert_eq!(protocol["output_dir"], "/tmp/blue-dialogue/system-design");
 
         // Must have convergence params
         assert_eq!(protocol["convergence"]["max_rounds"], 5);
@@ -1198,10 +1272,44 @@ mod tests {
             "/tmp/test.dialogue.md",
             "haiku",
             &[],
+            "/tmp/blue-dialogue/quick-topic",
         );
 
         // Template should NOT contain grounding instructions when no sources
         let template = protocol.get("agent_prompt_template").unwrap().as_str().unwrap();
         assert!(!template.contains("GROUNDING"));
+    }
+
+    #[test]
+    fn test_build_judge_protocol_output_paths() {
+        let agents = assign_pastry_agents(4, "api design");
+        let protocol = build_judge_protocol(
+            &agents,
+            "/tmp/test.dialogue.md",
+            "sonnet",
+            &[],
+            "/tmp/blue-dialogue/api-design",
+        );
+
+        // output_dir in JSON
+        assert_eq!(protocol["output_dir"], "/tmp/blue-dialogue/api-design");
+
+        // All agents have name_lowercase
+        let agents_arr = protocol["agents"].as_array().unwrap();
+        assert_eq!(agents_arr[0]["name_lowercase"], "muffin");
+        assert_eq!(agents_arr[1]["name_lowercase"], "cupcake");
+        assert_eq!(agents_arr[2]["name_lowercase"], "scone");
+        assert_eq!(agents_arr[3]["name_lowercase"], "eclair");
+
+        // WRITE YOUR OUTPUT in template
+        let template = protocol["agent_prompt_template"].as_str().unwrap();
+        assert!(template.contains("WRITE YOUR OUTPUT"));
+        assert!(template.contains("{{OUTPUT_FILE}}"));
+        assert!(template.contains("Write tool"));
+
+        // output_dir referenced in instructions
+        let instructions = protocol["instructions"].as_str().unwrap();
+        assert!(instructions.contains("/tmp/blue-dialogue/api-design"));
+        assert!(instructions.contains("OUTPUT DIR:"));
     }
 }

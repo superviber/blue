@@ -6,7 +6,7 @@
 use std::fs;
 use std::path::PathBuf;
 
-use blue_core::{DocType, Document, ProjectState};
+use blue_core::{DocType, Document, ProjectState, title_to_slug};
 use serde_json::{json, Value};
 
 use crate::error::ServerError;
@@ -67,7 +67,7 @@ pub fn handle_create(state: &mut ProjectState, args: &Value) -> Result<Value, Se
         .map_err(|e| ServerError::CommandFailed(e.to_string()))?;
 
     // Generate file path
-    let file_name = format!("{}.md", to_kebab_case(title));
+    let file_name = format!("{}.active.md", title_to_slug(title));
     let file_path = PathBuf::from("runbooks").join(&file_name);
     let docs_path = state.home.docs_path.clone();
     let runbook_path = docs_path.join(&file_path);
@@ -337,17 +337,6 @@ fn generate_runbook_markdown(
     md
 }
 
-/// Convert a title to kebab-case for filenames
-fn to_kebab_case(s: &str) -> String {
-    s.to_lowercase()
-        .chars()
-        .map(|c| if c.is_alphanumeric() { c } else { '-' })
-        .collect::<String>()
-        .split('-')
-        .filter(|s| !s.is_empty())
-        .collect::<Vec<_>>()
-        .join("-")
-}
 
 /// Convert slug to title case
 fn to_title_case(s: &str) -> String {
@@ -670,9 +659,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_to_kebab_case() {
-        assert_eq!(to_kebab_case("Deploy Service"), "deploy-service");
-        assert_eq!(to_kebab_case("API Gateway Runbook"), "api-gateway-runbook");
+    fn test_title_to_slug() {
+        assert_eq!(title_to_slug("Deploy Service"), "deploy-service");
+        assert_eq!(title_to_slug("API Gateway Runbook"), "api-gateway-runbook");
     }
 
     #[test]

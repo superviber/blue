@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | In-Progress |
+| **Status** | Superseded |
 | **Date** | 2026-01-25 |
 | **Source Spike** | Background Agents and Dialogue Creation Not Triggering |
 | **Depends On** | RFC 0005 (Local LLM Integration) |

@@ -5,7 +5,7 @@
 use std::fs;
 use std::path::PathBuf;
 
-use blue_core::{DocType, Document, ProjectState, Rfc};
+use blue_core::{DocType, Document, ProjectState, Rfc, title_to_slug};
 use serde_json::{json, Value};
 
 use crate::error::ServerError;
@@ -20,7 +20,7 @@ pub enum Severity {
 }
 
 impl Severity {
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse(s: &str) -> Option<Self> {
         match s.to_uppercase().as_str() {
             "P1" | "CRITICAL" => Some(Severity::P1),
             "P2" | "HIGH" => Some(Severity::P2),
@@ -52,7 +52,7 @@ pub fn handle_create(state: &mut ProjectState, args: &Value) -> Result<Value, Se
         .and_then(|v| v.as_str())
         .ok_or(ServerError::InvalidParams)?;
 
-    let severity = Severity::from_str(severity_str).ok_or_else(|| {
+    let severity = Severity::parse(severity_str).ok_or_else(|| {
         ServerError::CommandFailed(format!(
             "Invalid severity '{}'. Use P1, P2, P3, or P4.",
             severity_str
@@ -79,15 +79,28 @@ pub fn handle_create(state: &mut ProjectState, args: &Value) -> Result<Value, Se
         .next_number_with_fs(DocType::Postmortem, &state.home.docs_path)
         .map_err(|e| ServerError::CommandFailed(e.to_string()))?;
 
-    // Generate file path with date prefix
-    let date = chrono::Local::now().format("%Y-%m-%d").to_string();
-    let file_name = format!("{}-{}.md", date, to_kebab_case(title));
+    // Generate file path with ISO 8601 timestamp prefix (RFC 0031)
+    let timestamp = blue_core::utc_timestamp();
+    let file_name = format!("{}-{}.open.md", timestamp, title_to_slug(title));
     let file_path = PathBuf::from("postmortems").join(&file_name);
     let docs_path = state.home.docs_path.clone();
     let pm_path = docs_path.join(&file_path);
 
     // Generate markdown content
     let markdown = generate_postmortem_markdown(title, severity, summary, root_cause, duration, &impact);
+
+    // Create postmortems directory if it doesn't exist
+    if let Some(parent) = pm_path.parent() {
+        fs::create_dir_all(parent).map_err(|e| ServerError::CommandFailed(e.to_string()))?;
+    }
+
+    // Overwrite protection (RFC 0031)
+    if pm_path.exists() {
+        return Err(ServerError::CommandFailed(format!(
+            "File already exists: {}",
+            pm_path.display()
+        )));
+    }
 
     // Create document in SQLite store
     let doc = Document {
@@ -108,10 +121,6 @@ pub fn handle_create(state: &mut ProjectState, args: &Value) -> Result<Value, Se
         .add_document(&doc)
         .map_err(|e| ServerError::CommandFailed(e.to_string()))?;
 
-    // Create postmortems directory if it doesn't exist
-    if let Some(parent) = pm_path.parent() {
-        fs::create_dir_all(parent).map_err(|e| ServerError::CommandFailed(e.to_string()))?;
-    }
     fs::write(&pm_path, &markdown).map_err(|e| ServerError::CommandFailed(e.to_string()))?;
 
     let hint = "Post-mortem created. Fill in the timeline and lessons learned sections.";
@@ -189,7 +198,7 @@ pub fn handle_action_to_rfc(state: &mut ProjectState, args: &Value) -> Result<Va
         .map_err(|e| ServerError::CommandFailed(e.to_string()))?;
 
     // Generate file path
-    let rfc_file_name = format!("{:04}-{}.md", rfc_number, to_kebab_case(&rfc_title));
+    let rfc_file_name = format!("{:04}-{}.draft.md", rfc_number, title_to_slug(&rfc_title));
     let rfc_file_path = PathBuf::from("rfcs").join(&rfc_file_name);
     let rfc_path = docs_path.join(&rfc_file_path);
 
@@ -370,7 +379,7 @@ fn generate_postmortem_markdown(
     impact: &[String],
 ) -> String {
     let mut md = String::new();
-    let date = chrono::Local::now().format("%Y-%m-%d").to_string();
+    let date = chrono::Utc::now().format("%Y-%m-%d").to_string();
 
     // Title
     md.push_str(&format!(
@@ -446,17 +455,6 @@ fn generate_postmortem_markdown(
     md
 }
 
-/// Convert a title to kebab-case for filenames
-fn to_kebab_case(s: &str) -> String {
-    s.to_lowercase()
-        .chars()
-        .map(|c| if c.is_alphanumeric() { c } else { '-' })
-        .collect::<String>()
-        .split('-')
-        .filter(|s| !s.is_empty())
-        .collect::<Vec<_>>()
-        .join("-")
-}
 
 /// Convert slug to title case
 fn to_title_case(s: &str) -> String {
@@ -478,15 +476,15 @@ mod tests {
 
     #[test]
     fn test_severity_from_str() {
-        assert_eq!(Severity::from_str("P1"), Some(Severity::P1));
-        assert_eq!(Severity::from_str("critical"), Some(Severity::P1));
-        assert_eq!(Severity::from_str("P4"), Some(Severity::P4));
-        assert_eq!(Severity::from_str("invalid"), None);
+        assert_eq!(Severity::parse("P1"), Some(Severity::P1));
+        assert_eq!(Severity::parse("critical"), Some(Severity::P1));
+        assert_eq!(Severity::parse("P4"), Some(Severity::P4));
+        assert_eq!(Severity::parse("invalid"), None);
     }
 
     #[test]
-    fn test_to_kebab_case() {
-        assert_eq!(to_kebab_case("Database Outage"), "database-outage");
-        assert_eq!(to_kebab_case("API failure"), "api-failure");
+    fn test_title_to_slug() {
+        assert_eq!(title_to_slug("Database Outage"), "database-outage");
+        assert_eq!(title_to_slug("API failure"), "api-failure");
     }
 }

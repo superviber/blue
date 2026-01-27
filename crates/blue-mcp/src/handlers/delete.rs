@@ -172,8 +172,7 @@ pub fn handle_delete(
         .get_active_session(&doc.title)
         .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
 
-    if active_session.is_some() && !force {
-        let session = active_session.unwrap();
+    if let Some(session) = active_session.as_ref().filter(|_| !force) {
         return Ok(json!({
             "status": "requires_force",
             "message": format!(

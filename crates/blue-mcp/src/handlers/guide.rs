@@ -3,7 +3,7 @@
 //! Provides an interactive tutorial for new Blue users.
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -30,7 +30,7 @@ const SECTIONS: &[&str] = &[
 ];
 
 /// Handle blue_guide
-pub fn handle_guide(args: &Value, blue_path: &PathBuf) -> Result<Value, ServerError> {
+pub fn handle_guide(args: &Value, blue_path: &Path) -> Result<Value, ServerError> {
     let action = args.get("action").and_then(|v| v.as_str()).unwrap_or("resume");
 
     let progress_path = blue_path.join("onboarding.json");
@@ -140,7 +140,7 @@ pub fn handle_guide(args: &Value, blue_path: &PathBuf) -> Result<Value, ServerEr
     }
 }
 
-fn load_progress(path: &PathBuf) -> GuideProgress {
+fn load_progress(path: &Path) -> GuideProgress {
     if path.exists() {
         fs::read_to_string(path)
             .ok()
@@ -151,7 +151,7 @@ fn load_progress(path: &PathBuf) -> GuideProgress {
     }
 }
 
-fn save_progress(path: &PathBuf, progress: &GuideProgress) -> Result<(), ServerError> {
+fn save_progress(path: &Path, progress: &GuideProgress) -> Result<(), ServerError> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| ServerError::CommandFailed(e.to_string()))?;
     }
