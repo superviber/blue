@@ -84,6 +84,8 @@ pub enum SpikeOutcome {
     DecisionMade,
     /// Should build something (requires RFC)
     RecommendsImplementation,
+    /// Fix applied during investigation (RFC 0035)
+    Resolved,
 }
 
 impl SpikeOutcome {
@@ -92,6 +94,7 @@ impl SpikeOutcome {
             SpikeOutcome::NoAction => "no-action",
             SpikeOutcome::DecisionMade => "decision-made",
             SpikeOutcome::RecommendsImplementation => "recommends-implementation",
+            SpikeOutcome::Resolved => "resolved",
         }
     }
 
@@ -100,6 +103,7 @@ impl SpikeOutcome {
             "no-action" => Ok(SpikeOutcome::NoAction),
             "decision-made" => Ok(SpikeOutcome::DecisionMade),
             "recommends-implementation" => Ok(SpikeOutcome::RecommendsImplementation),
+            "resolved" => Ok(SpikeOutcome::Resolved),
             _ => Err(WorkflowError::InvalidOutcome(s.to_string())),
         }
     }
@@ -113,6 +117,8 @@ pub enum SpikeStatus {
     InProgress,
     /// Investigation complete
     Completed,
+    /// Investigation led directly to fix (RFC 0035)
+    Resolved,
 }
 
 impl SpikeStatus {
@@ -120,6 +126,7 @@ impl SpikeStatus {
         match self {
             SpikeStatus::InProgress => "in-progress",
             SpikeStatus::Completed => "completed",
+            SpikeStatus::Resolved => "resolved",
         }
     }
 
@@ -127,6 +134,7 @@ impl SpikeStatus {
         match s.to_lowercase().replace('_', "-").as_str() {
             "in-progress" => Ok(SpikeStatus::InProgress),
             "completed" => Ok(SpikeStatus::Completed),
+            "resolved" => Ok(SpikeStatus::Resolved),
             _ => Err(WorkflowError::InvalidStatus(s.to_string())),
         }
     }
@@ -242,5 +250,18 @@ mod tests {
             SpikeOutcome::parse("recommends-implementation").unwrap(),
             SpikeOutcome::RecommendsImplementation
         );
+        assert_eq!(
+            SpikeOutcome::parse("resolved").unwrap(),
+            SpikeOutcome::Resolved
+        );
+    }
+
+    #[test]
+    fn test_spike_status_parse_resolved() {
+        assert_eq!(
+            SpikeStatus::parse("resolved").unwrap(),
+            SpikeStatus::Resolved
+        );
+        assert_eq!(SpikeStatus::Resolved.as_str(), "resolved");
     }
 }

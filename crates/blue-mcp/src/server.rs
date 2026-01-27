@@ -483,11 +483,15 @@ impl BlueServer {
                             "outcome": {
                                 "type": "string",
                                 "description": "Investigation outcome",
-                                "enum": ["no-action", "decision-made", "recommends-implementation"]
+                                "enum": ["no-action", "decision-made", "recommends-implementation", "resolved"]
                             },
                             "summary": {
                                 "type": "string",
                                 "description": "Summary of findings"
+                            },
+                            "fix_summary": {
+                                "type": "string",
+                                "description": "What was fixed and how (required when outcome is resolved)"
                             }
                         },
                         "required": ["title", "outcome"]

@@ -396,7 +396,7 @@ pub fn title_to_slug(title: &str) -> String {
 
 /// Known status suffixes that can appear in filenames (RFC 0031)
 const KNOWN_SUFFIXES: &[&str] = &[
-    "done", "impl", "super", "accepted", "approved", "wip",
+    "done", "impl", "super", "accepted", "approved", "wip", "resolved",
     "closed", "pub", "archived", "draft", "open", "recorded", "active",
 ];
 
@@ -409,6 +409,7 @@ pub fn status_suffix(doc_type: DocType, status: &str) -> Option<&'static str> {
         // Spike
         (DocType::Spike, "in-progress") => Some("wip"),
         (DocType::Spike, "complete") => Some("done"),
+        (DocType::Spike, "resolved") => Some("resolved"),
 
         // RFC
         (DocType::Rfc, "draft") => Some("draft"),
@@ -4288,6 +4289,7 @@ mod tests {
         // Spike
         assert_eq!(status_suffix(DocType::Spike, "in-progress"), Some("wip"));
         assert_eq!(status_suffix(DocType::Spike, "complete"), Some("done"));
+        assert_eq!(status_suffix(DocType::Spike, "resolved"), Some("resolved"));
 
         // RFC
         assert_eq!(status_suffix(DocType::Rfc, "draft"), Some("draft"));

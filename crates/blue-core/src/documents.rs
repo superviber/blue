@@ -69,6 +69,7 @@ pub enum SpikeOutcome {
     NoAction,
     DecisionMade,
     RecommendsImplementation,
+    Resolved,
 }
 
 impl SpikeOutcome {
@@ -77,6 +78,7 @@ impl SpikeOutcome {
             SpikeOutcome::NoAction => "no-action",
             SpikeOutcome::DecisionMade => "decision-made",
             SpikeOutcome::RecommendsImplementation => "recommends-implementation",
+            SpikeOutcome::Resolved => "resolved",
         }
     }
 }
