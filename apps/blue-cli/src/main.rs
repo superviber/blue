@@ -133,6 +133,14 @@ enum Commands {
         #[arg(long)]
         tool: Option<String>,
     },
+
+    /// Session heartbeat (silent, used by hooks)
+    #[command(name = "session-heartbeat")]
+    SessionHeartbeat,
+
+    /// Session end (silent, used by hooks)
+    #[command(name = "session-end")]
+    SessionEnd,
 }
 
 #[derive(Subcommand)]
@@ -328,6 +336,9 @@ enum SessionCommands {
 
     /// Show session status
     Status,
+
+    /// Record session heartbeat (used by hooks)
+    Heartbeat,
 }
 
 #[derive(Subcommand)]
@@ -532,6 +543,24 @@ async fn main() -> Result<()> {
         }
         Some(Commands::Guard { path, tool }) => {
             handle_guard_command(&path, tool.as_deref()).await?;
+        }
+        Some(Commands::SessionHeartbeat) => {
+            // Silent heartbeat - touch session file if it exists
+            let cwd = std::env::current_dir()?;
+            let session_file = cwd.join(".blue").join("session");
+            if session_file.exists() {
+                if let Ok(content) = std::fs::read_to_string(&session_file) {
+                    let _ = std::fs::write(&session_file, content);
+                }
+            }
+        }
+        Some(Commands::SessionEnd) => {
+            // Silent session end - remove session file if it exists
+            let cwd = std::env::current_dir()?;
+            let session_file = cwd.join(".blue").join("session");
+            if session_file.exists() {
+                let _ = std::fs::remove_file(&session_file);
+            }
         }
     }
 
@@ -1252,6 +1281,20 @@ async fn handle_session_command(command: SessionCommands) -> Result<()> {
                     );
                 }
             }
+        }
+
+        SessionCommands::Heartbeat => {
+            // Silent heartbeat - just touch the session file to update activity
+            let cwd = std::env::current_dir()?;
+            let session_file = cwd.join(".blue").join("session");
+
+            if session_file.exists() {
+                // Touch file by reading and writing back (updates mtime)
+                if let Ok(content) = std::fs::read_to_string(&session_file) {
+                    let _ = std::fs::write(&session_file, content);
+                }
+            }
+            // Silent success - no output for hooks
         }
     }
 
