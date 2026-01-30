@@ -1,0 +1,19 @@
+#!/bin/bash
+# Blue PreCompact Hook
+# Injects survival context BEFORE compaction so it enters the summary
+# This ensures Claude retains awareness of Blue after compaction
+
+cat << 'EOF'
+<compaction-survival-context>
+## Critical Context for Post-Compaction
+
+This project uses Blue MCP tools. After compaction, remember:
+
+1. **MCP Tools Available**: blue_status, blue_next, blue_rfc_*, blue_worktree_*, blue_pr_*
+2. **SDLC Discipline**: Use worktrees for code changes, RFCs for planning
+3. **Task Sync**: Tasks with blue_rfc metadata sync to .plan.md files
+4. **Active State**: Run `blue_status` to see current RFC/worktree
+
+If you notice workflow drift, run `blue_status` to restore context.
+</compaction-survival-context>
+EOF

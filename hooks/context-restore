@@ -1,0 +1,31 @@
+#!/bin/bash
+# Blue Context-Restore Hook
+# Targeted context restoration after compaction
+# Lighter than session-start (~150 tokens vs ~800 tokens)
+
+cat << 'EOF'
+<blue-context-restore>
+## Blue MCP Tools Available
+
+This project uses Blue for SDLC workflow management. Key tools:
+- `blue_status` - Current RFC, worktree, and session state
+- `blue_next` - Recommended next action
+- `blue_rfc_*` - RFC lifecycle management
+- `blue_worktree_*` - Isolated development environments
+
+## Workflow Discipline
+
+1. Code changes require active worktrees (RFC 0038)
+2. RFCs drive planning; worktrees isolate implementation
+3. Tasks with `blue_rfc` metadata sync to .plan.md files
+
+Run `blue_status` to see current project state.
+</blue-context-restore>
+EOF
+
+# Optionally inject project-specific workflow if it exists
+if [ -f ".blue/workflow.md" ]; then
+    echo "<blue-project-workflow>"
+    cat ".blue/workflow.md"
+    echo "</blue-project-workflow>"
+fi
