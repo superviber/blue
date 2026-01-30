@@ -1,11 +1,12 @@
 //! Lint tool handler
 //!
 //! Runs code quality checks and returns structured results with fix commands.
-//! Supports Rust, JavaScript/TypeScript, Python, and CDK.
+//! Supports Rust, JavaScript/TypeScript, Python, CDK, and Mermaid diagrams.
 
 use std::path::Path;
 use std::process::Command;
 
+use regex::Regex;
 use serde_json::{json, Value};
 
 use crate::error::ServerError;
@@ -417,89 +418,352 @@ fn run_rfc_checks(path: &Path, fix: bool, check_type: &str) -> Vec<LintResult> {
 
     let mut results = Vec::new();
 
-    if check_type != "all" && check_type != "headers" {
-        return results;
-    }
-
     let rfcs_path = path.join(".blue/docs/rfcs");
-    if !rfcs_path.exists() {
-        return results;
-    }
+    let docs_path = path.join(".blue/docs");
 
-    let mut inline_count = 0;
-    let mut missing_count = 0;
-    let mut fixed_count = 0;
+    // Header checks
+    if (check_type == "all" || check_type == "headers") && rfcs_path.exists() {
+        let mut inline_count = 0;
+        let mut missing_count = 0;
+        let mut fixed_count = 0;
 
-    // Scan RFC files (exclude .plan.md files)
-    if let Ok(entries) = fs::read_dir(&rfcs_path) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if let Some(ext) = path.extension() {
-                if ext != "md" {
-                    continue;
-                }
-            } else {
-                continue;
-            }
-
-            // Skip .plan.md files
-            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                if name.ends_with(".plan.md") {
-                    continue;
-                }
-            }
-
-            if let Ok(content) = fs::read_to_string(&path) {
-                match validate_rfc_header(&content) {
-                    HeaderFormat::Table => {
-                        // Good - canonical format
+        // Scan RFC files (exclude .plan.md files)
+        if let Ok(entries) = fs::read_dir(&rfcs_path) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if let Some(ext) = path.extension() {
+                    if ext != "md" {
+                        continue;
                     }
-                    HeaderFormat::Inline => {
-                        if fix {
-                            let converted = convert_inline_to_table_header(&content);
-                            if let Ok(()) = fs::write(&path, converted) {
-                                fixed_count += 1;
-                            }
-                        } else {
-                            inline_count += 1;
+                } else {
+                    continue;
+                }
+
+                // Skip .plan.md files
+                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                    if name.ends_with(".plan.md") {
+                        continue;
+                    }
+                }
+
+                if let Ok(content) = fs::read_to_string(&path) {
+                    match validate_rfc_header(&content) {
+                        HeaderFormat::Table => {
+                            // Good - canonical format
                         }
-                    }
-                    HeaderFormat::Missing => {
-                        missing_count += 1;
+                        HeaderFormat::Inline => {
+                            if fix {
+                                let converted = convert_inline_to_table_header(&content);
+                                if let Ok(()) = fs::write(&path, converted) {
+                                    fixed_count += 1;
+                                }
+                            } else {
+                                inline_count += 1;
+                            }
+                        }
+                        HeaderFormat::Missing => {
+                            missing_count += 1;
+                        }
                     }
                 }
             }
         }
+
+        let total_issues = if fix { 0 } else { inline_count + missing_count };
+
+        results.push(LintResult {
+            project_type: ProjectType::RfcDocs,
+            name: "headers",
+            tool: "blue_lint",
+            passed: total_issues == 0,
+            issue_count: total_issues,
+            fix_command: "blue_lint --fix --check headers",
+        });
+
+        // Add details if there were issues or fixes
+        if inline_count > 0 || missing_count > 0 || fixed_count > 0 {
+            tracing::info!(
+                "RFC headers: {} inline (non-canonical), {} missing, {} fixed",
+                inline_count,
+                missing_count,
+                fixed_count
+            );
+        }
     }
 
-    let total_issues = if fix { 0 } else { inline_count + missing_count };
-
-    results.push(LintResult {
-        project_type: ProjectType::RfcDocs,
-        name: "headers",
-        tool: "blue_lint",
-        passed: total_issues == 0,
-        issue_count: total_issues,
-        fix_command: "blue_lint --fix --check headers",
-    });
-
-    // Add details if there were issues or fixes
-    if inline_count > 0 || missing_count > 0 || fixed_count > 0 {
-        tracing::info!(
-            "RFC headers: {} inline (non-canonical), {} missing, {} fixed",
-            inline_count,
-            missing_count,
-            fixed_count
-        );
+    // RFC 0043: Mermaid diagram checks
+    if (check_type == "all" || check_type == "mermaid") && docs_path.exists() {
+        let mermaid_results = run_mermaid_checks(&docs_path, fix);
+        results.push(mermaid_results);
     }
 
     results
+}
+
+// ==================== RFC 0043: Mermaid Diagram Linting ====================
+
+/// Mermaid diagram issue found during linting
+#[derive(Debug)]
+struct MermaidIssue {
+    file: String,
+    line: usize,
+    severity: MermaidSeverity,
+    message: String,
+    auto_fixable: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum MermaidSeverity {
+    Error,
+    Warning,
+}
+
+/// RFC 0043: Run Mermaid diagram checks on all markdown files in .blue/docs/
+fn run_mermaid_checks(docs_path: &Path, fix: bool) -> LintResult {
+    use std::fs;
+
+    let mut issues: Vec<MermaidIssue> = Vec::new();
+    let mut fixed_count = 0;
+
+    // Recursively scan all .md files
+    scan_markdown_files(docs_path, &mut |file_path| {
+        if let Ok(content) = fs::read_to_string(file_path) {
+            let file_issues = check_mermaid_blocks(&content, file_path);
+
+            if fix && file_issues.iter().any(|i| i.auto_fixable) {
+                // Apply auto-fixes (only theme declaration)
+                let fixed_content = apply_mermaid_fixes(&content);
+                if fixed_content != content {
+                    if fs::write(file_path, &fixed_content).is_ok() {
+                        fixed_count += 1;
+                    }
+                }
+                // Re-check for remaining issues (non-fixable ones)
+                let remaining = check_mermaid_blocks(&fixed_content, file_path);
+                issues.extend(remaining.into_iter().filter(|i| !i.auto_fixable));
+            } else {
+                issues.extend(file_issues);
+            }
+        }
+    });
+
+    let error_count = issues.iter().filter(|i| matches!(i.severity, MermaidSeverity::Error)).count();
+    let warning_count = issues.iter().filter(|i| matches!(i.severity, MermaidSeverity::Warning)).count();
+
+    // Log details
+    if !issues.is_empty() || fixed_count > 0 {
+        for issue in &issues {
+            let severity = match issue.severity {
+                MermaidSeverity::Error => "error",
+                MermaidSeverity::Warning => "warning",
+            };
+            tracing::info!(
+                "Mermaid {}: {}:{} - {}",
+                severity,
+                issue.file,
+                issue.line,
+                issue.message
+            );
+        }
+        if fixed_count > 0 {
+            tracing::info!("Mermaid: auto-fixed {} file(s) with missing theme declaration", fixed_count);
+        }
+    }
+
+    LintResult {
+        project_type: ProjectType::RfcDocs,
+        name: "mermaid",
+        tool: "blue_lint",
+        passed: error_count == 0,
+        issue_count: error_count + warning_count,
+        fix_command: "blue_lint --fix --check mermaid",
+    }
+}
+
+/// Recursively scan markdown files
+fn scan_markdown_files<F>(dir: &Path, callback: &mut F)
+where
+    F: FnMut(&Path),
+{
+    use std::fs;
+
+    if let Ok(entries) = fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                scan_markdown_files(&path, callback);
+            } else if let Some(ext) = path.extension() {
+                if ext == "md" {
+                    callback(&path);
+                }
+            }
+        }
+    }
+}
+
+/// Extract Mermaid code blocks from markdown content
+fn extract_mermaid_blocks(content: &str) -> Vec<(usize, String)> {
+    let mut blocks = Vec::new();
+    let mut in_mermaid = false;
+    let mut current_block = String::new();
+    let mut block_start_line = 0;
+
+    for (line_num, line) in content.lines().enumerate() {
+        let trimmed = line.trim();
+
+        if trimmed.starts_with("```mermaid") {
+            in_mermaid = true;
+            block_start_line = line_num + 1;
+            current_block.clear();
+        } else if in_mermaid && trimmed == "```" {
+            in_mermaid = false;
+            blocks.push((block_start_line, current_block.clone()));
+        } else if in_mermaid {
+            current_block.push_str(line);
+            current_block.push('\n');
+        }
+    }
+
+    blocks
+}
+
+/// Check a single markdown file for Mermaid issues
+fn check_mermaid_blocks(content: &str, file_path: &Path) -> Vec<MermaidIssue> {
+    let mut issues = Vec::new();
+    let file_name = file_path.to_string_lossy().to_string();
+
+    for (line_num, block) in extract_mermaid_blocks(content) {
+        // Check 1: Missing neutral theme (REQUIRED, auto-fixable)
+        if !block.contains("'theme': 'neutral'") && !block.contains("\"theme\": \"neutral\"") {
+            issues.push(MermaidIssue {
+                file: file_name.clone(),
+                line: line_num,
+                severity: MermaidSeverity::Error,
+                message: "Mermaid diagram must use neutral theme. Add: %%{init: {'theme': 'neutral'}}%%".into(),
+                auto_fixable: true,
+            });
+        }
+
+        // Check 2: Custom fill colors (PROHIBITED, NOT auto-fixable)
+        if block.contains("fill:#") || block.contains("fill: #") {
+            issues.push(MermaidIssue {
+                file: file_name.clone(),
+                line: line_num,
+                severity: MermaidSeverity::Error,
+                message: "Custom fill colors prohibited. Remove style directives manually; review semantic intent.".into(),
+                auto_fixable: false,
+            });
+        }
+
+        // Check 3: LR flow with >3 leaf nodes (ADVISORY)
+        if block.contains("flowchart LR") || block.contains("graph LR") {
+            let leaf_count = count_leaf_nodes(&block);
+            if leaf_count > 3 {
+                issues.push(MermaidIssue {
+                    file: file_name.clone(),
+                    line: line_num,
+                    severity: MermaidSeverity::Warning,
+                    message: format!(
+                        "LR flow with {} leaf nodes may cause horizontal scrolling. Consider flowchart TB.",
+                        leaf_count
+                    ),
+                    auto_fixable: false,
+                });
+            }
+        }
+    }
+
+    issues
+}
+
+/// Count leaf nodes (terminal visual elements, not container subgraphs)
+fn count_leaf_nodes(mermaid_content: &str) -> usize {
+    // Match node definitions: ID[label], ID(label), ID[(label)], ID{{label}}, ID((label))
+    // Exclude: subgraph, end, style, classDef, linkStyle, and arrows/edges
+    let node_pattern = Regex::new(r"^\s*(\w+)\s*[\[\(\{<]").unwrap();
+    let exclude_keywords = ["subgraph", "end", "style", "classDef", "linkStyle", "%%"];
+
+    mermaid_content
+        .lines()
+        .filter(|line| {
+            let trimmed = line.trim();
+            // Skip keywords
+            if exclude_keywords.iter().any(|kw| trimmed.starts_with(kw)) {
+                return false;
+            }
+            // Skip empty lines
+            if trimmed.is_empty() {
+                return false;
+            }
+            // Skip edge definitions (lines with --> or --- etc)
+            if trimmed.contains("-->") || trimmed.contains("---") || trimmed.contains("-.->") {
+                // But count if this line also defines a node
+                return node_pattern.is_match(trimmed);
+            }
+            node_pattern.is_match(trimmed)
+        })
+        .count()
+}
+
+/// Apply auto-fixes to Mermaid blocks (theme declaration only)
+fn apply_mermaid_fixes(content: &str) -> String {
+    let mut result = String::new();
+    let mut in_mermaid = false;
+    let mut block_has_theme = false;
+    for line in content.lines() {
+        let trimmed = line.trim();
+
+        if trimmed.starts_with("```mermaid") {
+            in_mermaid = true;
+            block_has_theme = false;
+            result.push_str(line);
+            result.push('\n');
+            continue;
+        }
+
+        if in_mermaid && trimmed == "```" {
+            in_mermaid = false;
+            result.push_str(line);
+            result.push('\n');
+            continue;
+        }
+
+        if in_mermaid {
+            // Check if this block already has theme
+            if line.contains("'theme'") || line.contains("\"theme\"") {
+                block_has_theme = true;
+            }
+
+            // If this is the first content line and no theme yet, insert it
+            if !block_has_theme && !trimmed.is_empty() && !trimmed.starts_with("%%{init") {
+                // Check if it's a flowchart/graph declaration
+                if trimmed.starts_with("flowchart") || trimmed.starts_with("graph") ||
+                   trimmed.starts_with("sequenceDiagram") || trimmed.starts_with("classDiagram") ||
+                   trimmed.starts_with("stateDiagram") || trimmed.starts_with("erDiagram") ||
+                   trimmed.starts_with("gantt") || trimmed.starts_with("pie") {
+                    result.push_str("%%{init: {'theme': 'neutral'}}%%\n");
+                    block_has_theme = true;
+                }
+            }
+        }
+
+        result.push_str(line);
+        result.push('\n');
+    }
+
+    // Remove trailing newline if original didn't have one
+    if !content.ends_with('\n') && result.ends_with('\n') {
+        result.pop();
+    }
+
+    result
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::env::temp_dir;
+    use std::path::PathBuf;
 
     #[test]
     fn test_detect_project_types_rust() {
@@ -511,5 +775,181 @@ mod tests {
         assert!(types.iter().any(|t| matches!(t, ProjectType::Rust)));
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // ==================== RFC 0043: Mermaid Tests ====================
+
+    #[test]
+    fn test_extract_mermaid_blocks() {
+        let content = r#"
+# Test Document
+
+Some text here.
+
+```mermaid
+flowchart TB
+    A[Start] --> B[End]
+```
+
+More text.
+
+```mermaid
+graph LR
+    X --> Y
+```
+"#;
+
+        let blocks = extract_mermaid_blocks(content);
+        assert_eq!(blocks.len(), 2);
+        assert!(blocks[0].1.contains("flowchart TB"));
+        assert!(blocks[1].1.contains("graph LR"));
+    }
+
+    #[test]
+    fn test_count_leaf_nodes() {
+        let mermaid = r#"
+flowchart LR
+    subgraph SV["Control Plane"]
+        A[Service A]
+        B[Service B]
+    end
+    C[Client] --> A
+    D[External] --> B
+"#;
+        // Should count A, B, C, D = 4 nodes (subgraph is not a leaf)
+        let count = count_leaf_nodes(mermaid);
+        assert_eq!(count, 4);
+    }
+
+    #[test]
+    fn test_count_leaf_nodes_simple() {
+        // Nodes with explicit labels are counted
+        let mermaid = r#"
+flowchart LR
+    A[Node A]
+    B[Node B]
+    C[Node C]
+    A --> B --> C
+"#;
+        let count = count_leaf_nodes(mermaid);
+        assert_eq!(count, 3);
+    }
+
+    #[test]
+    fn test_count_leaf_nodes_inline_edges_only() {
+        // Pure edge definitions without node shapes don't count
+        // This matches Mermaid's implicit node creation syntax
+        let mermaid = r#"
+flowchart LR
+    A --> B --> C
+"#;
+        let count = count_leaf_nodes(mermaid);
+        // Implicit nodes (no brackets) are not counted by our heuristic
+        // This is intentional: LR warning is about visual complexity, and
+        // implicit nodes are typically simpler diagrams
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn test_check_mermaid_blocks_missing_theme() {
+        let content = r#"
+```mermaid
+flowchart TB
+    A --> B
+```
+"#;
+        let issues = check_mermaid_blocks(content, &PathBuf::from("test.md"));
+        assert!(!issues.is_empty());
+        assert!(issues.iter().any(|i| i.message.contains("neutral theme")));
+        assert!(issues.iter().any(|i| i.auto_fixable));
+    }
+
+    #[test]
+    fn test_check_mermaid_blocks_has_theme() {
+        let content = r#"
+```mermaid
+%%{init: {'theme': 'neutral'}}%%
+flowchart TB
+    A --> B
+```
+"#;
+        let issues = check_mermaid_blocks(content, &PathBuf::from("test.md"));
+        // Should have no theme-related issues
+        assert!(!issues.iter().any(|i| i.message.contains("neutral theme")));
+    }
+
+    #[test]
+    fn test_check_mermaid_blocks_fill_color() {
+        let content = r#"
+```mermaid
+%%{init: {'theme': 'neutral'}}%%
+flowchart TB
+    A --> B
+    style A fill:#e8f5e9
+```
+"#;
+        let issues = check_mermaid_blocks(content, &PathBuf::from("test.md"));
+        assert!(issues.iter().any(|i| i.message.contains("fill colors prohibited")));
+        // fill color issues should NOT be auto-fixable
+        assert!(issues.iter().filter(|i| i.message.contains("fill")).all(|i| !i.auto_fixable));
+    }
+
+    #[test]
+    fn test_check_mermaid_blocks_lr_warning() {
+        let content = r#"
+```mermaid
+%%{init: {'theme': 'neutral'}}%%
+flowchart LR
+    A[Node A]
+    B[Node B]
+    C[Node C]
+    D[Node D]
+    E[Node E]
+```
+"#;
+        let issues = check_mermaid_blocks(content, &PathBuf::from("test.md"));
+        // Should warn about LR with >3 nodes
+        assert!(issues.iter().any(|i|
+            matches!(i.severity, MermaidSeverity::Warning) &&
+            i.message.contains("horizontal scrolling")
+        ));
+    }
+
+    #[test]
+    fn test_check_mermaid_blocks_lr_ok() {
+        let content = r#"
+```mermaid
+%%{init: {'theme': 'neutral'}}%%
+flowchart LR
+    A --> B --> C
+```
+"#;
+        let issues = check_mermaid_blocks(content, &PathBuf::from("test.md"));
+        // Should NOT warn about LR with <=3 nodes
+        assert!(!issues.iter().any(|i| i.message.contains("horizontal scrolling")));
+    }
+
+    #[test]
+    fn test_apply_mermaid_fixes() {
+        let content = r#"```mermaid
+flowchart TB
+    A --> B
+```"#;
+        let fixed = apply_mermaid_fixes(content);
+        assert!(fixed.contains("%%{init: {'theme': 'neutral'}}%%"));
+        assert!(fixed.contains("flowchart TB"));
+    }
+
+    #[test]
+    fn test_apply_mermaid_fixes_already_has_theme() {
+        let content = r#"```mermaid
+%%{init: {'theme': 'neutral'}}%%
+flowchart TB
+    A --> B
+```"#;
+        let fixed = apply_mermaid_fixes(content);
+        // Should not add duplicate theme
+        let theme_count = fixed.matches("theme").count();
+        assert_eq!(theme_count, 1);
     }
 }

@@ -956,37 +956,50 @@ Your role:
 - INTEGRATE perspectives that resonate
 - CONCEDE gracefully when others see something you missed
 
-You are in friendly competition: who can contribute MORE to the final ALIGNMENT?
-But you ALL win when the result is aligned. There are no losers here.
+Your contribution is scored on PRECISION, not volume.
+One sharp insight beats ten paragraphs. You ALL win when the result is aligned.
 
-FORMAT — use these markers:
-- [PERSPECTIVE Pnn: brief label] — new viewpoint you are surfacing
-- [TENSION Tn: brief description] — unresolved issue needing attention
-- [REFINEMENT: description] — improving a prior proposal
-- [CONCESSION: description] — acknowledging another was right
-- [RESOLVED Tn] — addressing a prior tension
+{{{{CONTEXT_INSTRUCTIONS}}}}
 
-OUTPUT LIMIT — THIS IS MANDATORY:
-- MAXIMUM 400 words total per response
-- One or two [PERSPECTIVE] markers maximum
-- One [TENSION] marker maximum
-- If the topic needs more depth, save it for the next round
-- Aim for under 2000 characters total
-- DO NOT write essays, literature reviews, or exhaustive analyses
-- Be pointed and specific, not comprehensive
+=== MANDATORY FILE OUTPUT ===
 
-WRITE YOUR OUTPUT — THIS IS MANDATORY:
-Use the Write tool to write your COMPLETE response to:
-  {{{{OUTPUT_FILE}}}}
+You MUST write your response to a file. This is NOT optional.
 
-Write your full perspective to this file. This is your primary output mechanism.
+OUTPUT FILE: {{{{OUTPUT_FILE}}}}
 
-RETURN SUMMARY — THIS IS MANDATORY:
-After writing the file, return a brief summary to the Judge:
-- Key perspective(s) raised (P01, P02...)
-- Tension(s) identified (T01, T02...)
-- Concession(s) made
-This ensures the Judge can synthesize without re-reading your full file.{source_read_instructions}"##
+Use the Write tool to write your COMPLETE response to the file above.
+If you return your response without writing to the file, YOUR WORK WILL BE LOST.
+
+=== FILE CONTENT STRUCTURE ===
+
+Write EXACTLY this structure to the file:
+
+[PERSPECTIVE P01: brief label]
+Your strongest new viewpoint. Two to four sentences maximum. No preamble.
+
+[PERSPECTIVE P02: brief label]  ← optional, only if genuinely distinct
+One to two sentences maximum.
+
+[TENSION T01: brief description]  ← optional
+One sentence identifying the unresolved issue.
+
+[REFINEMENT: description] or [CONCESSION: description] or [RESOLVED Tn]  ← optional
+One sentence each. Use only when engaging with prior round content.
+
+---
+Nothing else. No introduction. No conclusion. No elaboration.
+
+=== RETURN CONFIRMATION ===
+
+AFTER writing the file, return ONLY this structured confirmation to the Judge:
+
+FILE_WRITTEN: {{{{OUTPUT_FILE}}}}
+Perspectives: P01 [label], P02 [label]
+Tensions: T01 [label] or none
+Moves: [CONCESSION|REFINEMENT|RESOLVED] or none
+Claim: [your single strongest claim in one sentence]
+
+Five lines. The FILE_WRITTEN line proves you wrote the file. Without it, the Judge assumes your work was lost.{source_read_instructions}"##
     );
 
     let instructions = format!(
@@ -1017,31 +1030,46 @@ Multiple Task calls in one message run as parallel subagents.
 Each Task call:
 - subagent_type: "alignment-expert"
 - description: "🧁 Muffin expert deliberation"
-- max_turns: 10
+- max_turns: 5
 - prompt: the AGENT PROMPT TEMPLATE with {{{{NAME}}}}, {{{{EMOJI}}}}, {{{{ROLE}}}}, {{{{OUTPUT_FILE}}}} substituted
   - {{{{OUTPUT_FILE}}}} → {output_dir}/round-N/AGENT_NAME_LOWERCASE.md
+  - {{{{CONTEXT_INSTRUCTIONS}}}} → see IMPORTANT section below for round-specific content
 
-All {agent_count} results return when complete WITH SUMMARIES (key perspectives, tensions, concessions).
+All {agent_count} results return when complete WITH STRUCTURED CONFIRMATIONS.
 
 === ROUND WORKFLOW ===
 
 1. MKDIR: Create round directory via Bash: mkdir -p {output_dir}/round-N
 2. SPAWN: One message, {agent_count} Task calls (parallel subagents)
-3. COLLECT: Agents return summaries — use these for synthesis (avoid re-reading full files)
-   If summary is insufficient, read the file with Read tool as fallback
+3. COLLECT & VERIFY: Each agent returns a 5-line structured confirmation:
+   ```
+   FILE_WRITTEN: /path/to/file.md
+   Perspectives: P01 [label], P02 [label]
+   Tensions: T01 [label] or none
+   Moves: [CONCESSION|REFINEMENT|RESOLVED] or none
+   Claim: [single sentence]
+   ```
+   - If FILE_WRITTEN line is present: Agent wrote their file (no action needed)
+   - If FILE_WRITTEN line is MISSING: Agent failed to write. Use Read to check if file exists.
+     If file missing, the agent's full response may be in the return — write it yourself as fallback.
+   Use summaries for synthesis. Read files with Read tool only if summary is insufficient.
 4. SCORE: ALIGNMENT = Wisdom + Consistency + Truth + Relationships (UNBOUNDED)
    - Score ONLY AFTER reading agent returns — NEVER pre-fill scores
-5. WRITE ARTIFACTS:
-   - Update scoreboard.md with new scores
-   - Update tensions.md with new/resolved tensions
-   - Write round-N.summary.md with your synthesis
-6. UPDATE {dialogue_file}:
+5. WRITE ARTIFACTS — THIS IS MANDATORY (agents read these files next round):
+   Use the Write tool for EACH file. If you skip this, agents have NO context next round.
+   a. Write {output_dir}/scoreboard.md — current scores for all agents
+   b. Write {output_dir}/tensions.md — ALL tensions (new + prior + resolved) in markdown table format
+   c. Write {output_dir}/round-N.summary.md — your synthesis (what converged, what tensions remain open)
+   You MUST write all three files BEFORE updating the dialogue file.
+6. UPDATE ARCHIVAL RECORD — after writing artifacts:
+   Use the Edit tool to append to {dialogue_file}:
    - Agent responses under the correct Round section
-   - Scoreboard with scores from this round
-   - Perspectives Inventory (one row per [PERSPECTIVE Pnn:] marker)
-   - Tensions Tracker (one row per [TENSION Tn:] marker)
+   - Updated Scoreboard table (copy from scoreboard.md)
+   - Updated Perspectives Inventory (one row per [PERSPECTIVE Pnn:] marker)
+   - Updated Tensions Tracker (one row per [TENSION Tn:] marker)
+   This is the permanent human-readable record. Step 5 artifacts are the working state for agents.
 7. CONVERGE: If velocity approaches 0 OR all tensions resolved → declare convergence
-   Otherwise, start next round with updated prompt including prior summary
+   Otherwise, start next round (agents will read Step 5 artifacts via CONTEXT_INSTRUCTIONS).
    Maximum 5 rounds (safety valve)
 
 === TOKEN BUDGET ===
@@ -1060,7 +1088,16 @@ FORMAT RULES — MANDATORY:
 - Round headers use emoji prefix (### 🧁 Muffin)
 - Scores start at 0 — only fill after reading agent returns
 
-IMPORTANT: Each agent has NO memory of other agents. They see only the topic and their role."##,
+IMPORTANT — ROUND-SPECIFIC CONTEXT:
+- Round 0: Set {{{{CONTEXT_INSTRUCTIONS}}}} to empty string. Agents have NO memory of each other.
+- Round 1+: Set {{{{CONTEXT_INSTRUCTIONS}}}} to the following block (substitute N-1 for prior round number):
+
+READ CONTEXT — THIS IS MANDATORY:
+Use the Read tool to read these files BEFORE writing your response:
+1. {output_dir}/tensions.md — accumulated tensions from all rounds
+2. {output_dir}/round-[N-1].summary.md — Judge's synthesis of the prior round
+3. Each .md file in {output_dir}/round-[N-1]/ — peer perspectives from last round
+You MUST read these files. Your response MUST engage with prior tensions and peer perspectives."##,
         agent_count = agents.len(),
         dialogue_file = dialogue_file,
         output_dir = output_dir,
@@ -1221,7 +1258,6 @@ mod tests {
 
         // Must have instructions
         let instructions = protocol.get("instructions").unwrap().as_str().unwrap();
-        assert!(instructions.contains("run_in_background: true"));
         assert!(instructions.contains("alignment-expert"));
         assert!(instructions.contains("ALIGNMENT"));
         assert!(instructions.contains("Wisdom"));
@@ -1230,6 +1266,16 @@ mod tests {
         assert!(instructions.contains("/tmp/blue-dialogue/system-design"));
         assert!(instructions.contains("mkdir"));
         assert!(instructions.contains("Read tool"));
+        // RFC 0033: mandatory artifact writing with explicit paths
+        assert!(instructions.contains("WRITE ARTIFACTS — THIS IS MANDATORY"));
+        assert!(instructions.contains("scoreboard.md"));
+        assert!(instructions.contains("tensions.md"));
+        assert!(instructions.contains("round-N.summary.md"));
+        // RFC 0033: archival record differentiation
+        assert!(instructions.contains("ARCHIVAL RECORD"));
+        // RFC 0033: round-specific context instructions
+        assert!(instructions.contains("CONTEXT_INSTRUCTIONS"));
+        assert!(instructions.contains("READ CONTEXT"));
 
         // Must have agent prompt template with Read tool reference
         let template = protocol.get("agent_prompt_template").unwrap().as_str().unwrap();
@@ -1238,9 +1284,11 @@ mod tests {
         assert!(template.contains("PERSPECTIVE"));
         assert!(template.contains("TENSION"));
         assert!(template.contains("Read tool"));
-        // RFC 0029: WRITE YOUR OUTPUT section
-        assert!(template.contains("WRITE YOUR OUTPUT"));
+        // RFC 0029: MANDATORY FILE OUTPUT section
+        assert!(template.contains("MANDATORY FILE OUTPUT"));
         assert!(template.contains("{{OUTPUT_FILE}}"));
+        // RFC 0033: CONTEXT_INSTRUCTIONS placeholder for round 1+ context
+        assert!(template.contains("{{CONTEXT_INSTRUCTIONS}}"));
 
         // Must have agents array with name_lowercase
         let agents_arr = protocol.get("agents").unwrap().as_array().unwrap();
@@ -1301,9 +1349,9 @@ mod tests {
         assert_eq!(agents_arr[2]["name_lowercase"], "scone");
         assert_eq!(agents_arr[3]["name_lowercase"], "eclair");
 
-        // WRITE YOUR OUTPUT in template
+        // MANDATORY FILE OUTPUT in template
         let template = protocol["agent_prompt_template"].as_str().unwrap();
-        assert!(template.contains("WRITE YOUR OUTPUT"));
+        assert!(template.contains("MANDATORY FILE OUTPUT"));
         assert!(template.contains("{{OUTPUT_FILE}}"));
         assert!(template.contains("Write tool"));
 
@@ -1311,5 +1359,91 @@ mod tests {
         let instructions = protocol["instructions"].as_str().unwrap();
         assert!(instructions.contains("/tmp/blue-dialogue/api-design"));
         assert!(instructions.contains("OUTPUT DIR:"));
+    }
+
+    #[test]
+    fn test_judge_protocol_artifact_write_instructions() {
+        let agents = assign_pastry_agents(3, "test artifacts");
+        let protocol = build_judge_protocol(
+            &agents,
+            "/tmp/test.dialogue.md",
+            "sonnet",
+            &[],
+            "/tmp/blue-dialogue/test-artifacts",
+        );
+
+        let instructions = protocol["instructions"].as_str().unwrap();
+
+        // Step 5 must explicitly reference Write tool for each artifact
+        assert!(
+            instructions.contains("Write /tmp/blue-dialogue/test-artifacts/scoreboard.md"),
+            "Protocol must instruct Judge to write scoreboard.md with exact path"
+        );
+        assert!(
+            instructions.contains("Write /tmp/blue-dialogue/test-artifacts/tensions.md"),
+            "Protocol must instruct Judge to write tensions.md with exact path"
+        );
+        assert!(
+            instructions.contains("Write /tmp/blue-dialogue/test-artifacts/round-N.summary.md"),
+            "Protocol must instruct Judge to write round-N.summary.md with exact path"
+        );
+
+        // Artifact writing must come BEFORE updating dialogue file (step 5 before step 6)
+        let artifact_pos = instructions.find("WRITE ARTIFACTS").unwrap();
+        let archival_pos = instructions.find("UPDATE ARCHIVAL RECORD").unwrap();
+        assert!(
+            artifact_pos < archival_pos,
+            "Artifacts must be written BEFORE updating archival record"
+        );
+
+        // Must explicitly say to use Write tool
+        assert!(
+            instructions.contains("Use the Write tool for EACH file"),
+            "Protocol must tell Judge to use Write tool"
+        );
+
+        // Must warn about consequences of skipping
+        assert!(
+            instructions.contains("agents have NO context next round"),
+            "Protocol must warn about consequences of skipping artifact writes"
+        );
+    }
+
+    #[test]
+    fn test_judge_protocol_context_references_artifacts() {
+        let agents = assign_pastry_agents(3, "context test");
+        let protocol = build_judge_protocol(
+            &agents,
+            "/tmp/test.dialogue.md",
+            "sonnet",
+            &[],
+            "/tmp/blue-dialogue/context-test",
+        );
+
+        let instructions = protocol["instructions"].as_str().unwrap();
+
+        // Round 1+ CONTEXT_INSTRUCTIONS must reference artifact files
+        assert!(
+            instructions.contains("/tmp/blue-dialogue/context-test/tensions.md"),
+            "Context instructions must reference tensions.md with full path"
+        );
+        assert!(
+            instructions.contains("round-[N-1].summary.md"),
+            "Context instructions must reference prior round summary"
+        );
+
+        // File architecture diagram must show all artifact files
+        assert!(
+            instructions.contains("scoreboard.md"),
+            "File architecture must show scoreboard.md"
+        );
+        assert!(
+            instructions.contains("tensions.md"),
+            "File architecture must show tensions.md"
+        );
+        assert!(
+            instructions.contains("round-0.summary.md"),
+            "File architecture must show round-0.summary.md"
+        );
     }
 }
