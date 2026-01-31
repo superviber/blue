@@ -1633,6 +1633,41 @@ impl BlueServer {
                         "required": ["title"]
                     }
                 },
+                {
+                    "name": "blue_dialogue_round_prompt",
+                    "description": "Get a fully-substituted prompt for a specific agent and round, ready to pass directly to the Task tool. Use this instead of manual template substitution.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "output_dir": {
+                                "type": "string",
+                                "description": "Output directory from blue_dialogue_create (e.g., '/tmp/blue-dialogue/my-topic')"
+                            },
+                            "agent_name": {
+                                "type": "string",
+                                "description": "Agent name (e.g., 'Muffin')"
+                            },
+                            "agent_emoji": {
+                                "type": "string",
+                                "description": "Agent emoji (e.g., '🧁')"
+                            },
+                            "agent_role": {
+                                "type": "string",
+                                "description": "Agent role (e.g., 'Platform Architect')"
+                            },
+                            "round": {
+                                "type": "integer",
+                                "description": "Round number (0 for opening arguments, 1+ for subsequent rounds)"
+                            },
+                            "sources": {
+                                "type": "array",
+                                "items": { "type": "string" },
+                                "description": "Optional source files for grounding"
+                            }
+                        },
+                        "required": ["output_dir", "agent_name", "agent_emoji", "agent_role", "round"]
+                    }
+                },
                 // Phase 8: Playwright verification
                 {
                     "name": "blue_playwright_verify",
@@ -2410,6 +2445,7 @@ impl BlueServer {
             "blue_dialogue_get" => self.handle_dialogue_get(&call.arguments),
             "blue_dialogue_list" => self.handle_dialogue_list(&call.arguments),
             "blue_dialogue_save" => self.handle_dialogue_save(&call.arguments),
+            "blue_dialogue_round_prompt" => self.handle_dialogue_round_prompt(&call.arguments),
             // Phase 8: Playwright handler
             "blue_playwright_verify" => self.handle_playwright_verify(&call.arguments),
             // Phase 9: Post-mortem handlers
@@ -3735,6 +3771,11 @@ impl BlueServer {
         let args = args.as_ref().ok_or(ServerError::InvalidParams)?;
         let state = self.ensure_state_mut()?;
         crate::handlers::dialogue::handle_save(state, args)
+    }
+
+    fn handle_dialogue_round_prompt(&mut self, args: &Option<Value>) -> Result<Value, ServerError> {
+        let args = args.as_ref().ok_or(ServerError::InvalidParams)?;
+        crate::handlers::dialogue::handle_round_prompt(args)
     }
 
     fn handle_playwright_verify(&mut self, args: &Option<Value>) -> Result<Value, ServerError> {

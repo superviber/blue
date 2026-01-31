@@ -46,6 +46,7 @@ Experts are selected by **relevance to the topic**. Each gets a pastry name (Muf
 ## Blue MCP Tools
 
 - `blue_dialogue_create` — Creates dialogue, returns Judge Protocol (your source of truth)
+- `blue_dialogue_round_prompt` — **Get fully-substituted prompts for each agent.** Call this for each agent before spawning. Returns ready-to-use prompt with all template variables substituted (no manual substitution needed).
 - `blue_dialogue_lint` — Validate .dialogue.md format
 - `blue_dialogue_save` — Persist to .blue/docs/dialogues/
 

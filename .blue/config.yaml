@@ -1,3 +1,5 @@
+version: 1
+
 forge:
   type: github
   host: a3afbb9620d1a4597b7eb435447d7dbd-5a068043e1782e61.elb.us-east-2.amazonaws.com

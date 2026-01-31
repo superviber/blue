@@ -442,8 +442,9 @@ pub fn handle_create(state: &mut ProjectState, args: &Value) -> Result<Value, Se
              File: {file}\n\n\
              ## JUDGE PROTOCOL — FOLLOW THESE INSTRUCTIONS\n\n\
              {instructions}\n\n\
-             ## AGENT PROMPT TEMPLATE\n\n\
-             Substitute {{{{NAME}}}}, {{{{EMOJI}}}}, {{{{ROLE}}}}, {{{{OUTPUT_FILE}}}} for each agent:\n\n\
+             ## AGENT PROMPT TEMPLATE (Reference)\n\n\
+             Use blue_dialogue_round_prompt to get fully-substituted prompts for each agent.\n\
+             Template shown here for reference only:\n\n\
              {template}",
             title = title,
             file = dialogue_path.display(),
@@ -1024,16 +1025,18 @@ Every file has exactly one writer and at least one reader.
 BEFORE spawning each round, create the round directory:
   Use Bash: mkdir -p {output_dir}/round-N
 
-Spawn ALL {agent_count} experts in a SINGLE message with {agent_count} Task tool calls.
+For EACH agent, call blue_dialogue_round_prompt to get the fully-substituted prompt:
+  blue_dialogue_round_prompt(output_dir="{output_dir}", agent_name="Muffin", agent_emoji="🧁", agent_role="Platform Architect", round=N)
+  → Returns ready-to-use prompt with all substitutions done
+
+Then spawn ALL {agent_count} experts in a SINGLE message with {agent_count} Task tool calls.
 Multiple Task calls in one message run as parallel subagents.
 
-Each Task call:
-- subagent_type: "alignment-expert"
-- description: "🧁 Muffin expert deliberation"
-- max_turns: 5
-- prompt: the AGENT PROMPT TEMPLATE with {{{{NAME}}}}, {{{{EMOJI}}}}, {{{{ROLE}}}}, {{{{OUTPUT_FILE}}}} substituted
-  - {{{{OUTPUT_FILE}}}} → {output_dir}/round-N/AGENT_NAME_LOWERCASE.md
-  - {{{{CONTEXT_INSTRUCTIONS}}}} → see IMPORTANT section below for round-specific content
+Each Task call uses the prompt from blue_dialogue_round_prompt:
+- subagent_type: "alignment-expert" (from task_params in response)
+- description: "🧁 Muffin expert deliberation" (from task_params in response)
+- max_turns: 5 (from task_params in response)
+- prompt: the "prompt" field from blue_dialogue_round_prompt response (already substituted)
 
 All {agent_count} results return when complete WITH STRUCTURED CONFIRMATIONS.
 
@@ -1063,11 +1066,11 @@ All {agent_count} results return when complete WITH STRUCTURED CONFIRMATIONS.
    You MUST write all three files BEFORE updating the dialogue file.
 6. UPDATE ARCHIVAL RECORD — after writing artifacts:
    Use the Edit tool to append to {dialogue_file}:
-   - Agent responses under the correct Round section
+   - Round summary (from round-N.summary.md) — NOT full agent responses (those are on disk)
    - Updated Scoreboard table (copy from scoreboard.md)
    - Updated Perspectives Inventory (one row per [PERSPECTIVE Pnn:] marker)
    - Updated Tensions Tracker (one row per [TENSION Tn:] marker)
-   This is the permanent human-readable record. Step 5 artifacts are the working state for agents.
+   Full agent responses stay in {output_dir}/round-N/*.md (ADR 0005: reference, don't copy).
 7. CONVERGE: If velocity approaches 0 OR all tensions resolved → declare convergence
    Otherwise, start next round (agents will read Step 5 artifacts via CONTEXT_INSTRUCTIONS).
    Maximum 5 rounds (safety valve)
@@ -1088,16 +1091,9 @@ FORMAT RULES — MANDATORY:
 - Round headers use emoji prefix (### 🧁 Muffin)
 - Scores start at 0 — only fill after reading agent returns
 
-IMPORTANT — ROUND-SPECIFIC CONTEXT:
-- Round 0: Set {{{{CONTEXT_INSTRUCTIONS}}}} to empty string. Agents have NO memory of each other.
-- Round 1+: Set {{{{CONTEXT_INSTRUCTIONS}}}} to the following block (substitute N-1 for prior round number):
-
-READ CONTEXT — THIS IS MANDATORY:
-Use the Read tool to read these files BEFORE writing your response:
-1. {output_dir}/tensions.md — accumulated tensions from all rounds
-2. {output_dir}/round-[N-1].summary.md — Judge's synthesis of the prior round
-3. Each .md file in {output_dir}/round-[N-1]/ — peer perspectives from last round
-You MUST read these files. Your response MUST engage with prior tensions and peer perspectives."##,
+NOTE: blue_dialogue_round_prompt handles round-specific context automatically:
+- Round 0: No context instructions (agents have no memory of each other)
+- Round 1+: Automatically includes READ CONTEXT block with correct paths"##,
         agent_count = agents.len(),
         dialogue_file = dialogue_file,
         output_dir = output_dir,
@@ -1136,6 +1132,152 @@ fn to_title_case(s: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+/// Handle blue_dialogue_round_prompt
+///
+/// Returns a fully-substituted prompt for a specific agent and round,
+/// ready to pass directly to the Task tool. Eliminates manual template substitution.
+pub fn handle_round_prompt(args: &Value) -> Result<Value, ServerError> {
+    // Required params
+    let output_dir = args
+        .get("output_dir")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| ServerError::InvalidParams)?;
+    let agent_name = args
+        .get("agent_name")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| ServerError::InvalidParams)?;
+    let agent_emoji = args
+        .get("agent_emoji")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| ServerError::InvalidParams)?;
+    let agent_role = args
+        .get("agent_role")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| ServerError::InvalidParams)?;
+    let round = args
+        .get("round")
+        .and_then(|v| v.as_u64())
+        .ok_or_else(|| ServerError::InvalidParams)? as usize;
+
+    // Optional params
+    let sources: Vec<String> = args
+        .get("sources")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let agent_lowercase = agent_name.to_lowercase();
+    let output_file = format!("{}/round-{}/{}.md", output_dir, round, agent_lowercase);
+
+    // Build source read instructions
+    let source_read_instructions = if sources.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "\n\nGROUNDING: Before responding, use the Read tool to read these files:\n{}",
+            sources
+                .iter()
+                .map(|s| format!("- {}", s))
+                .collect::<Vec<_>>()
+                .join("\n")
+        )
+    };
+
+    // Build context instructions based on round
+    let context_instructions = if round == 0 {
+        String::new()
+    } else {
+        format!(
+            r#"READ CONTEXT — THIS IS MANDATORY:
+Use the Read tool to read these files BEFORE writing your response:
+1. {output_dir}/tensions.md — accumulated tensions from all rounds
+2. {output_dir}/round-{prev}.summary.md — Judge's synthesis of the prior round
+3. Each .md file in {output_dir}/round-{prev}/ — peer perspectives from last round
+You MUST read these files. Your response MUST engage with prior tensions and peer perspectives."#,
+            output_dir = output_dir,
+            prev = round - 1,
+        )
+    };
+
+    // Build the fully-substituted prompt
+    let prompt = format!(
+        r##"You are {name} {emoji}, a {role} in an ALIGNMENT-seeking dialogue.
+
+Your role:
+- SURFACE perspectives others may have missed
+- DEFEND valuable ideas with evidence, not ego
+- CHALLENGE assumptions with curiosity, not destruction
+- INTEGRATE perspectives that resonate
+- CONCEDE gracefully when others see something you missed
+
+Your contribution is scored on PRECISION, not volume.
+One sharp insight beats ten paragraphs. You ALL win when the result is aligned.
+
+{context_instructions}
+
+=== MANDATORY FILE OUTPUT ===
+
+You MUST write your response to a file. This is NOT optional.
+
+OUTPUT FILE: {output_file}
+
+Use the Write tool to write your COMPLETE response to the file above.
+If you return your response without writing to the file, YOUR WORK WILL BE LOST.
+
+=== FILE CONTENT STRUCTURE ===
+
+Write EXACTLY this structure to the file:
+
+[PERSPECTIVE P01: brief label]
+Your strongest new viewpoint. Two to four sentences maximum. No preamble.
+
+[PERSPECTIVE P02: brief label]  ← optional, only if genuinely distinct
+One to two sentences maximum.
+
+[TENSION T01: brief description]  ← optional
+One sentence identifying the unresolved issue.
+
+[REFINEMENT: description] or [CONCESSION: description] or [RESOLVED Tn]  ← optional
+One sentence each. Use only when engaging with prior round content.
+
+---
+Nothing else. No introduction. No conclusion. No elaboration.
+
+=== RETURN CONFIRMATION ===
+
+AFTER writing the file, return ONLY this structured confirmation to the Judge:
+
+FILE_WRITTEN: {output_file}
+Perspectives: P01 [label], P02 [label]
+Tensions: T01 [label] or none
+Moves: [CONCESSION|REFINEMENT|RESOLVED] or none
+Claim: [your single strongest claim in one sentence]
+
+Five lines. The FILE_WRITTEN line proves you wrote the file. Without it, the Judge assumes your work was lost.{source_read_instructions}"##,
+        name = agent_name,
+        emoji = agent_emoji,
+        role = agent_role,
+        context_instructions = context_instructions,
+        output_file = output_file,
+        source_read_instructions = source_read_instructions,
+    );
+
+    Ok(json!({
+        "status": "success",
+        "prompt": prompt,
+        "output_file": output_file,
+        "task_params": {
+            "subagent_type": "general-purpose",
+            "description": format!("{} {} expert deliberation", agent_emoji, agent_name),
+            "max_turns": 5,
+        }
+    }))
 }
 
 #[cfg(test)]
@@ -1422,14 +1564,10 @@ mod tests {
 
         let instructions = protocol["instructions"].as_str().unwrap();
 
-        // Round 1+ CONTEXT_INSTRUCTIONS must reference artifact files
+        // Instructions must mention blue_dialogue_round_prompt handles context
         assert!(
-            instructions.contains("/tmp/blue-dialogue/context-test/tensions.md"),
-            "Context instructions must reference tensions.md with full path"
-        );
-        assert!(
-            instructions.contains("round-[N-1].summary.md"),
-            "Context instructions must reference prior round summary"
+            instructions.contains("blue_dialogue_round_prompt handles round-specific context"),
+            "Instructions must mention blue_dialogue_round_prompt for context"
         );
 
         // File architecture diagram must show all artifact files
@@ -1445,5 +1583,89 @@ mod tests {
             instructions.contains("round-0.summary.md"),
             "File architecture must show round-0.summary.md"
         );
+    }
+
+    #[test]
+    fn test_handle_round_prompt_round_0() {
+        let args = json!({
+            "output_dir": "/tmp/blue-dialogue/test-topic",
+            "agent_name": "Muffin",
+            "agent_emoji": "🧁",
+            "agent_role": "Platform Architect",
+            "round": 0
+        });
+
+        let result = handle_round_prompt(&args).unwrap();
+
+        // Must have success status
+        assert_eq!(result["status"], "success");
+
+        // Must have fully-substituted output_file path
+        assert_eq!(
+            result["output_file"],
+            "/tmp/blue-dialogue/test-topic/round-0/muffin.md"
+        );
+
+        // Prompt must contain substituted values (no placeholders)
+        let prompt = result["prompt"].as_str().unwrap();
+        assert!(prompt.contains("You are Muffin 🧁"));
+        assert!(prompt.contains("Platform Architect"));
+        assert!(prompt.contains("/tmp/blue-dialogue/test-topic/round-0/muffin.md"));
+        assert!(!prompt.contains("{{NAME}}"));
+        assert!(!prompt.contains("{{EMOJI}}"));
+        assert!(!prompt.contains("{{OUTPUT_FILE}}"));
+
+        // Round 0 should NOT have context instructions
+        assert!(!prompt.contains("READ CONTEXT"));
+
+        // Must have task_params for spawning
+        assert_eq!(result["task_params"]["subagent_type"], "general-purpose");
+        assert_eq!(result["task_params"]["max_turns"], 5);
+    }
+
+    #[test]
+    fn test_handle_round_prompt_round_1_has_context() {
+        let args = json!({
+            "output_dir": "/tmp/blue-dialogue/test-topic",
+            "agent_name": "Cupcake",
+            "agent_emoji": "🧁",
+            "agent_role": "Security Engineer",
+            "round": 1
+        });
+
+        let result = handle_round_prompt(&args).unwrap();
+        let prompt = result["prompt"].as_str().unwrap();
+
+        // Round 1+ should have context instructions
+        assert!(prompt.contains("READ CONTEXT"));
+        assert!(prompt.contains("/tmp/blue-dialogue/test-topic/tensions.md"));
+        assert!(prompt.contains("/tmp/blue-dialogue/test-topic/round-0.summary.md"));
+        assert!(prompt.contains("/tmp/blue-dialogue/test-topic/round-0/"));
+
+        // Output file should be round-1
+        assert_eq!(
+            result["output_file"],
+            "/tmp/blue-dialogue/test-topic/round-1/cupcake.md"
+        );
+    }
+
+    #[test]
+    fn test_handle_round_prompt_with_sources() {
+        let args = json!({
+            "output_dir": "/tmp/blue-dialogue/test-topic",
+            "agent_name": "Scone",
+            "agent_emoji": "🧁",
+            "agent_role": "Backend Engineer",
+            "round": 0,
+            "sources": ["/path/to/file1.rs", "/path/to/file2.rs"]
+        });
+
+        let result = handle_round_prompt(&args).unwrap();
+        let prompt = result["prompt"].as_str().unwrap();
+
+        // Should have grounding instructions
+        assert!(prompt.contains("GROUNDING:"));
+        assert!(prompt.contains("/path/to/file1.rs"));
+        assert!(prompt.contains("/path/to/file2.rs"));
     }
 }
