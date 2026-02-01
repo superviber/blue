@@ -1,205 +1,301 @@
-# RFC 0052: CLI Hook Management
+# RFC 0052: Blue Install Command
 
 **Status**: Draft
 **Created**: 2026-02-01
+**Updated**: 2026-02-01
 **Author**: Claude Opus 4.5
 **Related**: RFC 0038, RFC 0049, RFC 0051
 
 ## Problem Statement
 
-Blue's Claude Code integration requires hooks to be manually configured:
-1. Create `.claude/hooks/` directory
-2. Write hook scripts
-3. Edit `.claude/settings.json`
-4. Make scripts executable
+Blue's Claude Code integration requires multiple manual setup steps:
 
-This is error-prone and not portable. New team members must manually set up hooks or copy configurations.
+1. **Hooks**: Create `.claude/hooks/`, write scripts, edit settings.json
+2. **Skills**: Symlink `skills/*` to `~/.claude/skills/`
+3. **MCP Server**: Add blue to `~/.claude.json` mcpServers
+
+This is error-prone, not portable, and undiscoverable. New team members must manually configure everything.
 
 ## Proposed Solution
 
-Add `blue hooks` subcommand to manage Claude Code hook installation:
+A unified `blue install` command that sets up all Claude Code integration:
 
 ```bash
-blue hooks install    # Install all Blue hooks
-blue hooks uninstall  # Remove Blue hooks
-blue hooks status     # Show current hook status
-blue hooks check      # Verify hooks are working
+blue install      # Install everything
+blue uninstall    # Remove everything
+blue doctor       # Check installation health
 ```
+
+## What Gets Installed
+
+| Component | Location | Purpose |
+|-----------|----------|---------|
+| **Hooks** | `.claude/hooks/` + `.claude/settings.json` | SessionStart (PATH), PreToolUse (guard) |
+| **Skills** | `~/.claude/skills/` (symlinks) | `/alignment-play` and future skills |
+| **MCP Server** | `~/.claude.json` | Blue MCP tools |
 
 ## Commands
 
-### `blue hooks install`
-
-Installs Blue's Claude Code hooks:
+### `blue install`
 
 ```bash
-$ blue hooks install
-Installing Blue hooks...
-  ✓ Created .claude/hooks/session-start.sh
-  ✓ Created .claude/hooks/guard-write.sh
-  ✓ Updated .claude/settings.json
-  ✓ Made scripts executable
+$ blue install
+Installing Blue for Claude Code...
 
-Blue hooks installed. Restart Claude Code to activate.
+Hooks:
+  ✓ .claude/hooks/session-start.sh
+  ✓ .claude/hooks/guard-write.sh
+  ✓ .claude/settings.json (merged)
+
+Skills:
+  ✓ ~/.claude/skills/alignment-play -> /Users/ericg/letemcook/blue/skills/alignment-play
+
+MCP Server:
+  ✓ ~/.claude.json (blue server configured)
+
+Blue installed. Restart Claude Code to activate.
 ```
 
-**Behavior:**
-- Creates `.claude/hooks/` if missing
-- Writes hook scripts from embedded templates
-- Merges into existing `.claude/settings.json` (preserves other hooks)
-- Sets executable permissions
-- Idempotent - safe to run multiple times
+**Flags:**
+- `--hooks-only` - Only install hooks
+- `--skills-only` - Only install skills
+- `--mcp-only` - Only configure MCP server
+- `--force` - Overwrite existing files
 
-### `blue hooks uninstall`
-
-Removes Blue's hooks:
+### `blue uninstall`
 
 ```bash
-$ blue hooks uninstall
-Removing Blue hooks...
+$ blue uninstall
+Removing Blue from Claude Code...
+
+Hooks:
   ✓ Removed .claude/hooks/session-start.sh
   ✓ Removed .claude/hooks/guard-write.sh
-  ✓ Updated .claude/settings.json
+  ✓ Cleaned .claude/settings.json
 
-Blue hooks removed.
+Skills:
+  ✓ Removed ~/.claude/skills/alignment-play
+
+MCP Server:
+  ✓ Removed blue from ~/.claude.json
+
+Blue uninstalled.
 ```
 
-**Behavior:**
-- Removes only Blue-managed hook scripts
-- Removes Blue entries from settings.json (preserves other hooks)
-- Leaves `.claude/` directory if other files exist
+### `blue doctor`
 
-### `blue hooks status`
-
-Shows current hook state:
+Diagnoses installation issues:
 
 ```bash
-$ blue hooks status
-Blue Claude Code Hooks:
+$ blue doctor
+Blue Installation Health Check
 
-  SessionStart:
-    ✓ session-start.sh (installed, executable)
+Binary:
+  ✓ blue found at /Users/ericg/.cargo/bin/blue
+  ✓ Version: 0.1.0
 
-  PreToolUse (Write|Edit|MultiEdit):
-    ✓ guard-write.sh (installed, executable)
+Hooks:
+  ✓ session-start.sh (installed, executable)
+  ✓ guard-write.sh (installed, executable)
+  ✓ settings.json configured
 
-Settings: .claude/settings.json (configured)
+Skills:
+  ✓ alignment-play (symlink valid)
 
-All hooks installed and ready.
+MCP Server:
+  ✓ blue configured in ~/.claude.json
+  ✓ Binary path correct
+  ✓ Server responds to ping
+
+All checks passed.
 ```
 
-### `blue hooks check`
-
-Verifies hooks work correctly:
+With issues:
 
 ```bash
-$ blue hooks check
-Checking Blue hooks...
-  ✓ session-start.sh exits 0
-  ✓ guard-write.sh allows /tmp/test.md
-  ✓ guard-write.sh blocks src/main.rs (no worktree)
+$ blue doctor
+Blue Installation Health Check
 
-All hooks working correctly.
+Binary:
+  ✓ blue found at /Users/ericg/.cargo/bin/blue
+
+Hooks:
+  ✗ guard-write.sh missing
+  ✗ settings.json not configured
+
+  Run `blue install` to fix.
+
+Skills:
+  ✗ alignment-play symlink broken (target moved?)
+
+  Run `blue install --force` to recreate.
+
+MCP Server:
+  ✓ blue configured in ~/.claude.json
+  ✗ Binary path outdated (points to old location)
+
+  Run `blue install --mcp-only` to fix.
+
+3 issues found. Run suggested commands to fix.
 ```
 
-## Hook Templates
+## Implementation Details
 
-Hooks are embedded in the blue binary as string constants:
-
-```rust
-const SESSION_START_HOOK: &str = r#"#!/bin/bash
-# Blue SessionStart hook - sets up PATH
-# Managed by: blue hooks install
-
-if [ -n "$CLAUDE_ENV_FILE" ] && [ -n "$CLAUDE_PROJECT_DIR" ]; then
-  echo "export PATH=\"\$CLAUDE_PROJECT_DIR/target/release:\$PATH\"" >> "$CLAUDE_ENV_FILE"
-fi
-
-exit 0
-"#;
-
-const GUARD_WRITE_HOOK: &str = r#"#!/bin/bash
-# Blue PreToolUse hook - enforces RFC 0038 worktree protection
-# Managed by: blue hooks install
-
-FILE_PATH=$(jq -r '.tool_input.file_path // empty')
-
-if [ -z "$FILE_PATH" ]; then
-    exit 0
-fi
-
-blue guard --path="$FILE_PATH"
-"#;
-```
-
-## Settings.json Management
-
-The install command merges Blue hooks into existing settings:
+### Hooks Installation
 
 ```rust
-fn merge_hooks(existing: Value, blue_hooks: Value) -> Value {
-    // Preserve existing hooks, add/update Blue hooks
-    // Use "# Managed by: blue" comments to identify Blue hooks
+fn install_hooks(project_dir: &Path, force: bool) -> Result<()> {
+    let hooks_dir = project_dir.join(".claude/hooks");
+    fs::create_dir_all(&hooks_dir)?;
+
+    // Write hook scripts
+    write_hook(&hooks_dir.join("session-start.sh"), SESSION_START_TEMPLATE)?;
+    write_hook(&hooks_dir.join("guard-write.sh"), GUARD_WRITE_TEMPLATE)?;
+
+    // Merge into settings.json
+    let settings_path = project_dir.join(".claude/settings.json");
+    let settings = merge_hook_settings(&settings_path)?;
+    fs::write(&settings_path, serde_json::to_string_pretty(&settings)?)?;
+
+    Ok(())
 }
 ```
 
-**Identification:** Hook scripts include a `# Managed by: blue hooks install` comment to identify Blue-managed hooks.
+### Skills Installation
 
-## Implementation Plan
+```rust
+fn install_skills(project_dir: &Path) -> Result<()> {
+    let skills_dir = project_dir.join("skills");
+    let target_dir = dirs::home_dir()?.join(".claude/skills");
 
-- [ ] Add `Commands::Hooks` enum variant with subcommands
-- [ ] Implement `handle_hooks_install()`
-- [ ] Implement `handle_hooks_uninstall()`
-- [ ] Implement `handle_hooks_status()`
-- [ ] Implement `handle_hooks_check()`
-- [ ] Embed hook templates as constants
-- [ ] Add settings.json merge logic
-- [ ] Add tests for hook management
+    fs::create_dir_all(&target_dir)?;
+
+    for entry in fs::read_dir(&skills_dir)? {
+        let entry = entry?;
+        if entry.path().is_dir() {
+            let skill_name = entry.file_name();
+            let link_path = target_dir.join(&skill_name);
+
+            // Remove existing symlink if present
+            if link_path.exists() {
+                fs::remove_file(&link_path)?;
+            }
+
+            // Create symlink
+            std::os::unix::fs::symlink(entry.path(), &link_path)?;
+        }
+    }
+
+    Ok(())
+}
+```
+
+### MCP Server Configuration
+
+```rust
+fn install_mcp_server(project_dir: &Path) -> Result<()> {
+    let config_path = dirs::home_dir()?.join(".claude.json");
+    let mut config: Value = if config_path.exists() {
+        serde_json::from_str(&fs::read_to_string(&config_path)?)?
+    } else {
+        json!({})
+    };
+
+    // Add/update blue MCP server
+    config["mcpServers"]["blue"] = json!({
+        "command": project_dir.join("target/release/blue").to_string_lossy(),
+        "args": ["mcp"]
+    });
+
+    fs::write(&config_path, serde_json::to_string_pretty(&config)?)?;
+
+    Ok(())
+}
+```
+
+## Identification of Managed Files
+
+All Blue-managed files include a header comment:
+
+```bash
+#!/bin/bash
+# Managed by: blue install
+# Do not edit manually - changes will be overwritten
+```
+
+Or for JSON, a metadata key:
+
+```json
+{
+  "_blue_managed": true,
+  "_blue_version": "0.1.0",
+  ...
+}
+```
 
 ## CLI Structure
 
 ```rust
 #[derive(Subcommand)]
-enum HooksCommands {
-    /// Install Blue's Claude Code hooks
-    Install,
+enum Commands {
+    /// Install Blue for Claude Code
+    Install {
+        /// Only install hooks
+        #[arg(long)]
+        hooks_only: bool,
 
-    /// Remove Blue's Claude Code hooks
+        /// Only install skills
+        #[arg(long)]
+        skills_only: bool,
+
+        /// Only configure MCP server
+        #[arg(long)]
+        mcp_only: bool,
+
+        /// Overwrite existing files
+        #[arg(long)]
+        force: bool,
+    },
+
+    /// Remove Blue from Claude Code
     Uninstall,
 
-    /// Show hook installation status
-    Status,
+    /// Check installation health
+    Doctor,
 
-    /// Verify hooks are working correctly
-    Check,
+    // ... existing commands
 }
 ```
 
 ## Future Extensions
 
-- `blue hooks update` - Update hooks to latest version
-- `blue hooks diff` - Show differences from installed hooks
-- `blue hooks export` - Export hooks for manual installation
-- Support for custom hooks via `.blue/hooks/` templates
+- `blue install --global` - Install for all projects (user-level config)
+- `blue upgrade` - Update hooks/skills to latest templates
+- `blue install --dry-run` - Show what would be installed
+- Plugin system for custom hooks/skills
+
+## Implementation Plan
+
+- [ ] Add `Commands::Install` with flags
+- [ ] Add `Commands::Uninstall`
+- [ ] Add `Commands::Doctor`
+- [ ] Implement hook installation (from RFC 0051)
+- [ ] Implement skill symlink management
+- [ ] Implement MCP server configuration
+- [ ] Embed hook templates as constants
+- [ ] Add settings.json merge logic
+- [ ] Add ~/.claude.json merge logic
+- [ ] Add installation verification
+- [ ] Add tests
 
 ## Benefits
 
-1. **One command setup**: `blue hooks install`
-2. **Portable**: Works on any machine with blue installed
-3. **Idempotent**: Safe to run repeatedly
-4. **Discoverable**: `blue hooks status` shows what's installed
-5. **Reversible**: `blue hooks uninstall` cleanly removes
-
-## Migration
-
-Existing manual installations can be migrated:
-
-```bash
-$ blue hooks install
-Note: Found existing hooks. Replacing with managed versions.
-  ✓ Backed up .claude/hooks/guard-write.sh to .claude/hooks/guard-write.sh.bak
-  ✓ Installed managed guard-write.sh
-```
+1. **One command setup**: `blue install`
+2. **Discoverable**: `blue doctor` shows what's wrong
+3. **Portable**: Works on any machine
+4. **Idempotent**: Safe to run repeatedly
+5. **Reversible**: `blue uninstall` cleanly removes everything
+6. **Maintainable**: Templates embedded in binary, easy to update
 
 ## References
 
