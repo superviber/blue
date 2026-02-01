@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "blue guard --path=\"$TOOL_INPUT:file_path\""
+            "command": ".claude/hooks/guard-write.sh"
           }
         ]
       }
