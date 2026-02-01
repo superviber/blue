@@ -10,5 +10,5 @@ if [ -z "$FILE_PATH" ]; then
 fi
 
 # Call blue guard with the extracted path
-# Note: Full path required - PATH lookup hangs in Claude Code hook environment
-/Users/ericg/letemcook/blue/target/release/blue guard --path="$FILE_PATH"
+# RFC 0051: PATH is set by SessionStart hook
+blue guard --path="$FILE_PATH"

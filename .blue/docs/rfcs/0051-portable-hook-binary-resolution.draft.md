@@ -125,11 +125,11 @@ blue guard --path="$FILE_PATH"
 
 ## Recommendation
 
-**Option A** (project-relative binary) is recommended because:
-1. It's documented by Claude Code
-2. It's portable across machines
-3. It doesn't require additional hooks
-4. It works with the existing build workflow
+**Option B** (SessionStart PATH injection) is recommended because:
+1. Cleaner hook scripts - just use `blue` by name
+2. Works for any hook that needs blue
+3. Consistent with existing SessionStart hooks pattern
+4. PATH set once, used everywhere
 
 ## Implementation Plan
 
