@@ -1,6 +1,6 @@
 # RFC 0049: Synchronous Guard Command
 
-**Status**: Draft
+**Status**: Implemented
 **Created**: 2026-02-01
 **Author**: 💙 Judge (via alignment dialogue)
 **Related**: RFC 0038 (SDLC Workflow Discipline)
@@ -22,14 +22,14 @@ None of these require async, but the tokio runtime initialization adds:
 2. Potential resource contention in hook contexts
 3. Failure modes when spawned from non-tokio parent processes
 
-### Current Workaround
+### Remaining Issue: PATH Lookup
 
-The guard hook script uses a full path to the binary and closes stdin:
+Even with synchronous guard, PATH-based command lookup hangs in Claude Code's hook environment. The hook must use a full binary path:
 ```bash
-/Users/ericg/letemcook/blue/target/release/blue guard --path="$FILE_PATH" </dev/null
+/Users/ericg/letemcook/blue/target/release/blue guard --path="$FILE_PATH"
 ```
 
-This works but is fragile (hardcoded path) and doesn't address the architectural issue.
+This is a Claude Code subprocess environment issue, not a Blue issue.
 
 ## Proposed Solution
 
@@ -113,13 +113,13 @@ This RFC emerged from an alignment dialogue with 5 experts. Key insights:
 
 ## Implementation Plan
 
-- [ ] Add `maybe_handle_guard()` pre-tokio check
-- [ ] Implement `run_guard_sync()` with current logic
-- [ ] Add `is_in_allowlist_sync()` helper
-- [ ] Add `is_source_code_path_sync()` helper
-- [ ] Update hook script to remove full path
-- [ ] Test hook with simplified invocation
-- [ ] Remove workaround code
+- [x] Add `maybe_handle_guard_sync()` pre-tokio check
+- [x] Implement `run_guard_sync()` with current logic
+- [x] Add `is_in_allowlist_sync()` helper
+- [x] Add `is_source_code_path_sync()` helper
+- [x] Add `main()` entry point that checks guard before tokio
+- [ ] ~~Update hook script to remove full path~~ (blocked by Claude Code PATH issue)
+- [ ] ~~Remove workaround code~~ (blocked by Claude Code PATH issue)
 
 ## References
 

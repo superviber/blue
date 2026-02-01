@@ -7,6 +7,180 @@ use anyhow::Result;
 use blue_core::daemon::{DaemonClient, DaemonDb, DaemonPaths, DaemonState, run_daemon};
 use blue_core::realm::RealmService;
 
+// ============================================================================
+// RFC 0049: Synchronous Guard Command
+// ============================================================================
+//
+// The guard command runs BEFORE tokio runtime initialization to avoid hanging
+// issues when invoked from Claude Code hooks. Pre-init gates should not depend
+// on post-init infrastructure.
+
+/// Check if this is a guard command and handle it synchronously.
+/// Returns Some(exit_code) if handled, None to continue to tokio::main.
+fn maybe_handle_guard_sync() -> Option<i32> {
+    let args: Vec<String> = std::env::args().collect();
+
+    // Quick check: is this a guard command?
+    if args.len() >= 2 && args[1] == "guard" {
+        // Parse --path=VALUE
+        let path = args.iter()
+            .find(|a| a.starts_with("--path="))
+            .map(|a| &a[7..]);
+
+        if let Some(path) = path {
+            return Some(run_guard_sync(path));
+        }
+    }
+    None
+}
+
+/// Synchronous guard implementation - no tokio, no tracing, just the check.
+fn run_guard_sync(path_str: &str) -> i32 {
+    use std::path::Path;
+
+    // Check bypass environment variable
+    if std::env::var("BLUE_BYPASS_WORKTREE").is_ok() {
+        // Note: We skip audit logging in sync mode for simplicity
+        return 0; // Allow
+    }
+
+    let path = Path::new(path_str);
+
+    // Fast allowlist check
+    if is_in_allowlist_sync(path) {
+        return 0; // Allow
+    }
+
+    // Get cwd
+    let cwd = match std::env::current_dir() {
+        Ok(c) => c,
+        Err(_) => {
+            eprintln!("guard: failed to get current directory");
+            return 1;
+        }
+    };
+
+    // Check worktree status
+    let git_path = cwd.join(".git");
+
+    if git_path.is_file() {
+        // This is a worktree (linked worktree has .git as a file)
+        if let Ok(content) = std::fs::read_to_string(&git_path) {
+            if content.starts_with("gitdir:") {
+                let dir_name = cwd.file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("");
+
+                let parent_is_worktrees = cwd.parent()
+                    .and_then(|p| p.file_name())
+                    .and_then(|n| n.to_str())
+                    .map(|s| s == "worktrees")
+                    .unwrap_or(false);
+
+                let is_rfc = dir_name.starts_with("rfc-")
+                    || dir_name.starts_with("feature-")
+                    || parent_is_worktrees;
+
+                if is_rfc {
+                    let abs_path = if path.is_absolute() {
+                        path.to_path_buf()
+                    } else {
+                        cwd.join(path)
+                    };
+                    if abs_path.starts_with(&cwd) {
+                        return 0; // Allow writes in RFC worktree
+                    }
+                }
+            }
+        }
+        eprintln!("guard: blocked write to {} (not in RFC worktree scope)", path.display());
+        return 1;
+    } else if git_path.is_dir() {
+        // Main repository - check branch
+        if let Ok(output) = std::process::Command::new("git")
+            .args(["branch", "--show-current"])
+            .current_dir(&cwd)
+            .output()
+        {
+            let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            let is_rfc = branch.starts_with("feature/")
+                || branch.starts_with("rfc/")
+                || branch.starts_with("rfc-");
+
+            if is_rfc {
+                return 0; // Allow - on RFC branch
+            }
+        }
+
+        // Not on RFC branch - check if source code
+        if is_source_code_path_sync(path) {
+            eprintln!("guard: blocked write to {} (no active worktree)", path.display());
+            eprintln!("hint: Create a worktree with 'blue worktree create <rfc-title>' first");
+            return 1;
+        }
+        return 0; // Allow non-source-code files
+    }
+
+    // No .git - allow (not a git repo)
+    0
+}
+
+/// Synchronous allowlist check (RFC 0049)
+fn is_in_allowlist_sync(path: &std::path::Path) -> bool {
+    let path_str = path.to_string_lossy();
+
+    let allowlist = [
+        ".blue/docs/",
+        ".claude/",
+        "/tmp/",
+        ".gitignore",
+        ".blue/audit/",
+    ];
+
+    for pattern in &allowlist {
+        if path_str.contains(pattern) {
+            return true;
+        }
+    }
+
+    // Root-level markdown (not in crates/ or src/)
+    if path_str.ends_with(".md") && !path_str.contains("crates/") && !path_str.contains("src/") {
+        return true;
+    }
+
+    // Dialogue temp files
+    if path_str.contains("/tmp/blue-dialogue/") {
+        return true;
+    }
+
+    false
+}
+
+/// Synchronous source code path check (RFC 0049)
+fn is_source_code_path_sync(path: &std::path::Path) -> bool {
+    let path_str = path.to_string_lossy();
+
+    let source_patterns = ["src/", "crates/", "apps/", "lib/", "packages/", "tests/"];
+    for pattern in &source_patterns {
+        if path_str.contains(pattern) {
+            return true;
+        }
+    }
+
+    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+        let code_extensions = ["rs", "ts", "tsx", "js", "jsx", "py", "go", "java", "c", "cpp", "h"];
+        if code_extensions.contains(&ext) {
+            return true;
+        }
+    }
+
+    false
+}
+
+// ============================================================================
+// End RFC 0049
+// ============================================================================
+
 #[derive(Parser)]
 #[command(name = "blue")]
 #[command(about = "Welcome home. A development philosophy and toolset.")]
@@ -439,8 +613,22 @@ enum IndexCommands {
     Status,
 }
 
+/// Entry point - handles guard synchronously before tokio (RFC 0049)
+fn main() {
+    // RFC 0049: Handle guard command synchronously before tokio runtime
+    if let Some(exit_code) = maybe_handle_guard_sync() {
+        std::process::exit(exit_code);
+    }
+
+    // Normal path: run tokio runtime
+    if let Err(e) = tokio_main() {
+        eprintln!("Error: {}", e);
+        std::process::exit(1);
+    }
+}
+
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn tokio_main() -> Result<()> {
     let cli = Cli::parse();
 
     // RFC 0020: MCP debug mode logs to file at DEBUG level

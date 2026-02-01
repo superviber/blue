@@ -10,5 +10,5 @@ if [ -z "$FILE_PATH" ]; then
 fi
 
 # Call blue guard with the extracted path
-# Use full path to target/release binary and close stdin
-/Users/ericg/letemcook/blue/target/release/blue guard --path="$FILE_PATH" </dev/null
+# Note: Full path required - PATH lookup hangs in Claude Code hook environment
+/Users/ericg/letemcook/blue/target/release/blue guard --path="$FILE_PATH"
