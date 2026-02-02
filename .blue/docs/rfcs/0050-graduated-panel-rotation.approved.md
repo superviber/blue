@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Draft |
+| **Status** | Approved |
 | **Date** | 2026-02-01 |
 | **ADRs** | 0014 (Alignment Dialogue Agents) |
 | **Extends** | RFC 0048 (Alignment Expert Pools) |
@@ -31,7 +31,7 @@ Worse: when a tension emerged around regulatory risk, there was no mechanism to 
 
 Instead of algorithmic rotation with fixed parameters, the **Judge decides** how to evolve the panel each round. The MCP server provides infrastructure; the Judge provides judgment.
 
-### Rotation Mode: `graduated`
+### Rotation Mode: `graduated` (Default)
 
 ```json
 {
@@ -39,7 +39,7 @@ Instead of algorithmic rotation with fixed parameters, the **Judge decides** how
 }
 ```
 
-That's it. No `rotation_config`. The Judge receives guidelines in the skill prompt.
+This is now the **default** rotation mode. No `rotation_config` needed. The Judge receives guidelines in the skill prompt.
 
 ### Judge Guidelines (in alignment-play skill)
 

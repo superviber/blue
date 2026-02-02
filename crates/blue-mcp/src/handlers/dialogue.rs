@@ -46,14 +46,16 @@ impl std::fmt::Display for ExpertTier {
     }
 }
 
-/// Rotation mode for expert panel sampling (RFC 0048)
+/// Rotation mode for expert panel sampling (RFC 0048, RFC 0050)
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum RotationMode {
-    #[default]
     None,
     Wildcards,
     Full,
+    /// RFC 0050: Judge-driven panel evolution with expert creation (default)
+    #[default]
+    Graduated,
 }
 
 /// A single expert in the pool (RFC 0048)
@@ -81,6 +83,52 @@ pub struct PastryAgent {
     pub emoji: String,
     pub tier: String,
     pub relevance: f64,
+    /// RFC 0050: Optional focus area for created experts
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub focus: Option<String>,
+}
+
+// ==================== RFC 0050: Graduated Panel Rotation Types ====================
+
+/// Source of an expert in a panel (RFC 0050)
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ExpertSource {
+    /// Retained from previous round
+    Retained,
+    /// Pulled from the original pool
+    Pool,
+    /// Created on-demand by the Judge
+    Created,
+}
+
+/// Panel expert specification for graduated rotation (RFC 0050)
+/// Used by Judge to specify panel composition in round_prompt
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PanelExpertSpec {
+    /// Pastry name (existing or new)
+    pub name: String,
+    /// Expert role
+    pub role: String,
+    /// How the expert joined this panel
+    pub source: ExpertSource,
+    /// Tier (required for created experts)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tier: Option<String>,
+    /// Focus area (optional, useful for created experts)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub focus: Option<String>,
+}
+
+/// Panel history entry for a single round (RFC 0050)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PanelHistory {
+    pub round: usize,
+    pub panel_size: usize,
+    pub retained_count: usize,
+    pub from_pool_count: usize,
+    pub created_count: usize,
+    pub experts: Vec<PanelExpertSpec>,
 }
 
 /// Pastry names for alignment agents (ADR 0014)
@@ -393,6 +441,7 @@ pub fn handle_create(state: &mut ProjectState, args: &Value) -> Result<Value, Se
         .map(|s| match s {
             "wildcards" => RotationMode::Wildcards,
             "full" => RotationMode::Full,
+            "graduated" => RotationMode::Graduated,
             _ => RotationMode::None,
         })
         .unwrap_or_default();
@@ -914,6 +963,77 @@ fn tier_split(count: usize) -> (usize, usize, usize) {
     }
 }
 
+/// Generate a context brief for fresh experts joining mid-dialogue (RFC 0050)
+///
+/// Fresh experts (from pool or created) need context about what happened
+/// in prior rounds so they can engage meaningfully.
+pub fn generate_context_brief(output_dir: &str, round: usize) -> Result<String, ServerError> {
+    if round == 0 {
+        return Ok(String::new());
+    }
+
+    let prev_round = round - 1;
+    let mut brief = format!("## Context for Round {}\n\n", round);
+    brief.push_str("You are joining this dialogue in progress. Here's what happened:\n\n");
+
+    // Try to read tensions file
+    let tensions_path = format!("{}/tensions.md", output_dir);
+    if let Ok(tensions) = fs::read_to_string(&tensions_path) {
+        brief.push_str("### Key Tensions\n\n");
+        // Extract tension lines (lines starting with | T)
+        let tension_lines: Vec<&str> = tensions
+            .lines()
+            .filter(|line| line.starts_with("| T") || line.starts_with("|T"))
+            .collect();
+        if tension_lines.is_empty() {
+            brief.push_str("No tensions recorded yet.\n\n");
+        } else {
+            for line in tension_lines.iter().take(5) {
+                brief.push_str(line);
+                brief.push('\n');
+            }
+            if tension_lines.len() > 5 {
+                brief.push_str(&format!("... and {} more tensions\n", tension_lines.len() - 5));
+            }
+            brief.push('\n');
+        }
+    }
+
+    // Try to read prior round summary
+    let summary_path = format!("{}/round-{}.summary.md", output_dir, prev_round);
+    if let Ok(summary) = fs::read_to_string(&summary_path) {
+        brief.push_str(&format!("### Round {} Summary\n\n", prev_round));
+        // Take first 500 chars of summary
+        let truncated: String = summary.chars().take(500).collect();
+        brief.push_str(&truncated);
+        if summary.len() > 500 {
+            brief.push_str("...\n");
+        }
+        brief.push('\n');
+    }
+
+    // Try to read panel composition from prior round
+    let panel_path = format!("{}/round-{}/panel.json", output_dir, prev_round);
+    if let Ok(panel_json) = fs::read_to_string(&panel_path) {
+        if let Ok(panel) = serde_json::from_str::<Vec<PastryAgent>>(&panel_json) {
+            brief.push_str(&format!("### Round {} Panel\n\n", prev_round));
+            for agent in panel.iter().take(8) {
+                brief.push_str(&format!("- {} {}: {}\n", agent.emoji, agent.name, agent.role));
+            }
+            if panel.len() > 8 {
+                brief.push_str(&format!("... and {} more experts\n", panel.len() - 8));
+            }
+            brief.push('\n');
+        }
+    }
+
+    brief.push_str("### Your Task\n\n");
+    brief.push_str("Review these positions and contribute your fresh perspective. ");
+    brief.push_str("You bring a viewpoint that may have been missing from earlier rounds.\n");
+
+    Ok(brief)
+}
+
 /// Assign pastry names to sampled experts (RFC 0048)
 pub fn assign_pastry_names(sampled: Vec<PoolExpert>) -> Vec<PastryAgent> {
     sampled
@@ -931,6 +1051,7 @@ pub fn assign_pastry_names(sampled: Vec<PoolExpert>) -> Vec<PastryAgent> {
                 emoji: "🧁".to_string(),
                 tier: expert.tier.to_string(),
                 relevance: expert.relevance,
+                focus: None,
             }
         })
         .collect()
@@ -1240,10 +1361,66 @@ NOTE: blue_dialogue_round_prompt handles round-specific context automatically:
             .join(", "),
     );
 
+    // RFC 0050: Add graduated rotation guidelines when mode is graduated
+    let instructions = if rotation == RotationMode::Graduated {
+        format!(
+            r##"{base_instructions}
+
+=== GRADUATED PANEL ROTATION (RFC 0050) ===
+
+The panel returned above is a **suggestion**. You have full control over panel composition.
+
+**Before Round 0**: Review the suggested panel. If critical experts are missing, call
+`blue_dialogue_evolve_panel` with round=0 to override it before spawning agents.
+
+**Between rounds**: Decide how to evolve the panel based on dialogue dynamics.
+
+Use blue_dialogue_evolve_panel to specify your panel:
+
+```json
+{{
+  "output_dir": "{output_dir}",
+  "round": N,
+  "panel": [
+    {{ "name": "Muffin", "role": "Value Analyst", "source": "retained" }},
+    {{ "name": "Scone", "role": "Data Center Specialist", "source": "pool" }},
+    {{ "name": "Palmier", "role": "Supply Chain Risk Analyst", "source": "created", "tier": "Adjacent", "focus": "Geographic concentration" }}
+  ]
+}}
+```
+
+### Retention Criteria
+- **High scorers**: Experts who contributed sharp insights should continue
+- **Unresolved advocates**: Experts defending positions with open tensions
+- **Core relevance**: Experts central to the domain should anchor continuity
+
+### Fresh Perspective Triggers
+- **Stale consensus**: If the panel is converging too easily, bring challengers
+- **Unexplored angles**: Pull in experts whose focus hasn't been represented
+- **Low-scoring experts**: Consider rotating out experts who aren't contributing
+
+### Targeted Expert Injection
+When a specific tension emerges that no current expert can address:
+1. Check if the pool has a relevant expert → source: "pool"
+2. If not, create a new expert → source: "created" with tier and focus
+
+### Panel Size Flexibility
+- Target panel size is a guideline, not a constraint
+- You may run a smaller panel if the dialogue is converging
+- You may expand briefly to address a complex tension
+
+### Expert Creation
+You are not limited to the initial pool. If the dialogue surfaces a perspective that no pooled expert covers, create one with source: "created"."##,
+            base_instructions = instructions,
+            output_dir = output_dir,
+        )
+    } else {
+        instructions
+    };
+
     let mut result = json!({
         "instructions": instructions,
         "agent_prompt_template": agent_prompt_template,
-        "agents": agent_list,
         "dialogue_file": dialogue_file,
         "model": model,
         "sources": sources,
@@ -1255,6 +1432,24 @@ NOTE: blue_dialogue_round_prompt handles round-specific context automatically:
             "tension_resolution_gate": true,
         },
     });
+
+    // RFC 0050: For graduated rotation, the panel is a suggestion that the Judge can override
+    // Use "suggested_panel" to make this clear; other modes use "agents" as the final panel
+    if rotation == RotationMode::Graduated {
+        result.as_object_mut().unwrap().insert(
+            "suggested_panel".to_string(),
+            json!(agent_list),
+        );
+        result.as_object_mut().unwrap().insert(
+            "panel_is_suggestion".to_string(),
+            json!(true),
+        );
+    } else {
+        result.as_object_mut().unwrap().insert(
+            "agents".to_string(),
+            json!(agent_list),
+        );
+    }
 
     // RFC 0048: Include pool info if present
     if let Some(p) = pool {
@@ -1290,6 +1485,8 @@ fn to_title_case(s: &str) -> String {
 ///
 /// Returns a fully-substituted prompt for a specific agent and round,
 /// ready to pass directly to the Task tool. Eliminates manual template substitution.
+///
+/// RFC 0050: Now accepts optional `expert_source` to generate context briefs for fresh experts.
 pub fn handle_round_prompt(args: &Value) -> Result<Value, ServerError> {
     // Required params
     let output_dir = args
@@ -1324,6 +1521,20 @@ pub fn handle_round_prompt(args: &Value) -> Result<Value, ServerError> {
         })
         .unwrap_or_default();
 
+    // RFC 0050: Expert source for graduated rotation
+    let expert_source: Option<ExpertSource> = args
+        .get("expert_source")
+        .and_then(|v| v.as_str())
+        .and_then(|s| match s {
+            "retained" => Some(ExpertSource::Retained),
+            "pool" => Some(ExpertSource::Pool),
+            "created" => Some(ExpertSource::Created),
+            _ => None,
+        });
+
+    // RFC 0050: Optional focus for created experts
+    let expert_focus = args.get("focus").and_then(|v| v.as_str());
+
     let agent_lowercase = agent_name.to_lowercase();
     let output_file = format!("{}/round-{}/{}.md", output_dir, round, agent_lowercase);
 
@@ -1341,11 +1552,26 @@ pub fn handle_round_prompt(args: &Value) -> Result<Value, ServerError> {
         )
     };
 
-    // Build context instructions based on round
+    // RFC 0050: Generate context brief for fresh experts (pool or created) joining after round 0
+    let context_brief = if round > 0 && expert_source != Some(ExpertSource::Retained) {
+        generate_context_brief(output_dir, round).unwrap_or_default()
+    } else {
+        String::new()
+    };
+
+    // RFC 0050: Focus instruction for created experts
+    let focus_instruction = if let Some(focus) = expert_focus {
+        format!("\n\n**Your Focus**: {}\nBring this specialized perspective to the dialogue.", focus)
+    } else {
+        String::new()
+    };
+
+    // Build context instructions based on round and expert source
     let context_instructions = if round == 0 {
         // Round 0: No prior context to read, but agents can research if needed
         String::new()
-    } else {
+    } else if expert_source == Some(ExpertSource::Retained) {
+        // Retained experts read full context
         format!(
             r#"READ CONTEXT — THIS IS MANDATORY:
 Use the Read tool to read these files BEFORE writing your response:
@@ -1356,11 +1582,26 @@ You MUST read these files. Your response MUST engage with prior tensions and pee
             output_dir = output_dir,
             prev = round - 1,
         )
+    } else {
+        // RFC 0050: Fresh experts get context brief + read instructions
+        format!(
+            r#"{context_brief}
+
+READ CONTEXT — THIS IS MANDATORY:
+Use the Read tool to read these files BEFORE writing your response:
+1. {output_dir}/tensions.md — accumulated tensions from all rounds
+2. {output_dir}/round-{prev}.summary.md — Judge's synthesis of the prior round
+3. Each .md file in {output_dir}/round-{prev}/ — peer perspectives from last round
+You MUST read these files. Your response MUST engage with prior tensions and peer perspectives."#,
+            context_brief = context_brief,
+            output_dir = output_dir,
+            prev = round - 1,
+        )
     };
 
     // Build the fully-substituted prompt
     let prompt = format!(
-        r##"You are {name} {emoji}, a {role} in an ALIGNMENT-seeking dialogue.
+        r##"You are {name} {emoji}, a {role} in an ALIGNMENT-seeking dialogue.{focus_instruction}
 
 Your role:
 - SURFACE perspectives others may have missed
@@ -1416,12 +1657,13 @@ Five lines. The FILE_WRITTEN line proves you wrote the file. Without it, the Jud
         name = agent_name,
         emoji = agent_emoji,
         role = agent_role,
+        focus_instruction = focus_instruction,
         context_instructions = context_instructions,
         output_file = output_file,
         source_read_instructions = source_read_instructions,
     );
 
-    Ok(json!({
+    let mut response = json!({
         "status": "success",
         "prompt": prompt,
         "output_file": output_file,
@@ -1429,7 +1671,36 @@ Five lines. The FILE_WRITTEN line proves you wrote the file. Without it, the Jud
             "subagent_type": "general-purpose",
             "description": format!("{} {} expert deliberation", agent_emoji, agent_name),
         }
-    }))
+    });
+
+    // RFC 0050: Include source metadata for graduated rotation
+    if let Some(source) = expert_source {
+        let source_str = match source {
+            ExpertSource::Retained => "retained",
+            ExpertSource::Pool => "pool",
+            ExpertSource::Created => "created",
+        };
+        response.as_object_mut().unwrap().insert(
+            "expert_source".to_string(),
+            json!(source_str),
+        );
+        // Include context brief indicator for fresh experts
+        if source != ExpertSource::Retained && round > 0 {
+            response.as_object_mut().unwrap().insert(
+                "has_context_brief".to_string(),
+                json!(true),
+            );
+        }
+    }
+
+    if let Some(focus) = expert_focus {
+        response.as_object_mut().unwrap().insert(
+            "focus".to_string(),
+            json!(focus),
+        );
+    }
+
+    Ok(response)
 }
 
 /// Handle blue_dialogue_sample_panel (RFC 0048)
@@ -1545,6 +1816,170 @@ pub fn handle_sample_panel(args: &Value) -> Result<Value, ServerError> {
             "emoji": a.emoji,
             "tier": a.tier,
             "relevance": a.relevance,
+        })).collect::<Vec<_>>(),
+    }))
+}
+
+/// Handle blue_dialogue_evolve_panel (RFC 0050)
+///
+/// Judge-driven panel evolution for graduated rotation mode.
+/// The Judge specifies exactly which experts to include, their sources,
+/// and can create new experts on-demand.
+pub fn handle_evolve_panel(args: &Value) -> Result<Value, ServerError> {
+    let output_dir = args
+        .get("output_dir")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| ServerError::InvalidParams)?;
+
+    let round = args
+        .get("round")
+        .and_then(|v| v.as_u64())
+        .ok_or_else(|| ServerError::InvalidParams)? as usize;
+
+    // Parse panel specification
+    let panel_spec: Vec<PanelExpertSpec> = args
+        .get("panel")
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .ok_or_else(|| {
+            ServerError::CommandFailed(
+                "panel parameter required: array of {name, role, source, tier?, focus?}".to_string(),
+            )
+        })?;
+
+    if panel_spec.is_empty() {
+        return Err(ServerError::CommandFailed(
+            "Panel cannot be empty".to_string(),
+        ));
+    }
+
+    // Validate unique names
+    let names: std::collections::HashSet<_> = panel_spec.iter().map(|e| &e.name).collect();
+    if names.len() != panel_spec.len() {
+        return Err(ServerError::CommandFailed(
+            "Expert names must be unique".to_string(),
+        ));
+    }
+
+    // Load expert pool for validation and name lookup
+    let pool_path = format!("{}/expert-pool.json", output_dir);
+    let pool: Option<ExpertPool> = fs::read_to_string(&pool_path)
+        .ok()
+        .and_then(|content| serde_json::from_str(&content).ok());
+
+    // Track sources for response
+    let mut retained_count = 0;
+    let mut from_pool_count = 0;
+    let mut created_count = 0;
+
+    // Build panel agents
+    let mut agents: Vec<PastryAgent> = Vec::new();
+    let mut used_pastry_names: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    for spec in &panel_spec {
+        match spec.source {
+            ExpertSource::Retained => retained_count += 1,
+            ExpertSource::Pool => from_pool_count += 1,
+            ExpertSource::Created => created_count += 1,
+        }
+
+        // Determine tier and relevance
+        let (tier, relevance) = if spec.source == ExpertSource::Created {
+            // Created experts use specified tier or default to Adjacent
+            let tier = spec.tier.clone().unwrap_or_else(|| "Adjacent".to_string());
+            (tier, 0.75) // Default relevance for created experts
+        } else if let Some(ref p) = pool {
+            // Look up from pool
+            p.experts
+                .iter()
+                .find(|e| e.role.to_lowercase() == spec.role.to_lowercase())
+                .map(|e| (e.tier.to_string(), e.relevance))
+                .unwrap_or_else(|| ("Adjacent".to_string(), 0.70))
+        } else {
+            ("Adjacent".to_string(), 0.70)
+        };
+
+        // Assign pastry name if not already known
+        let name = if PASTRY_NAMES.contains(&spec.name.as_str()) {
+            used_pastry_names.insert(spec.name.clone());
+            spec.name.clone()
+        } else if spec.name.starts_with("Pastry") {
+            // Accept overflow names
+            spec.name.clone()
+        } else {
+            // Find next available pastry name
+            let available = PASTRY_NAMES
+                .iter()
+                .find(|n| !used_pastry_names.contains(**n))
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| format!("Pastry{}", agents.len() + 21));
+            used_pastry_names.insert(available.clone());
+            available
+        };
+
+        agents.push(PastryAgent {
+            name,
+            role: spec.role.clone(),
+            emoji: "🧁".to_string(),
+            tier,
+            relevance,
+            focus: spec.focus.clone(),
+        });
+    }
+
+    // Create round directory
+    let round_dir = format!("{}/round-{}", output_dir, round);
+    fs::create_dir_all(&round_dir).map_err(|e| {
+        ServerError::CommandFailed(format!("Failed to create round dir: {}", e))
+    })?;
+
+    // Build panel history
+    let history = PanelHistory {
+        round,
+        panel_size: agents.len(),
+        retained_count,
+        from_pool_count,
+        created_count,
+        experts: panel_spec.clone(),
+    };
+
+    // Save panel with history
+    let panel_path = format!("{}/panel.json", round_dir);
+    let panel_data = json!({
+        "agents": agents,
+        "history": history,
+    });
+    let panel_json = serde_json::to_string_pretty(&panel_data)
+        .map_err(|e| ServerError::CommandFailed(format!("Failed to serialize panel: {}", e)))?;
+    fs::write(&panel_path, panel_json)
+        .map_err(|e| ServerError::CommandFailed(format!("Failed to write panel: {}", e)))?;
+
+    // Generate context brief for fresh experts if round > 0
+    let context_brief = if round > 0 {
+        generate_context_brief(output_dir, round).ok()
+    } else {
+        None
+    };
+
+    Ok(json!({
+        "status": "success",
+        "message": format!(
+            "Panel evolved for round {}: {} retained, {} from pool, {} created",
+            round, retained_count, from_pool_count, created_count
+        ),
+        "round": round,
+        "panel_size": agents.len(),
+        "retained": retained_count,
+        "from_pool": from_pool_count,
+        "created": created_count,
+        "panel_file": panel_path,
+        "context_brief": context_brief,
+        "agents": agents.iter().map(|a| json!({
+            "name": a.name,
+            "role": a.role,
+            "emoji": a.emoji,
+            "tier": a.tier,
+            "relevance": a.relevance,
+            "focus": a.focus,
         })).collect::<Vec<_>>(),
     }))
 }
@@ -2018,5 +2453,545 @@ mod tests {
         assert!(prompt.contains("GROUNDING:"));
         assert!(prompt.contains("/path/to/file1.rs"));
         assert!(prompt.contains("/path/to/file2.rs"));
+    }
+
+    // ==================== RFC 0050: Graduated Panel Rotation Tests ====================
+
+    #[test]
+    fn test_rotation_mode_graduated() {
+        // Verify graduated mode parses correctly
+        let mode: RotationMode = serde_json::from_str(r#""graduated""#).unwrap();
+        assert_eq!(mode, RotationMode::Graduated);
+    }
+
+    #[test]
+    fn test_rotation_mode_default_is_graduated() {
+        // RFC 0050: graduated is now the default rotation mode
+        let mode = RotationMode::default();
+        assert_eq!(mode, RotationMode::Graduated);
+    }
+
+    #[test]
+    fn test_expert_source_serialization() {
+        let retained: ExpertSource = serde_json::from_str(r#""retained""#).unwrap();
+        assert_eq!(retained, ExpertSource::Retained);
+
+        let pool: ExpertSource = serde_json::from_str(r#""pool""#).unwrap();
+        assert_eq!(pool, ExpertSource::Pool);
+
+        let created: ExpertSource = serde_json::from_str(r#""created""#).unwrap();
+        assert_eq!(created, ExpertSource::Created);
+    }
+
+    #[test]
+    fn test_panel_expert_spec_parsing() {
+        let spec_json = r#"{
+            "name": "Muffin",
+            "role": "Value Analyst",
+            "source": "retained"
+        }"#;
+        let spec: PanelExpertSpec = serde_json::from_str(spec_json).unwrap();
+        assert_eq!(spec.name, "Muffin");
+        assert_eq!(spec.role, "Value Analyst");
+        assert_eq!(spec.source, ExpertSource::Retained);
+        assert!(spec.tier.is_none());
+        assert!(spec.focus.is_none());
+    }
+
+    #[test]
+    fn test_panel_expert_spec_with_focus() {
+        let spec_json = r#"{
+            "name": "Palmier",
+            "role": "Supply Chain Analyst",
+            "source": "created",
+            "tier": "Adjacent",
+            "focus": "Geographic concentration risk"
+        }"#;
+        let spec: PanelExpertSpec = serde_json::from_str(spec_json).unwrap();
+        assert_eq!(spec.name, "Palmier");
+        assert_eq!(spec.source, ExpertSource::Created);
+        assert_eq!(spec.tier, Some("Adjacent".to_string()));
+        assert_eq!(spec.focus, Some("Geographic concentration risk".to_string()));
+    }
+
+    #[test]
+    fn test_pastry_agent_with_focus() {
+        let agent = PastryAgent {
+            name: "Palmier".to_string(),
+            role: "Supply Chain Analyst".to_string(),
+            emoji: "🧁".to_string(),
+            tier: "Adjacent".to_string(),
+            relevance: 0.75,
+            focus: Some("Geographic concentration risk".to_string()),
+        };
+        let json = serde_json::to_string(&agent).unwrap();
+        assert!(json.contains("focus"));
+        assert!(json.contains("Geographic concentration"));
+    }
+
+    #[test]
+    fn test_handle_round_prompt_with_expert_source() {
+        let args = json!({
+            "output_dir": "/tmp/blue-dialogue/test-topic",
+            "agent_name": "Scone",
+            "agent_emoji": "🧁",
+            "agent_role": "Data Center Specialist",
+            "round": 1,
+            "expert_source": "pool"
+        });
+
+        let result = handle_round_prompt(&args).unwrap();
+
+        // Should include expert_source in response
+        assert_eq!(result["expert_source"], "pool");
+        assert_eq!(result["has_context_brief"], true);
+    }
+
+    #[test]
+    fn test_handle_round_prompt_retained_no_context_brief() {
+        let args = json!({
+            "output_dir": "/tmp/blue-dialogue/test-topic",
+            "agent_name": "Muffin",
+            "agent_emoji": "🧁",
+            "agent_role": "Value Analyst",
+            "round": 1,
+            "expert_source": "retained"
+        });
+
+        let result = handle_round_prompt(&args).unwrap();
+
+        // Retained experts should NOT have context brief marker
+        assert_eq!(result["expert_source"], "retained");
+        assert!(result.get("has_context_brief").is_none());
+    }
+
+    #[test]
+    fn test_handle_round_prompt_with_focus() {
+        let args = json!({
+            "output_dir": "/tmp/blue-dialogue/test-topic",
+            "agent_name": "Palmier",
+            "agent_emoji": "🧁",
+            "agent_role": "Supply Chain Analyst",
+            "round": 1,
+            "expert_source": "created",
+            "focus": "Geographic concentration risk"
+        });
+
+        let result = handle_round_prompt(&args).unwrap();
+        let prompt = result["prompt"].as_str().unwrap();
+
+        // Created experts should have focus in prompt
+        assert!(prompt.contains("Your Focus"));
+        assert!(prompt.contains("Geographic concentration risk"));
+        assert_eq!(result["focus"], "Geographic concentration risk");
+    }
+
+    #[test]
+    fn test_build_judge_protocol_graduated_mode() {
+        let agents = test_agents(3);
+        let pool = test_pool(10);
+        let protocol = build_judge_protocol(
+            &agents,
+            "/tmp/test.dialogue.md",
+            "sonnet",
+            &[],
+            "/tmp/blue-dialogue/graduated-test",
+            Some(&pool),
+            RotationMode::Graduated,
+        );
+
+        let instructions = protocol.get("instructions").unwrap().as_str().unwrap();
+
+        // Must have graduated rotation guidelines
+        assert!(instructions.contains("GRADUATED PANEL ROTATION"));
+        assert!(instructions.contains("RFC 0050"));
+        assert!(instructions.contains("blue_dialogue_evolve_panel"));
+        assert!(instructions.contains("Retention Criteria"));
+        assert!(instructions.contains("Fresh Perspective Triggers"));
+        assert!(instructions.contains("Expert Creation"));
+        assert!(instructions.contains(r#""source": "retained""#));
+        assert!(instructions.contains(r#""source": "pool""#));
+        assert!(instructions.contains(r#""source": "created""#));
+
+        // Must tell Judge they can override Round 0
+        assert!(instructions.contains("suggestion"));
+        assert!(instructions.contains("Before Round 0"));
+        assert!(instructions.contains("round=0"));
+    }
+
+    #[test]
+    fn test_build_judge_protocol_graduated_uses_suggested_panel() {
+        let agents = test_agents(3);
+        let pool = test_pool(10);
+        let protocol = build_judge_protocol(
+            &agents,
+            "/tmp/test.dialogue.md",
+            "sonnet",
+            &[],
+            "/tmp/blue-dialogue/suggested-test",
+            Some(&pool),
+            RotationMode::Graduated,
+        );
+
+        // Graduated mode uses suggested_panel, not agents
+        assert!(protocol.get("suggested_panel").is_some());
+        assert!(protocol.get("agents").is_none());
+        assert_eq!(protocol["panel_is_suggestion"], true);
+
+        // Verify suggested_panel has the right structure
+        let suggested = protocol["suggested_panel"].as_array().unwrap();
+        assert_eq!(suggested.len(), 3);
+        assert_eq!(suggested[0]["name"], "Muffin");
+    }
+
+    #[test]
+    fn test_build_judge_protocol_non_graduated_uses_agents() {
+        let agents = test_agents(3);
+        let pool = test_pool(10);
+        let protocol = build_judge_protocol(
+            &agents,
+            "/tmp/test.dialogue.md",
+            "sonnet",
+            &[],
+            "/tmp/blue-dialogue/non-graduated-test",
+            Some(&pool),
+            RotationMode::None,
+        );
+
+        // Non-graduated modes use agents, not suggested_panel
+        assert!(protocol.get("agents").is_some());
+        assert!(protocol.get("suggested_panel").is_none());
+        assert!(protocol.get("panel_is_suggestion").is_none());
+    }
+
+    #[test]
+    fn test_build_judge_protocol_non_graduated_no_extra_instructions() {
+        let agents = test_agents(3);
+        let pool = test_pool(10);
+        let protocol = build_judge_protocol(
+            &agents,
+            "/tmp/test.dialogue.md",
+            "sonnet",
+            &[],
+            "/tmp/blue-dialogue/none-test",
+            Some(&pool),
+            RotationMode::None,
+        );
+
+        let instructions = protocol.get("instructions").unwrap().as_str().unwrap();
+
+        // Should NOT have graduated rotation guidelines
+        assert!(!instructions.contains("GRADUATED PANEL ROTATION"));
+        assert!(!instructions.contains("blue_dialogue_evolve_panel"));
+    }
+
+    #[test]
+    fn test_panel_history_serialization() {
+        let history = PanelHistory {
+            round: 1,
+            panel_size: 12,
+            retained_count: 7,
+            from_pool_count: 4,
+            created_count: 1,
+            experts: vec![
+                PanelExpertSpec {
+                    name: "Muffin".to_string(),
+                    role: "Value Analyst".to_string(),
+                    source: ExpertSource::Retained,
+                    tier: None,
+                    focus: None,
+                },
+                PanelExpertSpec {
+                    name: "Palmier".to_string(),
+                    role: "Supply Chain Analyst".to_string(),
+                    source: ExpertSource::Created,
+                    tier: Some("Adjacent".to_string()),
+                    focus: Some("Geographic concentration".to_string()),
+                },
+            ],
+        };
+
+        let json = serde_json::to_string_pretty(&history).unwrap();
+        assert!(json.contains("retained_count"));
+        assert!(json.contains("from_pool_count"));
+        assert!(json.contains("created_count"));
+        assert!(json.contains("Geographic concentration"));
+    }
+
+    #[test]
+    fn test_handle_evolve_panel_integration() {
+        use std::fs;
+
+        // Create a temp directory for testing
+        let test_dir = "/tmp/blue-dialogue/evolve-panel-test";
+        fs::create_dir_all(test_dir).unwrap();
+
+        // Create a mock expert pool
+        let pool = ExpertPool {
+            domain: "Investment Analysis".to_string(),
+            question: Some("Should we invest?".to_string()),
+            experts: vec![
+                PoolExpert { role: "Value Analyst".to_string(), tier: ExpertTier::Core, relevance: 0.95 },
+                PoolExpert { role: "Risk Manager".to_string(), tier: ExpertTier::Core, relevance: 0.90 },
+                PoolExpert { role: "Growth Analyst".to_string(), tier: ExpertTier::Adjacent, relevance: 0.75 },
+                PoolExpert { role: "ESG Analyst".to_string(), tier: ExpertTier::Adjacent, relevance: 0.70 },
+                PoolExpert { role: "Contrarian".to_string(), tier: ExpertTier::Wildcard, relevance: 0.35 },
+            ],
+        };
+        let pool_path = format!("{}/expert-pool.json", test_dir);
+        fs::write(&pool_path, serde_json::to_string_pretty(&pool).unwrap()).unwrap();
+
+        // Test evolve_panel with mixed sources
+        let args = json!({
+            "output_dir": test_dir,
+            "round": 1,
+            "panel": [
+                { "name": "Muffin", "role": "Value Analyst", "source": "retained" },
+                { "name": "Cupcake", "role": "Risk Manager", "source": "retained" },
+                { "name": "Scone", "role": "ESG Analyst", "source": "pool" },
+                { "name": "Palmier", "role": "Supply Chain Analyst", "source": "created", "tier": "Adjacent", "focus": "Geographic concentration risk" }
+            ]
+        });
+
+        let result = handle_evolve_panel(&args).unwrap();
+
+        // Verify response
+        assert_eq!(result["status"], "success");
+        assert_eq!(result["round"], 1);
+        assert_eq!(result["panel_size"], 4);
+        assert_eq!(result["retained"], 2);
+        assert_eq!(result["from_pool"], 1);
+        assert_eq!(result["created"], 1);
+
+        // Verify panel file was created
+        let panel_path = format!("{}/round-1/panel.json", test_dir);
+        assert!(std::path::Path::new(&panel_path).exists());
+
+        // Verify panel content
+        let panel_content = fs::read_to_string(&panel_path).unwrap();
+        let panel_data: Value = serde_json::from_str(&panel_content).unwrap();
+
+        // Check history section
+        assert_eq!(panel_data["history"]["retained_count"], 2);
+        assert_eq!(panel_data["history"]["from_pool_count"], 1);
+        assert_eq!(panel_data["history"]["created_count"], 1);
+
+        // Check agents array
+        let agents = panel_data["agents"].as_array().unwrap();
+        assert_eq!(agents.len(), 4);
+
+        // Verify created expert has focus
+        let palmier = agents.iter().find(|a| a["name"] == "Palmier").unwrap();
+        assert_eq!(palmier["focus"], "Geographic concentration risk");
+
+        // Cleanup
+        fs::remove_dir_all(test_dir).ok();
+    }
+
+    #[test]
+    fn test_handle_evolve_panel_validates_unique_names() {
+        let test_dir = "/tmp/blue-dialogue/evolve-panel-unique-test";
+        fs::create_dir_all(test_dir).unwrap();
+
+        // Test with duplicate names
+        let args = json!({
+            "output_dir": test_dir,
+            "round": 1,
+            "panel": [
+                { "name": "Muffin", "role": "Value Analyst", "source": "retained" },
+                { "name": "Muffin", "role": "Risk Manager", "source": "retained" }
+            ]
+        });
+
+        let result = handle_evolve_panel(&args);
+        assert!(result.is_err());
+
+        let err = result.unwrap_err();
+        let err_str = format!("{:?}", err);
+        assert!(err_str.contains("unique"));
+
+        // Cleanup
+        fs::remove_dir_all(test_dir).ok();
+    }
+
+    #[test]
+    fn test_generate_context_brief_round_0() {
+        // Round 0 should return empty brief
+        let brief = generate_context_brief("/tmp/nonexistent", 0).unwrap();
+        assert!(brief.is_empty());
+    }
+
+    #[test]
+    fn test_generate_context_brief_round_1() {
+        use std::fs;
+
+        let test_dir = "/tmp/blue-dialogue/context-brief-test";
+        fs::create_dir_all(test_dir).unwrap();
+
+        // Create tensions file
+        let tensions = "| ID | Tension | Status |\n|---|---|---|\n| T01 | Valuation vs Growth | Open |\n| T02 | Risk concentration | Open |";
+        fs::write(format!("{}/tensions.md", test_dir), tensions).unwrap();
+
+        // Create round-0 summary
+        let summary = "Round 0 saw strong disagreement on valuation metrics. Key tension emerged around geographic concentration.";
+        fs::write(format!("{}/round-0.summary.md", test_dir), summary).unwrap();
+
+        // Generate context brief for round 1
+        let brief = generate_context_brief(test_dir, 1).unwrap();
+
+        // Verify it includes key sections
+        assert!(brief.contains("Context for Round 1"));
+        assert!(brief.contains("Key Tensions"));
+        assert!(brief.contains("T01"));
+        assert!(brief.contains("Round 0 Summary"));
+        assert!(brief.contains("valuation"));
+        assert!(brief.contains("Your Task"));
+
+        // Cleanup
+        fs::remove_dir_all(test_dir).ok();
+    }
+
+    #[test]
+    fn test_graduated_panel_workflow_small_panel() {
+        //! Integration test: Full graduated panel workflow with a small panel
+        //!
+        //! Scenario: Data design RFC with 4 experts in pool, panel size 2
+        //! Problem: Sampling might miss critical "Data Architect"
+        //! Solution: Judge overrides Round 0 panel using evolve_panel
+
+        let test_dir = "/tmp/blue-dialogue/graduated-workflow-test";
+        fs::remove_dir_all(test_dir).ok();
+        fs::create_dir_all(test_dir).unwrap();
+
+        // Step 1: Create a small expert pool where Data Architect is Wildcard
+        // (simulating a case where critical expertise might not be sampled)
+        let pool = ExpertPool {
+            domain: "Data Architecture".to_string(),
+            question: Some("How should we design the data layer?".to_string()),
+            experts: vec![
+                PoolExpert { role: "API Architect".to_string(), tier: ExpertTier::Core, relevance: 0.95 },
+                PoolExpert { role: "Security Engineer".to_string(), tier: ExpertTier::Core, relevance: 0.90 },
+                PoolExpert { role: "Performance Engineer".to_string(), tier: ExpertTier::Adjacent, relevance: 0.70 },
+                // Data Architect as Wildcard - might not be sampled in a small panel!
+                PoolExpert { role: "Data Architect".to_string(), tier: ExpertTier::Wildcard, relevance: 0.40 },
+            ],
+        };
+        let pool_path = format!("{}/expert-pool.json", test_dir);
+        fs::write(&pool_path, serde_json::to_string_pretty(&pool).unwrap()).unwrap();
+
+        // Step 2: Sample panel size 2 - might miss Data Architect
+        let sampled = sample_panel_from_pool(&pool, 2);
+        let suggested_agents = assign_pastry_names(sampled);
+
+        // Step 3: Build protocol with graduated mode
+        let protocol = build_judge_protocol(
+            &suggested_agents,
+            &format!("{}/dialogue.md", test_dir),
+            "sonnet",
+            &[],
+            test_dir,
+            Some(&pool),
+            RotationMode::Graduated,
+        );
+
+        // Verify suggestion semantics
+        assert!(protocol.get("suggested_panel").is_some());
+        assert!(protocol.get("agents").is_none());
+        assert_eq!(protocol["panel_is_suggestion"], true);
+
+        let suggested = protocol["suggested_panel"].as_array().unwrap();
+        println!("\n=== SUGGESTED PANEL ===");
+        for agent in suggested {
+            println!("  {}: {}", agent["name"], agent["role"]);
+        }
+
+        // Step 4: Override Round 0 to ensure Data Architect is included
+        let override_args = json!({
+            "output_dir": test_dir,
+            "round": 0,
+            "panel": [
+                { "name": "Muffin", "role": "API Architect", "source": "pool" },
+                { "name": "Cupcake", "role": "Data Architect", "source": "pool" }
+            ]
+        });
+
+        let result = handle_evolve_panel(&override_args).unwrap();
+        assert_eq!(result["status"], "success");
+        assert_eq!(result["round"], 0);
+        assert_eq!(result["from_pool"], 2);
+
+        println!("\n=== OVERRIDDEN ROUND 0 PANEL ===");
+        for agent in result["agents"].as_array().unwrap() {
+            println!("  {} {}: {}", agent["emoji"], agent["name"], agent["role"]);
+        }
+
+        // Verify panel file created for round 0
+        let panel_path = format!("{}/round-0/panel.json", test_dir);
+        assert!(std::path::Path::new(&panel_path).exists());
+
+        // Step 5: Get round prompt
+        let prompt_args = json!({
+            "output_dir": test_dir,
+            "agent_name": "Cupcake",
+            "agent_emoji": "🧁",
+            "agent_role": "Data Architect",
+            "round": 0,
+            "expert_source": "pool"
+        });
+
+        let prompt_result = handle_round_prompt(&prompt_args).unwrap();
+        assert_eq!(prompt_result["status"], "success");
+        assert!(prompt_result["prompt"].as_str().unwrap().contains("Data Architect"));
+
+        // Step 6: Simulate Round 1 evolution
+        fs::write(
+            format!("{}/tensions.md", test_dir),
+            "| ID | Tension |\n|---|---|\n| T01 | Schema flexibility vs performance |"
+        ).unwrap();
+        fs::write(format!("{}/round-0.summary.md", test_dir), "Debate on design approach.").unwrap();
+
+        let evolve_args = json!({
+            "output_dir": test_dir,
+            "round": 1,
+            "panel": [
+                { "name": "Muffin", "role": "API Architect", "source": "retained" },
+                { "name": "Cupcake", "role": "Data Architect", "source": "retained" },
+                { "name": "Scone", "role": "Performance Engineer", "source": "pool" }
+            ]
+        });
+
+        let evolve_result = handle_evolve_panel(&evolve_args).unwrap();
+        assert_eq!(evolve_result["retained"], 2);
+        assert_eq!(evolve_result["from_pool"], 1);
+        assert!(!evolve_result["context_brief"].is_null());
+
+        println!("\n=== ROUND 1 EVOLVED PANEL ===");
+        println!("  Retained: {}", evolve_result["retained"]);
+        println!("  From pool: {}", evolve_result["from_pool"]);
+        for agent in evolve_result["agents"].as_array().unwrap() {
+            println!("  {} {}: {}", agent["emoji"], agent["name"], agent["role"]);
+        }
+
+        // Step 7: Fresh expert gets context brief
+        let fresh_args = json!({
+            "output_dir": test_dir,
+            "agent_name": "Scone",
+            "agent_emoji": "🧁",
+            "agent_role": "Performance Engineer",
+            "round": 1,
+            "expert_source": "pool"
+        });
+
+        let fresh_result = handle_round_prompt(&fresh_args).unwrap();
+        assert_eq!(fresh_result["has_context_brief"], true);
+        assert!(fresh_result["prompt"].as_str().unwrap().contains("Context for Round 1"));
+
+        println!("\n=== FRESH EXPERT CONTEXT ===");
+        println!("  ✓ Context brief included for Scone");
+        println!("  ✓ Can see prior tensions in prompt");
+
+        // Cleanup
+        fs::remove_dir_all(test_dir).ok();
+        println!("\n=== TEST PASSED ===\n");
     }
 }
