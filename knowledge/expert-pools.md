@@ -1,114 +1,98 @@
 # Expert Pool System
 
-When running alignment dialogues, select domain-specific experts based on relevance to the topic.
+When running alignment dialogues, the Judge creates domain-appropriate expert pools from which panels are sampled.
 
-## Expert Selection Algorithm
+## Two-Phase Architecture (RFC 0047)
 
-1. **Identify domains** relevant to the topic
-2. **Select experts** by relevance tier:
-   - **Core** (4): Highest relevance (0.75-0.95)
-   - **Adjacent** (5): Medium relevance (0.50-0.70)
-   - **Wildcard** (3): Low relevance but bring fresh perspectives (0.25-0.45)
-3. **Assign pastry names** for identification (Muffin, Cupcake, Scone, Eclair, Donut, Brioche, Croissant, Macaron, Cannoli, Strudel, Beignet, Churro)
+| Phase | Actor | Action |
+|-------|-------|--------|
+| **Pool Design** | Judge | Creates 15-30 domain-specific experts with tiers and relevance |
+| **Panel Sampling** | MCP Server | Samples N experts using weighted random selection |
 
-## Domain Expert Pools
+## Pool Design (Judge Responsibility)
 
-### Infrastructure / DevOps
-| Expert | Domain | Relevance |
-|--------|--------|-----------|
-| Platform Architect | Infra | 0.95 |
-| SRE Lead | Infra | 0.90 |
-| Database Architect | Infra | 0.85 |
-| Security Engineer | Infra | 0.80 |
-| Network Engineer | Infra | 0.70 |
-| Cost Analyst | Finance | 0.55 |
-| Compliance Officer | Legal | 0.45 |
-| UX Researcher | Product | 0.35 |
+The Judge reads the RFC/topic and designs experts appropriate to the domain:
 
-### Product / Feature
-| Expert | Domain | Relevance |
-|--------|--------|-----------|
-| Product Manager | Product | 0.95 |
-| UX Designer | Product | 0.90 |
-| Frontend Architect | Eng | 0.85 |
-| Customer Advocate | Product | 0.80 |
-| Data Analyst | Analytics | 0.70 |
-| Backend Engineer | Eng | 0.65 |
-| QA Lead | Eng | 0.55 |
-| Marketing Strategist | Business | 0.35 |
-
-### ML / AI
-| Expert | Domain | Relevance |
-|--------|--------|-----------|
-| ML Architect | AI | 0.95 |
-| Data Scientist | AI | 0.90 |
-| MLOps Engineer | AI | 0.85 |
-| AI Ethics Researcher | AI | 0.80 |
-| Feature Engineer | AI | 0.70 |
-| Platform Engineer | Infra | 0.60 |
-| Privacy Counsel | Legal | 0.50 |
-| Cognitive Scientist | Research | 0.35 |
-
-### Governance / Policy
-| Expert | Domain | Relevance |
-|--------|--------|-----------|
-| Governance Specialist | Gov | 0.95 |
-| Legal Counsel | Legal | 0.90 |
-| Ethics Board Member | Gov | 0.85 |
-| Compliance Officer | Legal | 0.80 |
-| Risk Analyst | Finance | 0.70 |
-| Community Manager | Community | 0.60 |
-| Economist | Economics | 0.50 |
-| Anthropologist | Research | 0.35 |
-
-### API / Integration
-| Expert | Domain | Relevance |
-|--------|--------|-----------|
-| API Architect | Eng | 0.95 |
-| Developer Advocate | Community | 0.90 |
-| Integration Engineer | Eng | 0.85 |
-| Security Architect | Security | 0.80 |
-| Documentation Lead | Community | 0.70 |
-| SDK Developer | Eng | 0.65 |
-| Support Engineer | Community | 0.55 |
-| Partner Manager | Business | 0.40 |
-
-### General (default)
-| Expert | Domain | Relevance |
-|--------|--------|-----------|
-| Systems Architect | Eng | 0.95 |
-| Technical Lead | Eng | 0.90 |
-| Product Manager | Product | 0.85 |
-| Senior Engineer | Eng | 0.80 |
-| QA Engineer | Eng | 0.70 |
-| DevOps Engineer | Infra | 0.65 |
-| Tech Writer | Community | 0.55 |
-| Generalist | General | 0.40 |
-
-## Expert Prompt Enhancement
-
-Each expert receives their domain context in the prompt:
-
-```
-You are {expert_name} 🧁, a {domain_role} with expertise in {domain}.
-Relevance to this topic: {relevance_score}
-
-Bring your unique domain perspective while respecting that others see parts of the elephant you cannot.
+```json
+{
+  "expert_pool": {
+    "domain": "Investment Analysis",
+    "experts": [
+      { "role": "Value Analyst", "tier": "Core", "relevance": 0.95, "focus": "Intrinsic value, margin of safety" },
+      { "role": "Growth Analyst", "tier": "Core", "relevance": 0.90, "focus": "TAM expansion, revenue acceleration" },
+      { "role": "Risk Manager", "tier": "Core", "relevance": 0.85, "focus": "Downside scenarios, tail events" },
+      { "role": "ESG Analyst", "tier": "Adjacent", "relevance": 0.70, "focus": "Environmental, governance factors" },
+      { "role": "Contrarian", "tier": "Wildcard", "relevance": 0.30, "focus": "Challenge consensus, find crowding" }
+    ]
+  }
+}
 ```
 
-## Panel Composition
+## Tier Distribution
 
-For N=12 experts (typical for complex RFCs):
-- 4 Core experts (highest domain relevance)
-- 5 Adjacent experts (related domains)
-- 3 Wildcard experts (distant domains for fresh thinking)
+| Tier | Pool % | Panel % | Selection Behavior |
+|------|--------|---------|-------------------|
+| **Core** | ~25% | ~33% | Almost always selected (high relevance weights) |
+| **Adjacent** | ~40% | ~42% | High probability, related expertise |
+| **Wildcard** | ~35% | ~25% | Fresh perspectives, rotation candidates |
 
-The Wildcards are crucial - they prevent groupthink and surface unexpected perspectives.
+## Panel Sampling (MCP Server)
 
-## Sampling Without Replacement
+```
+blue_dialogue_create(expert_pool=[...24 roles...], panel_size=12, rotation="wildcards")
+  → Weighted random sample: higher relevance = higher selection probability
+  → For N=12: ~4 Core, ~5 Adjacent, ~3 Wildcard
+```
 
-Each expert is used once per dialogue. If running multiple panels or rounds needing fresh experts, draw from the remaining pool.
+## Rotation Modes
+
+| Mode | Behavior | Use Case |
+|------|----------|----------|
+| `none` | Fixed panel all rounds | Standard deliberation |
+| `wildcards` | Core/Adjacent persist, Wildcards resample | Bring fresh perspectives each round |
+| `full` | Complete resample each round | Maximum diversity (experimental) |
+
+## Pastry Naming
+
+Experts are assigned pastry names for identification:
+Muffin, Cupcake, Scone, Eclair, Donut, Brioche, Croissant, Macaron, Cannoli, Strudel, Beignet, Churro, Profiterole, Tartlet, Galette, Palmier, Kouign, Sfogliatella, Financier, Religieuse
+
+## Domain-Specific Pools
+
+The Judge designs pools appropriate to each domain. Example domains:
+
+**Investment Analysis**: Value Analyst, Growth Analyst, Risk Manager, Portfolio Strategist, ESG Analyst, Quant Strategist, Technical Analyst, Behavioral Analyst, Income Analyst, Macro Economist, Credit Analyst, Contrarian
+
+**System Architecture**: Platform Architect, Security Engineer, Database Architect, SRE Lead, API Designer, DevOps Engineer, Performance Engineer, Network Engineer, Cost Analyst, Compliance Officer
+
+**Product Development**: Product Manager, UX Designer, Frontend Architect, Customer Advocate, Data Analyst, Backend Engineer, QA Lead, Technical Writer, Marketing Strategist
+
+## Expert Prompt Template
+
+Each expert receives their context:
+
+```
+You are {name} 🧁, a {role} in an ALIGNMENT-seeking dialogue.
+Tier: {tier} | Relevance: {relevance}
+Focus: {focus}
+
+Your contribution is scored on PRECISION, not volume.
+One sharp insight beats ten paragraphs.
+```
+
+## Pool Persistence
+
+Pools are stored per-dialogue:
+
+```
+{output_dir}/
+├── expert-pool.json      ← Full pool definition (Judge writes)
+├── round-0/
+│   ├── panel.json        ← Sampled panel for this round
+│   └── *.md              ← Agent responses
+└── scoreboard.md
+```
 
 ---
 
-*"The blind men who've never touched an elephant before often find the parts the experts overlook."*
+*"The Judge sees the elephant. The Judge summons the right blind men."*

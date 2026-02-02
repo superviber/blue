@@ -1535,7 +1535,7 @@ impl BlueServer {
                 },
                 {
                     "name": "blue_dialogue_create",
-                    "description": "Create a new dialogue document. Pass alignment: true for multi-agent alignment dialogues (ADR 0014). When alignment is enabled, the response message contains a JUDGE PROTOCOL section — you MUST follow those instructions exactly to orchestrate the dialogue. The protocol tells you how to spawn background agents, score them, and run convergence rounds.",
+                    "description": "Create a new dialogue document. Pass alignment: true for multi-agent alignment dialogues (ADR 0014, RFC 0048). Alignment mode REQUIRES expert_pool parameter with tiered experts. The response contains a JUDGE PROTOCOL — follow those instructions to orchestrate the dialogue.",
                     "inputSchema": {
                         "type": "object",
                         "properties": {
@@ -1557,11 +1557,44 @@ impl BlueServer {
                             },
                             "alignment": {
                                 "type": "boolean",
-                                "description": "Enable alignment mode — returns a judge protocol with pastry-themed expert agents"
+                                "description": "Enable alignment mode — REQUIRES expert_pool parameter"
                             },
-                            "agents": {
+                            "expert_pool": {
+                                "type": "object",
+                                "description": "RFC 0048: Judge-defined expert pool (REQUIRED for alignment mode)",
+                                "properties": {
+                                    "domain": {
+                                        "type": "string",
+                                        "description": "Domain name (e.g., 'Investment Analysis')"
+                                    },
+                                    "question": {
+                                        "type": "string",
+                                        "description": "Optional: specific question being deliberated"
+                                    },
+                                    "experts": {
+                                        "type": "array",
+                                        "description": "Array of experts with role, tier, and relevance",
+                                        "items": {
+                                            "type": "object",
+                                            "properties": {
+                                                "role": { "type": "string", "description": "Expert role (e.g., 'Risk Manager')" },
+                                                "tier": { "type": "string", "enum": ["core", "adjacent", "wildcard"], "description": "Expert tier" },
+                                                "relevance": { "type": "number", "description": "Relevance score 0.0-1.0" }
+                                            },
+                                            "required": ["role", "tier", "relevance"]
+                                        }
+                                    }
+                                },
+                                "required": ["domain", "experts"]
+                            },
+                            "panel_size": {
                                 "type": "integer",
-                                "description": "Number of cupcake agents (alignment mode only, default 3)"
+                                "description": "Number of experts to sample per round (default: pool size or 12)"
+                            },
+                            "rotation": {
+                                "type": "string",
+                                "enum": ["none", "wildcards", "full"],
+                                "description": "Panel rotation mode: none (fixed), wildcards (rotate wildcards), full (resample all)"
                             },
                             "model": {
                                 "type": "string",
@@ -1666,6 +1699,38 @@ impl BlueServer {
                             }
                         },
                         "required": ["output_dir", "agent_name", "agent_emoji", "agent_role", "round"]
+                    }
+                },
+                {
+                    "name": "blue_dialogue_sample_panel",
+                    "description": "RFC 0048: Sample a new panel from the expert pool for manual round control. Use this when you want to explicitly control which experts participate in a specific round.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "dialogue_title": {
+                                "type": "string",
+                                "description": "Dialogue title (used to find the expert-pool.json)"
+                            },
+                            "round": {
+                                "type": "integer",
+                                "description": "Round number to sample for"
+                            },
+                            "panel_size": {
+                                "type": "integer",
+                                "description": "Number of experts to sample (default: 12)"
+                            },
+                            "retain": {
+                                "type": "array",
+                                "items": { "type": "string" },
+                                "description": "Expert roles to retain (must include these)"
+                            },
+                            "exclude": {
+                                "type": "array",
+                                "items": { "type": "string" },
+                                "description": "Expert roles to exclude"
+                            }
+                        },
+                        "required": ["dialogue_title", "round"]
                     }
                 },
                 // Phase 8: Playwright verification
@@ -2446,6 +2511,7 @@ impl BlueServer {
             "blue_dialogue_list" => self.handle_dialogue_list(&call.arguments),
             "blue_dialogue_save" => self.handle_dialogue_save(&call.arguments),
             "blue_dialogue_round_prompt" => self.handle_dialogue_round_prompt(&call.arguments),
+            "blue_dialogue_sample_panel" => self.handle_dialogue_sample_panel(&call.arguments),
             // Phase 8: Playwright handler
             "blue_playwright_verify" => self.handle_playwright_verify(&call.arguments),
             // Phase 9: Post-mortem handlers
@@ -3776,6 +3842,11 @@ impl BlueServer {
     fn handle_dialogue_round_prompt(&mut self, args: &Option<Value>) -> Result<Value, ServerError> {
         let args = args.as_ref().ok_or(ServerError::InvalidParams)?;
         crate::handlers::dialogue::handle_round_prompt(args)
+    }
+
+    fn handle_dialogue_sample_panel(&mut self, args: &Option<Value>) -> Result<Value, ServerError> {
+        let args = args.as_ref().ok_or(ServerError::InvalidParams)?;
+        crate::handlers::dialogue::handle_sample_panel(args)
     }
 
     fn handle_playwright_verify(&mut self, args: &Option<Value>) -> Result<Value, ServerError> {

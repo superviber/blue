@@ -9,7 +9,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use blue_core::{DocType, Document, LinkType, ProjectState, title_to_slug};
-use serde::Serialize;
+use rand::Rng;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::error::ServerError;
@@ -26,8 +27,54 @@ fn coerce_bool(v: &Value) -> Option<bool> {
 
 // ==================== Alignment Mode Types ====================
 
+/// Expert tier for pool-based sampling (RFC 0048)
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ExpertTier {
+    Core,
+    Adjacent,
+    Wildcard,
+}
+
+impl std::fmt::Display for ExpertTier {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ExpertTier::Core => write!(f, "Core"),
+            ExpertTier::Adjacent => write!(f, "Adjacent"),
+            ExpertTier::Wildcard => write!(f, "Wildcard"),
+        }
+    }
+}
+
+/// Rotation mode for expert panel sampling (RFC 0048)
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum RotationMode {
+    #[default]
+    None,
+    Wildcards,
+    Full,
+}
+
+/// A single expert in the pool (RFC 0048)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PoolExpert {
+    pub role: String,
+    pub tier: ExpertTier,
+    pub relevance: f64,
+}
+
+/// Expert pool with tiered structure (RFC 0048)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExpertPool {
+    pub domain: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub question: Option<String>,
+    pub experts: Vec<PoolExpert>,
+}
+
 /// A pastry-themed expert agent for alignment dialogues
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PastryAgent {
     pub name: String,
     pub role: String,
@@ -316,10 +363,6 @@ pub fn handle_create(state: &mut ProjectState, args: &Value) -> Result<Value, Se
         .get("alignment")
         .and_then(coerce_bool)
         .unwrap_or(false);
-    let agent_count = args
-        .get("agents")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(3) as usize;
     let model = args
         .get("model")
         .and_then(|v| v.as_str())
@@ -333,6 +376,33 @@ pub fn handle_create(state: &mut ProjectState, args: &Value) -> Result<Value, Se
                 .collect()
         })
         .unwrap_or_default();
+
+    // RFC 0048: Expert pool parameters
+    let expert_pool: Option<ExpertPool> = args
+        .get("expert_pool")
+        .and_then(|v| serde_json::from_value(v.clone()).ok());
+
+    let panel_size = args
+        .get("panel_size")
+        .and_then(|v| v.as_u64())
+        .map(|n| n as usize);
+
+    let rotation: RotationMode = args
+        .get("rotation")
+        .and_then(|v| v.as_str())
+        .map(|s| match s {
+            "wildcards" => RotationMode::Wildcards,
+            "full" => RotationMode::Full,
+            _ => RotationMode::None,
+        })
+        .unwrap_or_default();
+
+    // RFC 0048: Alignment mode requires expert_pool
+    if alignment && expert_pool.is_none() {
+        return Err(ServerError::CommandFailed(
+            "Alignment dialogues require expert_pool parameter (RFC 0048)".to_string(),
+        ));
+    }
 
     // Validate RFC exists if provided
     let rfc_doc = if let Some(rfc) = rfc_title {
@@ -363,15 +433,20 @@ pub fn handle_create(state: &mut ProjectState, args: &Value) -> Result<Value, Se
     let dialogue_path = docs_path.join(&file_path);
 
     // Generate markdown content — alignment mode gets a different scaffold
-    let (markdown, pastry_agents) = if alignment {
-        let agents = assign_pastry_agents(agent_count, title);
+    let (markdown, pastry_agents, pool_for_response) = if alignment {
+        // RFC 0048: Use expert pool for alignment mode
+        let pool = expert_pool.unwrap(); // Safe: validated above
+        let size = panel_size.unwrap_or_else(|| pool.experts.len().min(12));
+        let sampled = sample_panel_from_pool(&pool, size);
+        let agents = assign_pastry_names(sampled);
         let md = generate_alignment_dialogue_markdown(
             title,
             dialogue_number,
             rfc_title,
             &agents,
+            Some(&pool),
         );
-        (md, Some(agents))
+        (md, Some(agents), Some(pool))
     } else {
         let md = generate_dialogue_markdown(
             title,
@@ -380,7 +455,7 @@ pub fn handle_create(state: &mut ProjectState, args: &Value) -> Result<Value, Se
             summary,
             content,
         );
-        (md, None)
+        (md, None, None)
     };
 
     // Create dialogues directory if it doesn't exist
@@ -427,12 +502,23 @@ pub fn handle_create(state: &mut ProjectState, args: &Value) -> Result<Value, Se
             ServerError::CommandFailed(format!("Failed to create output dir {}: {}", output_dir, e))
         })?;
 
+        // RFC 0048: Persist expert pool to output directory
+        if let Some(ref pool) = pool_for_response {
+            let pool_path = format!("{}/expert-pool.json", output_dir);
+            let pool_json = serde_json::to_string_pretty(pool)
+                .map_err(|e| ServerError::CommandFailed(format!("Failed to serialize pool: {}", e)))?;
+            fs::write(&pool_path, pool_json)
+                .map_err(|e| ServerError::CommandFailed(format!("Failed to write pool: {}", e)))?;
+        }
+
         let protocol = build_judge_protocol(
             agents,
             &dialogue_path.display().to_string(),
             model,
             &sources,
             &output_dir,
+            pool_for_response.as_ref(),
+            rotation,
         );
         // Extract instructions as prose so Claude reads them directly
         let instructions = protocol["instructions"].as_str().unwrap_or("");
@@ -729,55 +815,85 @@ fn generate_dialogue_markdown(
 
 // ==================== Alignment Mode Helpers ====================
 
-/// Expert roles keyed by topic keywords
-const ROLE_KEYWORDS: &[(&[&str], &str)] = &[
-    (&["system", "architect", "infrastructure", "scale"], "Systems Architect"),
-    (&["security", "auth", "vulnerability", "trust"], "Security Architect"),
-    (&["api", "endpoint", "rest", "grpc", "protocol"], "API Designer"),
-    (&["data", "database", "storage", "schema", "model"], "Data Architect"),
-    (&["test", "quality", "qa", "reliability"], "Quality Engineer"),
-    (&["ux", "ui", "frontend", "user", "interface", "design"], "UX Architect"),
-    (&["perf", "performance", "latency", "throughput", "speed"], "Performance Engineer"),
-    (&["devops", "deploy", "ci", "cd", "pipeline", "ops"], "DevOps Architect"),
-    (&["ml", "ai", "model", "training", "inference"], "ML Engineer"),
-    (&["doc", "documentation", "spec", "rfc", "standard"], "Technical Writer"),
-];
+/// Weighted random sampling without replacement (RFC 0048)
+/// Higher relevance = higher selection probability
+fn weighted_sample(experts: &[PoolExpert], n: usize) -> Vec<PoolExpert> {
+    if n >= experts.len() {
+        return experts.to_vec();
+    }
 
-/// General-purpose roles used when keywords don't match
-const GENERAL_ROLES: &[&str] = &[
-    "Systems Thinker",
-    "Domain Expert",
-    "Devil's Advocate",
-    "Integration Specialist",
-    "Risk Analyst",
-    "First Principles Reasoner",
-    "Pattern Recognizer",
-    "Edge Case Hunter",
-];
+    let mut rng = rand::thread_rng();
+    let mut remaining: Vec<_> = experts.iter().cloned().collect();
+    let mut selected = Vec::with_capacity(n);
 
-/// Select a role based on topic keywords
-fn select_role_for_topic(topic: &str, index: usize) -> &'static str {
-    let topic_lower = topic.to_lowercase();
-
-    // Try keyword matching first — pick the best match for this agent index
-    let mut matched_roles: Vec<&str> = Vec::new();
-    for (keywords, role) in ROLE_KEYWORDS {
-        if keywords.iter().any(|kw| topic_lower.contains(kw)) {
-            matched_roles.push(role);
+    for _ in 0..n {
+        if remaining.is_empty() {
+            break;
         }
+
+        let total_weight: f64 = remaining.iter().map(|e| e.relevance).sum();
+        if total_weight <= 0.0 {
+            // Fall back to uniform sampling if weights are zero
+            let idx = rng.gen_range(0..remaining.len());
+            selected.push(remaining.remove(idx));
+            continue;
+        }
+
+        // Weighted selection
+        let mut threshold = rng.gen::<f64>() * total_weight;
+        let mut idx = 0;
+        for (i, expert) in remaining.iter().enumerate() {
+            threshold -= expert.relevance;
+            if threshold <= 0.0 {
+                idx = i;
+                break;
+            }
+        }
+        selected.push(remaining.remove(idx));
     }
 
-    if index < matched_roles.len() {
-        return matched_roles[index];
+    selected
+}
+
+/// Sample a panel from an expert pool (RFC 0048)
+pub fn sample_panel_from_pool(pool: &ExpertPool, panel_size: usize) -> Vec<PoolExpert> {
+    let (core_n, adj_n, wc_n) = tier_split(panel_size);
+
+    // Separate experts by tier
+    let core: Vec<_> = pool.experts.iter()
+        .filter(|e| e.tier == ExpertTier::Core)
+        .cloned()
+        .collect();
+    let adjacent: Vec<_> = pool.experts.iter()
+        .filter(|e| e.tier == ExpertTier::Adjacent)
+        .cloned()
+        .collect();
+    let wildcard: Vec<_> = pool.experts.iter()
+        .filter(|e| e.tier == ExpertTier::Wildcard)
+        .cloned()
+        .collect();
+
+    // Sample from each tier
+    let mut panel = Vec::new();
+    panel.extend(weighted_sample(&core, core_n));
+    panel.extend(weighted_sample(&adjacent, adj_n));
+    panel.extend(weighted_sample(&wildcard, wc_n));
+
+    // If we don't have enough in a tier, fill from others
+    while panel.len() < panel_size && panel.len() < pool.experts.len() {
+        let used_roles: std::collections::HashSet<_> = panel.iter().map(|e| &e.role).collect();
+        let remaining: Vec<_> = pool.experts.iter()
+            .filter(|e| !used_roles.contains(&e.role))
+            .cloned()
+            .collect();
+        if remaining.is_empty() {
+            break;
+        }
+        let sampled = weighted_sample(&remaining, 1);
+        panel.extend(sampled);
     }
 
-    // Fall back to general roles
-    let general_idx = if matched_roles.is_empty() {
-        index
-    } else {
-        index - matched_roles.len()
-    };
-    GENERAL_ROLES[general_idx % GENERAL_ROLES.len()]
+    panel
 }
 
 /// Compute tier boundaries for agent assignment
@@ -798,33 +914,23 @@ fn tier_split(count: usize) -> (usize, usize, usize) {
     }
 }
 
-/// Assign pastry-themed agents with expert roles, tiers, and relevance
-pub fn assign_pastry_agents(count: usize, topic: &str) -> Vec<PastryAgent> {
-    let (core_count, adjacent_count, _wildcard_count) = tier_split(count);
-
-    (0..count)
-        .map(|i| {
+/// Assign pastry names to sampled experts (RFC 0048)
+pub fn assign_pastry_names(sampled: Vec<PoolExpert>) -> Vec<PastryAgent> {
+    sampled
+        .into_iter()
+        .enumerate()
+        .map(|(i, expert)| {
             let name = if i < PASTRY_NAMES.len() {
                 PASTRY_NAMES[i].to_string()
             } else {
                 format!("Pastry{}", i + 1)
             };
-            let role = select_role_for_topic(topic, i).to_string();
-            let (tier, relevance) = if i < core_count {
-                ("Core", 0.95 - (i as f64 * 0.05))
-            } else if i < core_count + adjacent_count {
-                let adj_idx = i - core_count;
-                ("Adjacent", 0.70 - (adj_idx as f64 * 0.05))
-            } else {
-                let wc_idx = i - core_count - adjacent_count;
-                ("Wildcard", 0.40 - (wc_idx as f64 * 0.05))
-            };
             PastryAgent {
                 name,
-                role,
+                role: expert.role,
                 emoji: "🧁".to_string(),
-                tier: tier.to_string(),
-                relevance,
+                tier: expert.tier.to_string(),
+                relevance: expert.relevance,
             }
         })
         .collect()
@@ -836,6 +942,7 @@ pub fn generate_alignment_dialogue_markdown(
     number: i32,
     rfc_title: Option<&str>,
     agents: &[PastryAgent],
+    pool: Option<&ExpertPool>,
 ) -> String {
     let date = chrono::Utc::now().format("%Y-%m-%d").to_string();
     let time = chrono::Utc::now().format("%H:%MZ").to_string();
@@ -865,7 +972,35 @@ pub fn generate_alignment_dialogue_markdown(
     }
     md.push('\n');
 
-    // Expert Panel table
+    // Expert Pool section (RFC 0048)
+    if let Some(p) = pool {
+        md.push_str("## Expert Pool\n\n");
+        md.push_str(&format!("**Domain**: {}\n", p.domain));
+        if let Some(ref q) = p.question {
+            md.push_str(&format!("**Question**: {}\n", q));
+        }
+        md.push('\n');
+
+        // Group by tier
+        let core: Vec<_> = p.experts.iter().filter(|e| e.tier == ExpertTier::Core).collect();
+        let adjacent: Vec<_> = p.experts.iter().filter(|e| e.tier == ExpertTier::Adjacent).collect();
+        let wildcard: Vec<_> = p.experts.iter().filter(|e| e.tier == ExpertTier::Wildcard).collect();
+
+        md.push_str("| Tier | Experts |\n");
+        md.push_str("|------|--------|\n");
+        if !core.is_empty() {
+            md.push_str(&format!("| Core | {} |\n", core.iter().map(|e| e.role.as_str()).collect::<Vec<_>>().join(", ")));
+        }
+        if !adjacent.is_empty() {
+            md.push_str(&format!("| Adjacent | {} |\n", adjacent.iter().map(|e| e.role.as_str()).collect::<Vec<_>>().join(", ")));
+        }
+        if !wildcard.is_empty() {
+            md.push_str(&format!("| Wildcard | {} |\n", wildcard.iter().map(|e| e.role.as_str()).collect::<Vec<_>>().join(", ")));
+        }
+        md.push('\n');
+    }
+
+    // Expert Panel table (sampled for this dialogue)
     md.push_str("## Expert Panel\n\n");
     md.push_str("| Agent | Role | Tier | Relevance | Emoji |\n");
     md.push_str("|-------|------|------|-----------|-------|\n");
@@ -919,6 +1054,8 @@ pub fn build_judge_protocol(
     model: &str,
     sources: &[String],
     output_dir: &str,
+    pool: Option<&ExpertPool>,
+    rotation: RotationMode,
 ) -> Value {
     let agent_list: Vec<Value> = agents
         .iter()
@@ -1033,9 +1170,8 @@ Then spawn ALL {agent_count} experts in a SINGLE message with {agent_count} Task
 Multiple Task calls in one message run as parallel subagents.
 
 Each Task call uses the prompt from blue_dialogue_round_prompt:
-- subagent_type: "alignment-expert" (from task_params in response)
+- subagent_type: "general-purpose" (from task_params in response)
 - description: "🧁 Muffin expert deliberation" (from task_params in response)
-- max_turns: 5 (from task_params in response)
 - prompt: the "prompt" field from blue_dialogue_round_prompt response (already substituted)
 
 All {agent_count} results return when complete WITH STRUCTURED CONFIRMATIONS.
@@ -1104,7 +1240,7 @@ NOTE: blue_dialogue_round_prompt handles round-specific context automatically:
             .join(", "),
     );
 
-    json!({
+    let mut result = json!({
         "instructions": instructions,
         "agent_prompt_template": agent_prompt_template,
         "agents": agent_list,
@@ -1112,12 +1248,28 @@ NOTE: blue_dialogue_round_prompt handles round-specific context automatically:
         "model": model,
         "sources": sources,
         "output_dir": output_dir,
+        "rotation": format!("{:?}", rotation).to_lowercase(),
         "convergence": {
             "max_rounds": 5,
             "velocity_threshold": 0.1,
             "tension_resolution_gate": true,
         },
-    })
+    });
+
+    // RFC 0048: Include pool info if present
+    if let Some(p) = pool {
+        result.as_object_mut().unwrap().insert(
+            "expert_pool".to_string(),
+            json!({
+                "domain": p.domain,
+                "question": p.question,
+                "total_experts": p.experts.len(),
+                "pool_file": format!("{}/expert-pool.json", output_dir),
+            }),
+        );
+    }
+
+    result
 }
 
 /// Convert slug to title case
@@ -1191,6 +1343,7 @@ pub fn handle_round_prompt(args: &Value) -> Result<Value, ServerError> {
 
     // Build context instructions based on round
     let context_instructions = if round == 0 {
+        // Round 0: No prior context to read, but agents can research if needed
         String::new()
     } else {
         format!(
@@ -1275,8 +1428,124 @@ Five lines. The FILE_WRITTEN line proves you wrote the file. Without it, the Jud
         "task_params": {
             "subagent_type": "general-purpose",
             "description": format!("{} {} expert deliberation", agent_emoji, agent_name),
-            "max_turns": 5,
         }
+    }))
+}
+
+/// Handle blue_dialogue_sample_panel (RFC 0048)
+///
+/// Sample a new panel from the expert pool for manual round control.
+pub fn handle_sample_panel(args: &Value) -> Result<Value, ServerError> {
+    let dialogue_title = args
+        .get("dialogue_title")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| ServerError::InvalidParams)?;
+
+    let round = args
+        .get("round")
+        .and_then(|v| v.as_u64())
+        .ok_or_else(|| ServerError::InvalidParams)? as usize;
+
+    let panel_size = args
+        .get("panel_size")
+        .and_then(|v| v.as_u64())
+        .map(|n| n as usize)
+        .unwrap_or(12);
+
+    // Parse retain/exclude lists
+    let retain: Vec<String> = args
+        .get("retain")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let exclude: Vec<String> = args
+        .get("exclude")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    // Load pool from dialogue directory
+    let slug = title_to_slug(dialogue_title);
+    let pool_path = format!("/tmp/blue-dialogue/{}/expert-pool.json", slug);
+
+    let pool_content = fs::read_to_string(&pool_path).map_err(|e| {
+        ServerError::CommandFailed(format!(
+            "Failed to read expert pool at {}: {}. Did you create the dialogue with expert_pool?",
+            pool_path, e
+        ))
+    })?;
+
+    let pool: ExpertPool = serde_json::from_str(&pool_content).map_err(|e| {
+        ServerError::CommandFailed(format!("Failed to parse expert pool: {}", e))
+    })?;
+
+    // Filter pool based on retain/exclude
+    let filtered: Vec<PoolExpert> = pool
+        .experts
+        .iter()
+        .filter(|e| {
+            let role_lower = e.role.to_lowercase();
+            // Include if in retain list (if retain is non-empty)
+            let in_retain = retain.is_empty()
+                || retain.iter().any(|r| role_lower.contains(&r.to_lowercase()));
+            // Exclude if in exclude list
+            let in_exclude = exclude.iter().any(|x| role_lower.contains(&x.to_lowercase()));
+            in_retain && !in_exclude
+        })
+        .cloned()
+        .collect();
+
+    if filtered.is_empty() {
+        return Err(ServerError::CommandFailed(
+            "No experts remain after filtering. Check retain/exclude parameters.".to_string(),
+        ));
+    }
+
+    // Create filtered pool for sampling
+    let filtered_pool = ExpertPool {
+        domain: pool.domain.clone(),
+        question: pool.question.clone(),
+        experts: filtered,
+    };
+
+    // Sample panel
+    let sampled = sample_panel_from_pool(&filtered_pool, panel_size);
+    let agents = assign_pastry_names(sampled);
+
+    // Create round directory and save panel
+    let output_dir = format!("/tmp/blue-dialogue/{}", slug);
+    let round_dir = format!("{}/round-{}", output_dir, round);
+    fs::create_dir_all(&round_dir).map_err(|e| {
+        ServerError::CommandFailed(format!("Failed to create round dir: {}", e))
+    })?;
+
+    let panel_path = format!("{}/panel.json", round_dir);
+    let panel_json = serde_json::to_string_pretty(&agents)
+        .map_err(|e| ServerError::CommandFailed(format!("Failed to serialize panel: {}", e)))?;
+    fs::write(&panel_path, panel_json)
+        .map_err(|e| ServerError::CommandFailed(format!("Failed to write panel: {}", e)))?;
+
+    Ok(json!({
+        "status": "success",
+        "message": format!("Sampled {} experts for round {}", agents.len(), round),
+        "round": round,
+        "panel_file": panel_path,
+        "panel": agents.iter().map(|a| json!({
+            "name": a.name,
+            "role": a.role,
+            "emoji": a.emoji,
+            "tier": a.tier,
+            "relevance": a.relevance,
+        })).collect::<Vec<_>>(),
     }))
 }
 
@@ -1313,9 +1582,57 @@ mod tests {
 
     // ==================== Alignment Mode Tests ====================
 
+    /// Helper: create a test pool with the specified number of experts
+    fn test_pool(n: usize) -> ExpertPool {
+        let mut experts = Vec::new();
+        let base_roles = [
+            ("Systems Architect", ExpertTier::Core),
+            ("Security Engineer", ExpertTier::Core),
+            ("API Designer", ExpertTier::Core),
+            ("Data Architect", ExpertTier::Adjacent),
+            ("Quality Engineer", ExpertTier::Adjacent),
+            ("UX Architect", ExpertTier::Adjacent),
+            ("DevOps Engineer", ExpertTier::Adjacent),
+            ("Performance Engineer", ExpertTier::Wildcard),
+            ("Technical Writer", ExpertTier::Wildcard),
+            ("Risk Analyst", ExpertTier::Wildcard),
+        ];
+        for i in 0..n {
+            let (base_role, tier) = base_roles[i % base_roles.len()];
+            // Make roles unique by adding a suffix for overflow
+            let role = if i < base_roles.len() {
+                base_role.to_string()
+            } else {
+                format!("{} {}", base_role, i / base_roles.len() + 1)
+            };
+            let relevance = match tier {
+                ExpertTier::Core => 0.95 - (i as f64 * 0.02),
+                ExpertTier::Adjacent => 0.70 - (i as f64 * 0.02),
+                ExpertTier::Wildcard => 0.40 - (i as f64 * 0.02),
+            };
+            experts.push(PoolExpert {
+                role,
+                tier,
+                relevance: relevance.max(0.20),
+            });
+        }
+        ExpertPool {
+            domain: "Test Domain".to_string(),
+            question: Some("Test question?".to_string()),
+            experts,
+        }
+    }
+
+    /// Helper: create test agents from a pool
+    fn test_agents(n: usize) -> Vec<PastryAgent> {
+        let pool = test_pool(n.max(10));
+        let sampled = sample_panel_from_pool(&pool, n);
+        assign_pastry_names(sampled)
+    }
+
     #[test]
-    fn test_assign_pastry_agents() {
-        let agents = assign_pastry_agents(3, "system design");
+    fn test_assign_pastry_names() {
+        let agents = test_agents(3);
         assert_eq!(agents.len(), 3);
         assert_eq!(agents[0].name, "Muffin");
         assert_eq!(agents[1].name, "Cupcake");
@@ -1327,8 +1644,11 @@ mod tests {
     }
 
     #[test]
-    fn test_assign_pastry_agents_overflow() {
-        let agents = assign_pastry_agents(25, "general topic");
+    fn test_assign_pastry_names_overflow() {
+        // Create a pool with 25 experts
+        let pool = test_pool(25);
+        let sampled = sample_panel_from_pool(&pool, 25);
+        let agents = assign_pastry_names(sampled);
         assert_eq!(agents.len(), 25);
         // First 20 use named pastries
         assert_eq!(agents[0].name, "Muffin");
@@ -1339,28 +1659,43 @@ mod tests {
     }
 
     #[test]
-    fn test_select_roles_for_topic() {
-        // Security topic should get Security Architect
-        let role = select_role_for_topic("security vulnerability assessment", 0);
-        assert_eq!(role, "Security Architect");
+    fn test_sample_panel_from_pool() {
+        let pool = test_pool(15);
+        let sampled = sample_panel_from_pool(&pool, 7);
+        assert_eq!(sampled.len(), 7);
+        // All sampled experts should have valid roles
+        for expert in &sampled {
+            assert!(!expert.role.is_empty());
+            assert!(expert.relevance > 0.0);
+        }
+    }
 
-        // API topic should get API Designer
-        let role = select_role_for_topic("api endpoint design", 0);
-        assert_eq!(role, "API Designer");
+    #[test]
+    fn test_weighted_sample_respects_size() {
+        let experts = vec![
+            PoolExpert { role: "A".to_string(), tier: ExpertTier::Core, relevance: 0.9 },
+            PoolExpert { role: "B".to_string(), tier: ExpertTier::Core, relevance: 0.8 },
+            PoolExpert { role: "C".to_string(), tier: ExpertTier::Core, relevance: 0.7 },
+        ];
+        // Request more than available
+        let sampled = weighted_sample(&experts, 5);
+        assert_eq!(sampled.len(), 3); // Should return all available
 
-        // Unknown topic falls back to general roles
-        let role = select_role_for_topic("something unusual", 0);
-        assert_eq!(role, "Systems Thinker");
+        // Request fewer than available
+        let sampled = weighted_sample(&experts, 2);
+        assert_eq!(sampled.len(), 2);
     }
 
     #[test]
     fn test_alignment_dialogue_markdown() {
-        let agents = assign_pastry_agents(3, "test topic");
+        let agents = test_agents(3);
+        let pool = test_pool(10);
         let md = generate_alignment_dialogue_markdown(
             "test-alignment",
             1,
             Some("test-rfc"),
             &agents,
+            Some(&pool),
         );
 
         // Required sections
@@ -1385,22 +1720,29 @@ mod tests {
         assert!(md.contains("**Status**: In Progress"));
         assert!(md.contains("**RFC**: test-rfc"));
         assert!(md.contains("💙 Judge"));
+
+        // RFC 0048: Expert Pool section
+        assert!(md.contains("## Expert Pool"));
+        assert!(md.contains("**Domain**: Test Domain"));
     }
 
     #[test]
     fn test_build_judge_protocol() {
-        let agents = assign_pastry_agents(3, "system design");
+        let agents = test_agents(3);
+        let pool = test_pool(10);
         let protocol = build_judge_protocol(
             &agents,
             "/tmp/test.dialogue.md",
             "sonnet",
             &["/tmp/source.rs".to_string()],
             "/tmp/blue-dialogue/system-design",
+            Some(&pool),
+            RotationMode::None,
         );
 
         // Must have instructions
         let instructions = protocol.get("instructions").unwrap().as_str().unwrap();
-        assert!(instructions.contains("alignment-expert"));
+        assert!(instructions.contains("general-purpose"));
         assert!(instructions.contains("ALIGNMENT"));
         assert!(instructions.contains("Wisdom"));
         assert!(instructions.contains("convergence"));
@@ -1456,13 +1798,15 @@ mod tests {
 
     #[test]
     fn test_build_judge_protocol_no_sources() {
-        let agents = assign_pastry_agents(2, "quick topic");
+        let agents = test_agents(2);
         let protocol = build_judge_protocol(
             &agents,
             "/tmp/test.dialogue.md",
             "haiku",
             &[],
             "/tmp/blue-dialogue/quick-topic",
+            None,
+            RotationMode::None,
         );
 
         // Template should NOT contain grounding instructions when no sources
@@ -1472,13 +1816,15 @@ mod tests {
 
     #[test]
     fn test_build_judge_protocol_output_paths() {
-        let agents = assign_pastry_agents(4, "api design");
+        let agents = test_agents(4);
         let protocol = build_judge_protocol(
             &agents,
             "/tmp/test.dialogue.md",
             "sonnet",
             &[],
             "/tmp/blue-dialogue/api-design",
+            None,
+            RotationMode::None,
         );
 
         // output_dir in JSON
@@ -1505,13 +1851,15 @@ mod tests {
 
     #[test]
     fn test_judge_protocol_artifact_write_instructions() {
-        let agents = assign_pastry_agents(3, "test artifacts");
+        let agents = test_agents(3);
         let protocol = build_judge_protocol(
             &agents,
             "/tmp/test.dialogue.md",
             "sonnet",
             &[],
             "/tmp/blue-dialogue/test-artifacts",
+            None,
+            RotationMode::None,
         );
 
         let instructions = protocol["instructions"].as_str().unwrap();
@@ -1553,13 +1901,15 @@ mod tests {
 
     #[test]
     fn test_judge_protocol_context_references_artifacts() {
-        let agents = assign_pastry_agents(3, "context test");
+        let agents = test_agents(3);
         let protocol = build_judge_protocol(
             &agents,
             "/tmp/test.dialogue.md",
             "sonnet",
             &[],
             "/tmp/blue-dialogue/context-test",
+            None,
+            RotationMode::None,
         );
 
         let instructions = protocol["instructions"].as_str().unwrap();
@@ -1620,7 +1970,8 @@ mod tests {
 
         // Must have task_params for spawning
         assert_eq!(result["task_params"]["subagent_type"], "general-purpose");
-        assert_eq!(result["task_params"]["max_turns"], 5);
+        // No max_turns - agents run until complete
+        assert!(result["task_params"].get("max_turns").is_none());
     }
 
     #[test]
