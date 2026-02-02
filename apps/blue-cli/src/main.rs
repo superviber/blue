@@ -315,6 +315,31 @@ enum Commands {
     /// Session end (silent, used by hooks)
     #[command(name = "session-end")]
     SessionEnd,
+
+    /// Install Blue for Claude Code (RFC 0052)
+    Install {
+        /// Only install hooks
+        #[arg(long)]
+        hooks_only: bool,
+
+        /// Only install skills
+        #[arg(long)]
+        skills_only: bool,
+
+        /// Only configure MCP server
+        #[arg(long)]
+        mcp_only: bool,
+
+        /// Overwrite existing files
+        #[arg(long)]
+        force: bool,
+    },
+
+    /// Remove Blue from Claude Code (RFC 0052)
+    Uninstall,
+
+    /// Check Blue installation health (RFC 0052)
+    Doctor,
 }
 
 #[derive(Subcommand)]
@@ -749,6 +774,15 @@ async fn tokio_main() -> Result<()> {
             if session_file.exists() {
                 let _ = std::fs::remove_file(&session_file);
             }
+        }
+        Some(Commands::Install { hooks_only, skills_only, mcp_only, force }) => {
+            handle_install_command(hooks_only, skills_only, mcp_only, force).await?;
+        }
+        Some(Commands::Uninstall) => {
+            handle_uninstall_command().await?;
+        }
+        Some(Commands::Doctor) => {
+            handle_doctor_command().await?;
         }
     }
 
@@ -2689,4 +2723,468 @@ fn log_guard_bypass(path: &str, tool: Option<&str>, reason: &str) {
     {
         let _ = file.write_all(entry.as_bytes());
     }
+}
+
+// ============================================================================
+// RFC 0052: Blue Install Command
+// ============================================================================
+
+const SESSION_START_HOOK: &str = r#"#!/bin/bash
+# Managed by: blue install
+# Blue SessionStart hook - sets up PATH for Claude Code
+
+if [ -n "$CLAUDE_ENV_FILE" ] && [ -n "$CLAUDE_PROJECT_DIR" ]; then
+  echo "export PATH=\"\$CLAUDE_PROJECT_DIR/target/release:\$PATH\"" >> "$CLAUDE_ENV_FILE"
+fi
+
+exit 0
+"#;
+
+const GUARD_WRITE_HOOK: &str = r#"#!/bin/bash
+# Managed by: blue install
+# Blue PreToolUse hook - enforces RFC 0038 worktree protection
+
+FILE_PATH=$(jq -r '.tool_input.file_path // empty')
+
+if [ -z "$FILE_PATH" ]; then
+    exit 0
+fi
+
+blue guard --path="$FILE_PATH"
+"#;
+
+async fn handle_install_command(hooks_only: bool, skills_only: bool, mcp_only: bool, force: bool) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let cwd = std::env::current_dir()?;
+    let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Could not find home directory"))?;
+
+    println!("Installing Blue for Claude Code...\n");
+
+    let install_all = !hooks_only && !skills_only && !mcp_only;
+
+    // Install hooks
+    if install_all || hooks_only {
+        println!("Hooks:");
+        install_hooks(&cwd, force)?;
+    }
+
+    // Install skills
+    if install_all || skills_only {
+        println!("\nSkills:");
+        install_skills(&cwd, &home)?;
+    }
+
+    // Install MCP server
+    if install_all || mcp_only {
+        println!("\nMCP Server:");
+        install_mcp_server(&cwd, &home)?;
+    }
+
+    println!("\nBlue installed. Restart Claude Code to activate.");
+    Ok(())
+}
+
+fn install_hooks(project_dir: &std::path::Path, force: bool) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let hooks_dir = project_dir.join(".claude").join("hooks");
+    std::fs::create_dir_all(&hooks_dir)?;
+
+    // Write session-start.sh
+    let session_start_path = hooks_dir.join("session-start.sh");
+    if !session_start_path.exists() || force {
+        std::fs::write(&session_start_path, SESSION_START_HOOK)?;
+        std::fs::set_permissions(&session_start_path, std::fs::Permissions::from_mode(0o755))?;
+        println!("  ✓ .claude/hooks/session-start.sh");
+    } else {
+        println!("  - .claude/hooks/session-start.sh (exists, use --force to overwrite)");
+    }
+
+    // Write guard-write.sh
+    let guard_write_path = hooks_dir.join("guard-write.sh");
+    if !guard_write_path.exists() || force {
+        std::fs::write(&guard_write_path, GUARD_WRITE_HOOK)?;
+        std::fs::set_permissions(&guard_write_path, std::fs::Permissions::from_mode(0o755))?;
+        println!("  ✓ .claude/hooks/guard-write.sh");
+    } else {
+        println!("  - .claude/hooks/guard-write.sh (exists, use --force to overwrite)");
+    }
+
+    // Update settings.json
+    let settings_path = project_dir.join(".claude").join("settings.json");
+    let settings = merge_hook_settings(&settings_path)?;
+    std::fs::write(&settings_path, serde_json::to_string_pretty(&settings)?)?;
+    println!("  ✓ .claude/settings.json (merged)");
+
+    Ok(())
+}
+
+fn merge_hook_settings(settings_path: &std::path::Path) -> Result<serde_json::Value> {
+    use serde_json::json;
+
+    let mut settings: serde_json::Value = if settings_path.exists() {
+        let content = std::fs::read_to_string(settings_path)?;
+        serde_json::from_str(&content).unwrap_or_else(|_| json!({}))
+    } else {
+        json!({})
+    };
+
+    // Ensure hooks object exists
+    if settings.get("hooks").is_none() {
+        settings["hooks"] = json!({});
+    }
+
+    // Add SessionStart hook
+    settings["hooks"]["SessionStart"] = json!([
+        {
+            "hooks": [
+                {
+                    "type": "command",
+                    "command": ".claude/hooks/session-start.sh"
+                }
+            ]
+        }
+    ]);
+
+    // Add PreToolUse hook
+    settings["hooks"]["PreToolUse"] = json!([
+        {
+            "matcher": "Write|Edit|MultiEdit",
+            "hooks": [
+                {
+                    "type": "command",
+                    "command": ".claude/hooks/guard-write.sh"
+                }
+            ]
+        }
+    ]);
+
+    Ok(settings)
+}
+
+fn install_skills(project_dir: &std::path::Path, home: &std::path::Path) -> Result<()> {
+    let skills_dir = project_dir.join("skills");
+    let target_dir = home.join(".claude").join("skills");
+
+    std::fs::create_dir_all(&target_dir)?;
+
+    if !skills_dir.exists() {
+        println!("  - No skills directory found");
+        return Ok(());
+    }
+
+    for entry in std::fs::read_dir(&skills_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+
+        if path.is_dir() {
+            let skill_name = entry.file_name();
+            let link_path = target_dir.join(&skill_name);
+
+            // Remove existing symlink if present
+            if link_path.exists() || link_path.symlink_metadata().is_ok() {
+                std::fs::remove_file(&link_path).ok();
+            }
+
+            // Create symlink
+            std::os::unix::fs::symlink(&path, &link_path)?;
+            println!("  ✓ ~/.claude/skills/{} -> {}", skill_name.to_string_lossy(), path.display());
+        }
+    }
+
+    Ok(())
+}
+
+fn install_mcp_server(project_dir: &std::path::Path, home: &std::path::Path) -> Result<()> {
+    use serde_json::json;
+
+    let config_path = home.join(".claude.json");
+
+    let mut config: serde_json::Value = if config_path.exists() {
+        let content = std::fs::read_to_string(&config_path)?;
+        serde_json::from_str(&content).unwrap_or_else(|_| json!({}))
+    } else {
+        json!({})
+    };
+
+    // Ensure mcpServers object exists
+    if config.get("mcpServers").is_none() {
+        config["mcpServers"] = json!({});
+    }
+
+    // Add/update blue MCP server
+    let binary_path = project_dir.join("target").join("release").join("blue");
+    config["mcpServers"]["blue"] = json!({
+        "command": binary_path.to_string_lossy(),
+        "args": ["mcp"]
+    });
+
+    std::fs::write(&config_path, serde_json::to_string_pretty(&config)?)?;
+    println!("  ✓ ~/.claude.json (blue server configured)");
+
+    Ok(())
+}
+
+async fn handle_uninstall_command() -> Result<()> {
+    let cwd = std::env::current_dir()?;
+    let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Could not find home directory"))?;
+
+    println!("Removing Blue from Claude Code...\n");
+
+    // Remove hooks
+    println!("Hooks:");
+    uninstall_hooks(&cwd)?;
+
+    // Remove skills
+    println!("\nSkills:");
+    uninstall_skills(&cwd, &home)?;
+
+    // Remove MCP server
+    println!("\nMCP Server:");
+    uninstall_mcp_server(&home)?;
+
+    println!("\nBlue uninstalled.");
+    Ok(())
+}
+
+fn uninstall_hooks(project_dir: &std::path::Path) -> Result<()> {
+    let hooks_dir = project_dir.join(".claude").join("hooks");
+
+    // Remove hook scripts
+    let session_start = hooks_dir.join("session-start.sh");
+    if session_start.exists() {
+        // Check if managed by blue
+        if let Ok(content) = std::fs::read_to_string(&session_start) {
+            if content.contains("Managed by: blue install") {
+                std::fs::remove_file(&session_start)?;
+                println!("  ✓ Removed .claude/hooks/session-start.sh");
+            } else {
+                println!("  - .claude/hooks/session-start.sh (not managed by blue, skipped)");
+            }
+        }
+    }
+
+    let guard_write = hooks_dir.join("guard-write.sh");
+    if guard_write.exists() {
+        if let Ok(content) = std::fs::read_to_string(&guard_write) {
+            if content.contains("Managed by: blue install") {
+                std::fs::remove_file(&guard_write)?;
+                println!("  ✓ Removed .claude/hooks/guard-write.sh");
+            } else {
+                println!("  - .claude/hooks/guard-write.sh (not managed by blue, skipped)");
+            }
+        }
+    }
+
+    // Clean settings.json
+    let settings_path = project_dir.join(".claude").join("settings.json");
+    if settings_path.exists() {
+        if let Ok(content) = std::fs::read_to_string(&settings_path) {
+            if let Ok(mut settings) = serde_json::from_str::<serde_json::Value>(&content) {
+                if let Some(hooks) = settings.get_mut("hooks") {
+                    if let Some(obj) = hooks.as_object_mut() {
+                        obj.remove("SessionStart");
+                        obj.remove("PreToolUse");
+                    }
+                }
+                std::fs::write(&settings_path, serde_json::to_string_pretty(&settings)?)?;
+                println!("  ✓ Cleaned .claude/settings.json");
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn uninstall_skills(project_dir: &std::path::Path, home: &std::path::Path) -> Result<()> {
+    let skills_dir = project_dir.join("skills");
+    let target_dir = home.join(".claude").join("skills");
+
+    if !skills_dir.exists() {
+        println!("  - No skills to remove");
+        return Ok(());
+    }
+
+    for entry in std::fs::read_dir(&skills_dir)? {
+        let entry = entry?;
+        if entry.path().is_dir() {
+            let skill_name = entry.file_name();
+            let link_path = target_dir.join(&skill_name);
+
+            if link_path.symlink_metadata().is_ok() {
+                std::fs::remove_file(&link_path)?;
+                println!("  ✓ Removed ~/.claude/skills/{}", skill_name.to_string_lossy());
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn uninstall_mcp_server(home: &std::path::Path) -> Result<()> {
+    let config_path = home.join(".claude.json");
+
+    if config_path.exists() {
+        if let Ok(content) = std::fs::read_to_string(&config_path) {
+            if let Ok(mut config) = serde_json::from_str::<serde_json::Value>(&content) {
+                if let Some(servers) = config.get_mut("mcpServers") {
+                    if let Some(obj) = servers.as_object_mut() {
+                        obj.remove("blue");
+                    }
+                }
+                std::fs::write(&config_path, serde_json::to_string_pretty(&config)?)?;
+                println!("  ✓ Removed blue from ~/.claude.json");
+            }
+        }
+    }
+
+    Ok(())
+}
+
+async fn handle_doctor_command() -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let cwd = std::env::current_dir()?;
+    let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Could not find home directory"))?;
+
+    println!("Blue Installation Health Check\n");
+
+    let mut issues = 0;
+
+    // Check binary
+    println!("Binary:");
+    if let Ok(path) = which::which("blue") {
+        println!("  ✓ blue found at {}", path.display());
+    } else {
+        println!("  ✗ blue not found in PATH");
+        issues += 1;
+    }
+
+    // Check hooks
+    println!("\nHooks:");
+    let hooks_dir = cwd.join(".claude").join("hooks");
+
+    let session_start = hooks_dir.join("session-start.sh");
+    if session_start.exists() {
+        let is_executable = std::fs::metadata(&session_start)
+            .map(|m| m.permissions().mode() & 0o111 != 0)
+            .unwrap_or(false);
+        if is_executable {
+            println!("  ✓ session-start.sh (installed, executable)");
+        } else {
+            println!("  ✗ session-start.sh (not executable)");
+            issues += 1;
+        }
+    } else {
+        println!("  ✗ session-start.sh missing");
+        issues += 1;
+    }
+
+    let guard_write = hooks_dir.join("guard-write.sh");
+    if guard_write.exists() {
+        let is_executable = std::fs::metadata(&guard_write)
+            .map(|m| m.permissions().mode() & 0o111 != 0)
+            .unwrap_or(false);
+        if is_executable {
+            println!("  ✓ guard-write.sh (installed, executable)");
+        } else {
+            println!("  ✗ guard-write.sh (not executable)");
+            issues += 1;
+        }
+    } else {
+        println!("  ✗ guard-write.sh missing");
+        issues += 1;
+    }
+
+    let settings_path = cwd.join(".claude").join("settings.json");
+    if settings_path.exists() {
+        if let Ok(content) = std::fs::read_to_string(&settings_path) {
+            if content.contains("SessionStart") && content.contains("PreToolUse") {
+                println!("  ✓ settings.json configured");
+            } else {
+                println!("  ✗ settings.json missing hook configuration");
+                issues += 1;
+            }
+        }
+    } else {
+        println!("  ✗ settings.json missing");
+        issues += 1;
+    }
+
+    // Check skills
+    println!("\nSkills:");
+    let skills_dir = cwd.join("skills");
+    let target_dir = home.join(".claude").join("skills");
+
+    if skills_dir.exists() {
+        for entry in std::fs::read_dir(&skills_dir)? {
+            let entry = entry?;
+            if entry.path().is_dir() {
+                let skill_name = entry.file_name();
+                let link_path = target_dir.join(&skill_name);
+
+                if link_path.symlink_metadata().is_ok() {
+                    // Check if symlink points to correct target
+                    if let Ok(target) = std::fs::read_link(&link_path) {
+                        if target == entry.path() {
+                            println!("  ✓ {} (symlink valid)", skill_name.to_string_lossy());
+                        } else {
+                            println!("  ✗ {} (symlink points to wrong target)", skill_name.to_string_lossy());
+                            issues += 1;
+                        }
+                    }
+                } else {
+                    println!("  ✗ {} (symlink missing)", skill_name.to_string_lossy());
+                    issues += 1;
+                }
+            }
+        }
+    } else {
+        println!("  - No skills directory");
+    }
+
+    // Check MCP server
+    println!("\nMCP Server:");
+    let config_path = home.join(".claude.json");
+    if config_path.exists() {
+        if let Ok(content) = std::fs::read_to_string(&config_path) {
+            if let Ok(config) = serde_json::from_str::<serde_json::Value>(&content) {
+                if let Some(servers) = config.get("mcpServers") {
+                    if servers.get("blue").is_some() {
+                        println!("  ✓ blue configured in ~/.claude.json");
+
+                        // Check if binary path is correct
+                        if let Some(cmd) = servers["blue"].get("command").and_then(|c| c.as_str()) {
+                            if std::path::Path::new(cmd).exists() {
+                                println!("  ✓ Binary path valid");
+                            } else {
+                                println!("  ✗ Binary path invalid: {}", cmd);
+                                issues += 1;
+                            }
+                        }
+                    } else {
+                        println!("  ✗ blue not configured in ~/.claude.json");
+                        issues += 1;
+                    }
+                } else {
+                    println!("  ✗ No mcpServers in ~/.claude.json");
+                    issues += 1;
+                }
+            }
+        }
+    } else {
+        println!("  ✗ ~/.claude.json not found");
+        issues += 1;
+    }
+
+    // Summary
+    println!();
+    if issues == 0 {
+        println!("All checks passed.");
+    } else {
+        println!("{} issue(s) found. Run `blue install` to fix.", issues);
+    }
+
+    Ok(())
 }
