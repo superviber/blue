@@ -1711,6 +1711,469 @@ pub fn get_verdicts(
     Ok(verdicts)
 }
 
+// ==================== Phase 6: Tooling & Analysis ====================
+
+/// Expanded citation with full entity context
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExpandedCitation {
+    /// Display ID (e.g., "P0001", "T0102")
+    pub display_id: String,
+    /// Entity type
+    pub entity_type: EntityType,
+    /// Round where entity was created
+    pub round: i32,
+    /// Sequence within round
+    pub seq: i32,
+    /// Label/title of the entity
+    pub label: String,
+    /// Content snippet (first 200 chars)
+    pub content_snippet: String,
+    /// Full content
+    pub content: String,
+    /// Contributors who created/contributed
+    pub contributors: Vec<String>,
+    /// Status (for tensions)
+    pub status: Option<String>,
+    /// Parameters (for recommendations)
+    pub parameters: Option<serde_json::Value>,
+}
+
+/// Expand a display ID into full entity context
+pub fn expand_citation(conn: &Connection, dialogue_id: &str, display_id: &str) -> Result<ExpandedCitation, rusqlite::Error> {
+    // Parse the display ID to get type, round, seq
+    let (entity_type, round, seq) = parse_display_id(display_id)
+        .ok_or(rusqlite::Error::InvalidQuery)?;
+
+    match entity_type {
+        EntityType::Perspective => {
+            let row: (String, String, String) = conn.query_row(
+                "SELECT label, content, contributors FROM alignment_perspectives WHERE dialogue_id = ?1 AND round = ?2 AND seq = ?3",
+                params![dialogue_id, round, seq],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            )?;
+            let contributors: Vec<String> = serde_json::from_str(&row.2).unwrap_or_default();
+            let content_snippet = if row.1.len() > 200 { format!("{}...", &row.1[..200]) } else { row.1.clone() };
+            Ok(ExpandedCitation {
+                display_id: display_id.to_string(),
+                entity_type,
+                round,
+                seq,
+                label: row.0,
+                content_snippet,
+                content: row.1,
+                contributors,
+                status: None,
+                parameters: None,
+            })
+        }
+        EntityType::Recommendation => {
+            let row: (String, String, String, Option<String>) = conn.query_row(
+                "SELECT label, content, contributors, parameters FROM alignment_recommendations WHERE dialogue_id = ?1 AND round = ?2 AND seq = ?3",
+                params![dialogue_id, round, seq],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+            )?;
+            let contributors: Vec<String> = serde_json::from_str(&row.2).unwrap_or_default();
+            let parameters: Option<serde_json::Value> = row.3.and_then(|p| serde_json::from_str(&p).ok());
+            let content_snippet = if row.1.len() > 200 { format!("{}...", &row.1[..200]) } else { row.1.clone() };
+            Ok(ExpandedCitation {
+                display_id: display_id.to_string(),
+                entity_type,
+                round,
+                seq,
+                label: row.0,
+                content_snippet,
+                content: row.1,
+                contributors,
+                status: None,
+                parameters,
+            })
+        }
+        EntityType::Tension => {
+            let row: (String, String, String, String) = conn.query_row(
+                "SELECT label, description, contributors, status FROM alignment_tensions WHERE dialogue_id = ?1 AND round = ?2 AND seq = ?3",
+                params![dialogue_id, round, seq],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+            )?;
+            let contributors: Vec<String> = serde_json::from_str(&row.2).unwrap_or_default();
+            let content_snippet = if row.1.len() > 200 { format!("{}...", &row.1[..200]) } else { row.1.clone() };
+            Ok(ExpandedCitation {
+                display_id: display_id.to_string(),
+                entity_type,
+                round,
+                seq,
+                label: row.0,
+                content_snippet,
+                content: row.1,
+                contributors,
+                status: Some(row.3),
+                parameters: None,
+            })
+        }
+        EntityType::Evidence => {
+            let row: (String, String, String) = conn.query_row(
+                "SELECT label, content, contributors FROM alignment_evidence WHERE dialogue_id = ?1 AND round = ?2 AND seq = ?3",
+                params![dialogue_id, round, seq],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            )?;
+            let contributors: Vec<String> = serde_json::from_str(&row.2).unwrap_or_default();
+            let content_snippet = if row.1.len() > 200 { format!("{}...", &row.1[..200]) } else { row.1.clone() };
+            Ok(ExpandedCitation {
+                display_id: display_id.to_string(),
+                entity_type,
+                round,
+                seq,
+                label: row.0,
+                content_snippet,
+                content: row.1,
+                contributors,
+                status: None,
+                parameters: None,
+            })
+        }
+        EntityType::Claim => {
+            let row: (String, String, String) = conn.query_row(
+                "SELECT label, content, contributors FROM alignment_claims WHERE dialogue_id = ?1 AND round = ?2 AND seq = ?3",
+                params![dialogue_id, round, seq],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            )?;
+            let contributors: Vec<String> = serde_json::from_str(&row.2).unwrap_or_default();
+            let content_snippet = if row.1.len() > 200 { format!("{}...", &row.1[..200]) } else { row.1.clone() };
+            Ok(ExpandedCitation {
+                display_id: display_id.to_string(),
+                entity_type,
+                round,
+                seq,
+                label: row.0,
+                content_snippet,
+                content: row.1,
+                contributors,
+                status: None,
+                parameters: None,
+            })
+        }
+    }
+}
+
+/// Expand multiple citations at once
+pub fn expand_citations(conn: &Connection, dialogue_id: &str, display_ids: &[String]) -> Vec<Result<ExpandedCitation, String>> {
+    display_ids.iter()
+        .map(|id| expand_citation(conn, dialogue_id, id)
+            .map_err(|e| format!("{}: {}", id, e)))
+        .collect()
+}
+
+/// Cross-dialogue statistics
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CrossDialogueStats {
+    /// Total number of dialogues
+    pub total_dialogues: i32,
+    /// Dialogues by status
+    pub by_status: std::collections::HashMap<String, i32>,
+    /// Total perspectives across all dialogues
+    pub total_perspectives: i32,
+    /// Total tensions across all dialogues
+    pub total_tensions: i32,
+    /// Open tensions count
+    pub open_tensions: i32,
+    /// Resolved tensions count
+    pub resolved_tensions: i32,
+    /// Total recommendations
+    pub total_recommendations: i32,
+    /// Total evidence items
+    pub total_evidence: i32,
+    /// Total claims
+    pub total_claims: i32,
+    /// Average alignment score per dialogue
+    pub avg_alignment: f64,
+    /// Total unique experts
+    pub total_experts: i32,
+    /// Most active experts (by total score)
+    pub top_experts: Vec<(String, i32)>,
+}
+
+/// Get aggregated statistics across all dialogues
+pub fn get_cross_dialogue_stats(conn: &Connection) -> Result<CrossDialogueStats, rusqlite::Error> {
+    let total_dialogues: i32 = conn.query_row(
+        "SELECT COUNT(*) FROM alignment_dialogues", [], |row| row.get(0)
+    )?;
+
+    // By status
+    let mut by_status = std::collections::HashMap::new();
+    let mut stmt = conn.prepare("SELECT status, COUNT(*) FROM alignment_dialogues GROUP BY status")?;
+    let rows = stmt.query_map([], |row| {
+        let status: String = row.get(0)?;
+        let count: i32 = row.get(1)?;
+        Ok((status, count))
+    })?;
+    for row in rows {
+        let (status, count) = row?;
+        by_status.insert(status, count);
+    }
+
+    // Entity counts
+    let total_perspectives: i32 = conn.query_row(
+        "SELECT COUNT(*) FROM alignment_perspectives", [], |row| row.get(0)
+    ).unwrap_or(0);
+
+    let total_tensions: i32 = conn.query_row(
+        "SELECT COUNT(*) FROM alignment_tensions", [], |row| row.get(0)
+    ).unwrap_or(0);
+
+    let open_tensions: i32 = conn.query_row(
+        "SELECT COUNT(*) FROM alignment_tensions WHERE status IN ('open', 'addressed', 'reopened')",
+        [], |row| row.get(0)
+    ).unwrap_or(0);
+
+    let resolved_tensions: i32 = conn.query_row(
+        "SELECT COUNT(*) FROM alignment_tensions WHERE status = 'resolved'",
+        [], |row| row.get(0)
+    ).unwrap_or(0);
+
+    let total_recommendations: i32 = conn.query_row(
+        "SELECT COUNT(*) FROM alignment_recommendations", [], |row| row.get(0)
+    ).unwrap_or(0);
+
+    let total_evidence: i32 = conn.query_row(
+        "SELECT COUNT(*) FROM alignment_evidence", [], |row| row.get(0)
+    ).unwrap_or(0);
+
+    let total_claims: i32 = conn.query_row(
+        "SELECT COUNT(*) FROM alignment_claims", [], |row| row.get(0)
+    ).unwrap_or(0);
+
+    // Average alignment
+    let avg_alignment: f64 = conn.query_row(
+        "SELECT COALESCE(AVG(total_alignment), 0.0) FROM alignment_dialogues",
+        [], |row| row.get(0)
+    ).unwrap_or(0.0);
+
+    // Expert stats
+    let total_experts: i32 = conn.query_row(
+        "SELECT COUNT(DISTINCT expert_slug) FROM alignment_experts",
+        [], |row| row.get(0)
+    ).unwrap_or(0);
+
+    // Top experts by total score
+    let mut top_experts = Vec::new();
+    let mut stmt = conn.prepare(
+        "SELECT expert_slug, SUM(total_score) as total
+         FROM alignment_experts
+         GROUP BY expert_slug
+         ORDER BY total DESC
+         LIMIT 10"
+    )?;
+    let rows = stmt.query_map([], |row| {
+        let slug: String = row.get(0)?;
+        let score: i32 = row.get(1)?;
+        Ok((slug, score))
+    })?;
+    for row in rows {
+        top_experts.push(row?);
+    }
+
+    Ok(CrossDialogueStats {
+        total_dialogues,
+        by_status,
+        total_perspectives,
+        total_tensions,
+        open_tensions,
+        resolved_tensions,
+        total_recommendations,
+        total_evidence,
+        total_claims,
+        avg_alignment,
+        total_experts,
+        top_experts,
+    })
+}
+
+/// Real-time dialogue progress
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DialogueProgress {
+    /// Dialogue ID
+    pub dialogue_id: String,
+    /// Current status
+    pub status: String,
+    /// Current round number
+    pub current_round: i32,
+    /// Total rounds completed
+    pub total_rounds: i32,
+    /// Running ALIGNMENT score
+    pub total_alignment: i32,
+    /// Per-round scores
+    pub round_scores: Vec<i32>,
+    /// ALIGNMENT velocity (change from last round)
+    pub velocity: i32,
+    /// Open tensions count
+    pub open_tensions: i32,
+    /// Resolved tensions count
+    pub resolved_tensions: i32,
+    /// Active experts in current round
+    pub active_experts: Vec<String>,
+    /// Expert leaderboard (slug, total_score)
+    pub leaderboard: Vec<(String, i32)>,
+    /// Convergence indicator (true if velocity near zero for 2+ rounds)
+    pub converging: bool,
+    /// Estimated completion (based on velocity trend)
+    pub est_rounds_remaining: Option<i32>,
+}
+
+/// Get real-time progress for a dialogue
+pub fn get_dialogue_progress(conn: &Connection, dialogue_id: &str) -> Result<DialogueProgress, AlignmentDbError> {
+    // Get dialogue info
+    let dialogue = get_dialogue(conn, dialogue_id)?;
+
+    // Get round scores
+    let mut round_scores = Vec::new();
+    let mut stmt = conn.prepare(
+        "SELECT round, score FROM alignment_rounds WHERE dialogue_id = ?1 ORDER BY round"
+    )?;
+    let rows = stmt.query_map(params![dialogue_id], |row| {
+        let _round: i32 = row.get(0)?;
+        let score: i32 = row.get(1)?;
+        Ok(score)
+    })?;
+    for row in rows {
+        round_scores.push(row?);
+    }
+
+    // Calculate velocity
+    let velocity = if round_scores.len() >= 2 {
+        round_scores[round_scores.len() - 1] - round_scores[round_scores.len() - 2]
+    } else {
+        0
+    };
+
+    // Check convergence (velocity near zero for 2+ rounds)
+    let converging = if round_scores.len() >= 3 {
+        let v1 = round_scores[round_scores.len() - 1] - round_scores[round_scores.len() - 2];
+        let v2 = round_scores[round_scores.len() - 2] - round_scores[round_scores.len() - 3];
+        v1.abs() < 5 && v2.abs() < 5
+    } else {
+        false
+    };
+
+    // Tension counts
+    let open_tensions: i32 = conn.query_row(
+        "SELECT COUNT(*) FROM alignment_tensions WHERE dialogue_id = ?1 AND status IN ('open', 'addressed', 'reopened')",
+        params![dialogue_id], |row| row.get(0)
+    ).unwrap_or(0);
+
+    let resolved_tensions: i32 = conn.query_row(
+        "SELECT COUNT(*) FROM alignment_tensions WHERE dialogue_id = ?1 AND status = 'resolved'",
+        params![dialogue_id], |row| row.get(0)
+    ).unwrap_or(0);
+
+    // Get current round experts
+    let current_round = dialogue.total_rounds.saturating_sub(1).max(0);
+    let mut active_experts = Vec::new();
+    let mut stmt = conn.prepare(
+        "SELECT expert_slug FROM alignment_experts
+         WHERE dialogue_id = ?1 AND first_round <= ?2
+         ORDER BY total_score DESC"
+    )?;
+    let rows = stmt.query_map(params![dialogue_id, current_round], |row| row.get(0))?;
+    for row in rows {
+        active_experts.push(row?);
+    }
+
+    // Leaderboard
+    let mut leaderboard = Vec::new();
+    let mut stmt = conn.prepare(
+        "SELECT expert_slug, total_score FROM alignment_experts
+         WHERE dialogue_id = ?1
+         ORDER BY total_score DESC"
+    )?;
+    let rows = stmt.query_map(params![dialogue_id], |row| {
+        let slug: String = row.get(0)?;
+        let score: i32 = row.get(1)?;
+        Ok((slug, score))
+    })?;
+    for row in rows {
+        leaderboard.push(row?);
+    }
+
+    // Estimate rounds remaining based on open tensions and velocity
+    let est_rounds_remaining = if converging || open_tensions == 0 {
+        Some(1)
+    } else if velocity > 0 {
+        Some((open_tensions / 2).max(1)) // Rough estimate: ~2 tensions resolved per round
+    } else {
+        None // Can't estimate if not making progress
+    };
+
+    Ok(DialogueProgress {
+        dialogue_id: dialogue_id.to_string(),
+        status: match dialogue.status {
+            DialogueStatus::Open => "open".to_string(),
+            DialogueStatus::Converging => "converging".to_string(),
+            DialogueStatus::Converged => "converged".to_string(),
+            DialogueStatus::Abandoned => "abandoned".to_string(),
+        },
+        current_round,
+        total_rounds: dialogue.total_rounds,
+        total_alignment: dialogue.total_alignment,
+        round_scores,
+        velocity,
+        open_tensions,
+        resolved_tensions,
+        active_experts,
+        leaderboard,
+        converging,
+        est_rounds_remaining,
+    })
+}
+
+/// Find dialogues with similar tensions or perspectives (basic text similarity)
+pub fn find_similar_dialogues(conn: &Connection, query: &str, limit: i32) -> Result<Vec<(String, String, i32)>, rusqlite::Error> {
+    // Simple LIKE-based search across dialogue titles and tension labels
+    let pattern = format!("%{}%", query.to_lowercase());
+
+    let mut results = Vec::new();
+
+    // Search dialogue titles and questions
+    let mut stmt = conn.prepare(
+        "SELECT dialogue_id, title, total_alignment FROM alignment_dialogues
+         WHERE LOWER(title) LIKE ?1 OR LOWER(question) LIKE ?1
+         ORDER BY total_alignment DESC
+         LIMIT ?2"
+    )?;
+    let rows = stmt.query_map(params![pattern, limit], |row| {
+        let id: String = row.get(0)?;
+        let title: String = row.get(1)?;
+        let score: i32 = row.get(2)?;
+        Ok((id, title, score))
+    })?;
+    for row in rows {
+        results.push(row?);
+    }
+
+    // Also search tension labels and descriptions
+    let mut stmt = conn.prepare(
+        "SELECT DISTINCT d.dialogue_id, d.title, d.total_alignment
+         FROM alignment_dialogues d
+         JOIN alignment_tensions t ON d.dialogue_id = t.dialogue_id
+         WHERE LOWER(t.label) LIKE ?1 OR LOWER(t.description) LIKE ?1
+         ORDER BY d.total_alignment DESC
+         LIMIT ?2"
+    )?;
+    let rows = stmt.query_map(params![pattern, limit], |row| {
+        let id: String = row.get(0)?;
+        let title: String = row.get(1)?;
+        let score: i32 = row.get(2)?;
+        Ok((id, title, score))
+    })?;
+    for row in rows {
+        let result = row?;
+        if !results.iter().any(|(id, _, _)| id == &result.0) {
+            results.push(result);
+        }
+    }
+
+    results.truncate(limit as usize);
+    Ok(results)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2470,5 +2933,584 @@ mod tests {
         assert_eq!(err.code, ValidationErrorCode::InvalidRefTarget);
         assert!(err.message.contains("resolve"));
         assert!(err.message.contains("Tension"));
+    }
+
+    // ==================== Integration Tests ====================
+
+    #[test]
+    fn test_integration_multi_round_dialogue() {
+        let conn = setup_test_db();
+
+        // === Round 0: Create dialogue and initial experts ===
+        let dialogue_id = create_dialogue(
+            &conn,
+            "Portfolio Rebalancing Decision",
+            Some("Should we rebalance the trust portfolio given current market conditions?"),
+            Some("/tmp/blue-dialogue/portfolio-rebalancing"),
+            Some(&DialogueBackground {
+                subject: "Trust portfolio management".to_string(),
+                description: Some("Evaluating position changes for a family trust".to_string()),
+                constraints: Some(serde_json::json!({
+                    "income_requirement": "4% annual",
+                    "risk_tolerance": "moderate"
+                })),
+                situation: Some("Market volatility increasing".to_string()),
+            }),
+        ).unwrap();
+
+        // Register panel for round 0
+        register_expert(&conn, &dialogue_id, "muffin", "Value Analyst", ExpertTier::Core, ExpertSource::Pool,
+            Some("Analyzes intrinsic value"), Some("Margin of safety"), Some(0.95), None, None, Some(0)).unwrap();
+        register_expert(&conn, &dialogue_id, "donut", "Risk Manager", ExpertTier::Core, ExpertSource::Pool,
+            Some("Manages downside risk"), Some("Tail events"), Some(0.90), None, None, Some(0)).unwrap();
+        register_expert(&conn, &dialogue_id, "cupcake", "Income Analyst", ExpertTier::Adjacent, ExpertSource::Pool,
+            Some("Focuses on yield"), Some("Dividend sustainability"), Some(0.75), None, None, Some(0)).unwrap();
+
+        // Create round 0
+        create_round(&conn, &dialogue_id, 0, Some("Opening arguments"), 35).unwrap();
+
+        // Register perspectives from round 0
+        let p1 = register_perspective(&conn, &dialogue_id, 0, "Valuation stretched",
+            "Current position is 40% above fair value estimates", &["muffin".to_string()], None).unwrap();
+        assert_eq!(p1, "P0001");
+
+        let p2 = register_perspective(&conn, &dialogue_id, 0, "Income gap identified",
+            "Zero dividend creates 4% shortfall vs trust mandate", &["cupcake".to_string()], None).unwrap();
+        assert_eq!(p2, "P0002");
+
+        // Register tension
+        let t1 = register_tension(&conn, &dialogue_id, 0, "Growth vs income conflict",
+            "Position's growth profile incompatible with income mandate",
+            &["cupcake".to_string(), "muffin".to_string()], None).unwrap();
+        assert_eq!(t1, "T0001");
+
+        // Register recommendation
+        let r1 = register_recommendation(&conn, &dialogue_id, 0, "Options overlay",
+            "Implement covered call strategy to generate income",
+            &["donut".to_string()],
+            Some(&serde_json::json!({"delta": "0.30", "dte": "30-45"})),
+            None).unwrap();
+        assert_eq!(r1, "R0001");
+
+        // Register cross-references
+        register_ref(&conn, &dialogue_id, EntityType::Recommendation, &r1, RefType::Address, EntityType::Tension, &t1).unwrap();
+        register_ref(&conn, &dialogue_id, EntityType::Perspective, &p2, RefType::Support, EntityType::Tension, &t1).unwrap();
+
+        // Update scores
+        update_expert_score(&conn, &dialogue_id, "muffin", 0, 12).unwrap();
+        update_expert_score(&conn, &dialogue_id, "donut", 0, 15).unwrap();
+        update_expert_score(&conn, &dialogue_id, "cupcake", 0, 8).unwrap();
+
+        // === Round 1: Continue with created expert ===
+
+        // Judge creates new expert to address supply chain concern
+        register_expert(&conn, &dialogue_id, "palmier", "Supply Chain Analyst", ExpertTier::Adjacent, ExpertSource::Created,
+            Some("Analyzes supply chain risks"), Some("Geographic concentration"),
+            None, Some("Emerging tension around manufacturing concentration"), None, Some(1)).unwrap();
+
+        create_round(&conn, &dialogue_id, 1, Some("Deepening analysis"), 28).unwrap();
+
+        // New perspective from created expert
+        let p3 = register_perspective(&conn, &dialogue_id, 1, "Concentration risk",
+            "Single-source manufacturing creates tail risk", &["palmier".to_string()], None).unwrap();
+        assert_eq!(p3, "P0101");
+
+        // Refinement of earlier perspective
+        let p4 = register_perspective(&conn, &dialogue_id, 1, "Valuation context",
+            "Stretched valuation justified by growth trajectory if supply chain stable",
+            &["muffin".to_string()], None).unwrap();
+        assert_eq!(p4, "P0102");
+        register_ref(&conn, &dialogue_id, EntityType::Perspective, &p4, RefType::Refine, EntityType::Perspective, &p1).unwrap();
+
+        // Evidence supporting the recommendation
+        let e1 = register_evidence(&conn, &dialogue_id, 1, "Historical premium data",
+            "30-delta calls yielded 2.1-2.8% monthly over 24 months",
+            &["donut".to_string()], None).unwrap();
+        assert_eq!(e1, "E0101");
+
+        // Claim based on evidence
+        let c1 = register_claim(&conn, &dialogue_id, 1, "Income mandate achievable",
+            "Options overlay can satisfy 4% requirement based on historical premiums",
+            &["donut".to_string(), "cupcake".to_string()], None).unwrap();
+        assert_eq!(c1, "C0101");
+        register_ref(&conn, &dialogue_id, EntityType::Claim, &c1, RefType::Depend, EntityType::Evidence, &e1).unwrap();
+        register_ref(&conn, &dialogue_id, EntityType::Claim, &c1, RefType::Resolve, EntityType::Tension, &t1).unwrap();
+
+        // Update tension status
+        update_tension_status(&conn, &dialogue_id, &t1, TensionStatus::Addressed,
+            &["donut".to_string()], Some(&c1), 1).unwrap();
+
+        update_expert_score(&conn, &dialogue_id, "muffin", 1, 10).unwrap();
+        update_expert_score(&conn, &dialogue_id, "donut", 1, 18).unwrap();
+        update_expert_score(&conn, &dialogue_id, "cupcake", 1, 5).unwrap();
+        update_expert_score(&conn, &dialogue_id, "palmier", 1, 12).unwrap();
+
+        // === Round 2: Convergence ===
+        create_round(&conn, &dialogue_id, 2, Some("Convergence"), 15).unwrap();
+
+        // Final tension resolution
+        update_tension_status(&conn, &dialogue_id, &t1, TensionStatus::Resolved,
+            &["muffin".to_string(), "cupcake".to_string(), "donut".to_string()], Some(&r1), 2).unwrap();
+
+        // Register interim verdict
+        let interim_verdict = Verdict {
+            dialogue_id: dialogue_id.clone(),
+            verdict_id: "interim-r2".to_string(),
+            verdict_type: VerdictType::Interim,
+            round: 2,
+            author_expert: None,
+            recommendation: "APPROVE with conditions".to_string(),
+            description: "Panel converging on options overlay approach".to_string(),
+            conditions: Some(vec!["Monitor supply chain quarterly".to_string()]),
+            vote: Some("3-1".to_string()),
+            confidence: Some("strong".to_string()),
+            tensions_resolved: Some(vec![t1.clone()]),
+            tensions_accepted: None,
+            recommendations_adopted: Some(vec![r1.clone()]),
+            key_evidence: Some(vec![e1.clone()]),
+            key_claims: Some(vec![c1.clone()]),
+            supporting_experts: None,
+            ethos_compliance: None,
+            created_at: chrono::Utc::now(),
+        };
+        register_verdict(&conn, &interim_verdict).unwrap();
+
+        // Register final verdict
+        let final_verdict = Verdict {
+            dialogue_id: dialogue_id.clone(),
+            verdict_id: "final".to_string(),
+            verdict_type: VerdictType::Final,
+            round: 2,
+            author_expert: None,
+            recommendation: "APPROVE: Implement 30-delta covered call overlay".to_string(),
+            description: "Panel unanimously supports options strategy to satisfy income mandate while maintaining growth exposure".to_string(),
+            conditions: Some(vec![
+                "Roll calls at 21 DTE".to_string(),
+                "Monitor supply chain concentration quarterly".to_string(),
+            ]),
+            vote: Some("4-0".to_string()),
+            confidence: Some("unanimous".to_string()),
+            tensions_resolved: Some(vec![t1.clone()]),
+            tensions_accepted: None,
+            recommendations_adopted: Some(vec![r1.clone()]),
+            key_evidence: Some(vec![e1.clone()]),
+            key_claims: Some(vec![c1.clone()]),
+            supporting_experts: Some(vec!["muffin".to_string(), "donut".to_string(), "cupcake".to_string(), "palmier".to_string()]),
+            ethos_compliance: None,
+            created_at: chrono::Utc::now(),
+        };
+        register_verdict(&conn, &final_verdict).unwrap();
+
+        // === Verify final state ===
+        let dialogue = get_dialogue(&conn, &dialogue_id).unwrap();
+        assert_eq!(dialogue.total_rounds, 3); // 0, 1, 2
+        assert_eq!(dialogue.total_alignment, 35 + 28 + 15); // Sum of round scores
+
+        let experts = get_experts(&conn, &dialogue_id).unwrap();
+        assert_eq!(experts.len(), 4);
+
+        // Find palmier and verify created source
+        let palmier = experts.iter().find(|e| e.expert_slug == "palmier").unwrap();
+        assert_eq!(palmier.source, ExpertSource::Created);
+        assert_eq!(palmier.first_round, Some(1));
+        assert!(palmier.creation_reason.is_some());
+
+        let perspectives = get_perspectives(&conn, &dialogue_id).unwrap();
+        assert_eq!(perspectives.len(), 4); // P0001, P0002, P0101, P0102
+
+        let tensions = get_tensions(&conn, &dialogue_id).unwrap();
+        assert_eq!(tensions.len(), 1);
+        assert_eq!(tensions[0].status, TensionStatus::Resolved);
+
+        let recommendations = get_recommendations(&conn, &dialogue_id).unwrap();
+        assert_eq!(recommendations.len(), 1);
+
+        let evidence = get_evidence(&conn, &dialogue_id).unwrap();
+        assert_eq!(evidence.len(), 1);
+
+        let claims = get_claims(&conn, &dialogue_id).unwrap();
+        assert_eq!(claims.len(), 1);
+
+        let verdicts = get_verdicts(&conn, &dialogue_id).unwrap();
+        assert_eq!(verdicts.len(), 2);
+        assert!(verdicts.iter().any(|v| v.verdict_type == VerdictType::Interim));
+        assert!(verdicts.iter().any(|v| v.verdict_type == VerdictType::Final));
+
+        // Verify total scores
+        let muffin = experts.iter().find(|e| e.expert_slug == "muffin").unwrap();
+        assert_eq!(muffin.total_score, 22); // 12 + 10
+        let donut = experts.iter().find(|e| e.expert_slug == "donut").unwrap();
+        assert_eq!(donut.total_score, 33); // 15 + 18
+    }
+
+    #[test]
+    fn test_integration_minority_verdict() {
+        let conn = setup_test_db();
+
+        let dialogue_id = create_dialogue(&conn, "Contested Decision", Some("A divisive topic"), None, None).unwrap();
+
+        register_expert(&conn, &dialogue_id, "muffin", "Advocate", ExpertTier::Core, ExpertSource::Pool,
+            None, None, None, None, None, Some(0)).unwrap();
+        register_expert(&conn, &dialogue_id, "donut", "Skeptic", ExpertTier::Core, ExpertSource::Pool,
+            None, None, None, None, None, Some(0)).unwrap();
+
+        create_round(&conn, &dialogue_id, 0, None, 20).unwrap();
+
+        // Register a tension that won't be resolved
+        let t1 = register_tension(&conn, &dialogue_id, 0, "Fundamental disagreement",
+            "Core values conflict", &["muffin".to_string(), "donut".to_string()], None).unwrap();
+
+        // Majority verdict
+        let majority = Verdict {
+            dialogue_id: dialogue_id.clone(),
+            verdict_id: "final".to_string(),
+            verdict_type: VerdictType::Final,
+            round: 0,
+            author_expert: None,
+            recommendation: "APPROVE".to_string(),
+            description: "Majority supports approval".to_string(),
+            conditions: None,
+            vote: Some("1-1".to_string()),
+            confidence: Some("split".to_string()),
+            tensions_resolved: None,
+            tensions_accepted: Some(vec![t1.clone()]),
+            recommendations_adopted: None,
+            key_evidence: None,
+            key_claims: None,
+            supporting_experts: Some(vec!["muffin".to_string()]),
+            ethos_compliance: None,
+            created_at: chrono::Utc::now(),
+        };
+        register_verdict(&conn, &majority).unwrap();
+
+        // Minority dissent
+        let minority = Verdict {
+            dialogue_id: dialogue_id.clone(),
+            verdict_id: "dissent-donut".to_string(),
+            verdict_type: VerdictType::Dissent,
+            round: 0,
+            author_expert: Some("donut".to_string()),
+            recommendation: "REJECT".to_string(),
+            description: "Cannot support without addressing fundamental tension".to_string(),
+            conditions: Some(vec!["Require tension T0001 resolution".to_string()]),
+            vote: None,
+            confidence: None,
+            tensions_resolved: None,
+            tensions_accepted: None,
+            recommendations_adopted: None,
+            key_evidence: None,
+            key_claims: None,
+            supporting_experts: Some(vec!["donut".to_string()]),
+            ethos_compliance: None,
+            created_at: chrono::Utc::now(),
+        };
+        register_verdict(&conn, &minority).unwrap();
+
+        let verdicts = get_verdicts(&conn, &dialogue_id).unwrap();
+        assert_eq!(verdicts.len(), 2);
+
+        let dissent = verdicts.iter().find(|v| v.verdict_type == VerdictType::Dissent).unwrap();
+        assert_eq!(dissent.author_expert, Some("donut".to_string()));
+        assert_eq!(dissent.recommendation, "REJECT");
+    }
+
+    #[test]
+    fn test_integration_tension_reopening() {
+        let conn = setup_test_db();
+
+        let dialogue_id = create_dialogue(&conn, "Evolving Discussion", None, None, None).unwrap();
+
+        register_expert(&conn, &dialogue_id, "muffin", "Analyst", ExpertTier::Core, ExpertSource::Pool,
+            None, None, None, None, None, Some(0)).unwrap();
+
+        create_round(&conn, &dialogue_id, 0, None, 10).unwrap();
+
+        // Create and resolve a tension
+        let t1 = register_tension(&conn, &dialogue_id, 0, "Initial concern",
+            "Something needs attention", &["muffin".to_string()], None).unwrap();
+
+        update_tension_status(&conn, &dialogue_id, &t1, TensionStatus::Addressed,
+            &["muffin".to_string()], None, 0).unwrap();
+        update_tension_status(&conn, &dialogue_id, &t1, TensionStatus::Resolved,
+            &["muffin".to_string()], None, 0).unwrap();
+
+        // Create round 1 and reopen the tension
+        create_round(&conn, &dialogue_id, 1, None, 12).unwrap();
+
+        // New evidence causes reopening
+        let e1 = register_evidence(&conn, &dialogue_id, 1, "New data",
+            "Previously unknown information surfaces", &["muffin".to_string()], None).unwrap();
+
+        update_tension_status(&conn, &dialogue_id, &t1, TensionStatus::Reopened,
+            &["muffin".to_string()], Some(&e1), 1).unwrap();
+
+        let tensions = get_tensions(&conn, &dialogue_id).unwrap();
+        assert_eq!(tensions.len(), 1);
+        assert_eq!(tensions[0].status, TensionStatus::Reopened);
+
+        // The tension still has its original ID
+        assert_eq!(display_id(EntityType::Tension, tensions[0].round, tensions[0].seq), "T0001");
+    }
+
+    #[test]
+    fn test_integration_cross_reference_graph() {
+        let conn = setup_test_db();
+
+        let dialogue_id = create_dialogue(&conn, "Complex References", None, None, None).unwrap();
+
+        register_expert(&conn, &dialogue_id, "muffin", "Analyst", ExpertTier::Core, ExpertSource::Pool,
+            None, None, None, None, None, Some(0)).unwrap();
+
+        create_round(&conn, &dialogue_id, 0, None, 20).unwrap();
+
+        // Create a web of related entities
+        let p1 = register_perspective(&conn, &dialogue_id, 0, "Base perspective",
+            "Foundation viewpoint", &["muffin".to_string()], None).unwrap();
+
+        let t1 = register_tension(&conn, &dialogue_id, 0, "Core tension",
+            "Central issue", &["muffin".to_string()], None).unwrap();
+
+        let e1 = register_evidence(&conn, &dialogue_id, 0, "Supporting data",
+            "Facts backing the perspective", &["muffin".to_string()], None).unwrap();
+
+        let r1 = register_recommendation(&conn, &dialogue_id, 0, "Proposed solution",
+            "How to address the tension", &["muffin".to_string()], None, None).unwrap();
+
+        let c1 = register_claim(&conn, &dialogue_id, 0, "Synthesis",
+            "Bringing it together", &["muffin".to_string()], None).unwrap();
+
+        // Build the reference graph
+        // E0001 supports P0001
+        register_ref(&conn, &dialogue_id, EntityType::Evidence, &e1, RefType::Support, EntityType::Perspective, &p1).unwrap();
+        // P0001 supports T0001 (highlights the tension)
+        register_ref(&conn, &dialogue_id, EntityType::Perspective, &p1, RefType::Support, EntityType::Tension, &t1).unwrap();
+        // R0001 addresses T0001
+        register_ref(&conn, &dialogue_id, EntityType::Recommendation, &r1, RefType::Address, EntityType::Tension, &t1).unwrap();
+        // C0001 depends on E0001
+        register_ref(&conn, &dialogue_id, EntityType::Claim, &c1, RefType::Depend, EntityType::Evidence, &e1).unwrap();
+        // C0001 resolves T0001
+        register_ref(&conn, &dialogue_id, EntityType::Claim, &c1, RefType::Resolve, EntityType::Tension, &t1).unwrap();
+
+        // Verify all entities created
+        assert_eq!(get_perspectives(&conn, &dialogue_id).unwrap().len(), 1);
+        assert_eq!(get_tensions(&conn, &dialogue_id).unwrap().len(), 1);
+        assert_eq!(get_evidence(&conn, &dialogue_id).unwrap().len(), 1);
+        assert_eq!(get_recommendations(&conn, &dialogue_id).unwrap().len(), 1);
+        assert_eq!(get_claims(&conn, &dialogue_id).unwrap().len(), 1);
+
+        // Query refs (would need a get_refs function for full testing)
+        // For now, verify no errors occurred during registration
+    }
+
+    // ==================== Phase 6: Tooling Tests ====================
+
+    #[test]
+    fn test_expand_citation_perspective() {
+        let conn = setup_test_db();
+
+        let dialogue_id = create_dialogue(&conn, "Citation Test", None, None, None).unwrap();
+        register_expert(&conn, &dialogue_id, "muffin", "Analyst", ExpertTier::Core, ExpertSource::Pool,
+            None, None, None, None, None, Some(0)).unwrap();
+        create_round(&conn, &dialogue_id, 0, None, 10).unwrap();
+
+        let p1 = register_perspective(&conn, &dialogue_id, 0, "Test perspective",
+            "This is the full content of the perspective for testing expansion",
+            &["muffin".to_string()], None).unwrap();
+
+        let expanded = expand_citation(&conn, &dialogue_id, &p1).unwrap();
+
+        assert_eq!(expanded.display_id, "P0001");
+        assert_eq!(expanded.entity_type, EntityType::Perspective);
+        assert_eq!(expanded.round, 0);
+        assert_eq!(expanded.seq, 1);
+        assert_eq!(expanded.label, "Test perspective");
+        assert!(expanded.content.contains("full content"));
+        assert_eq!(expanded.contributors, vec!["muffin"]);
+        assert!(expanded.status.is_none()); // Perspectives don't have status
+    }
+
+    #[test]
+    fn test_expand_citation_tension() {
+        let conn = setup_test_db();
+
+        let dialogue_id = create_dialogue(&conn, "Tension Expansion", None, None, None).unwrap();
+        register_expert(&conn, &dialogue_id, "muffin", "Analyst", ExpertTier::Core, ExpertSource::Pool,
+            None, None, None, None, None, Some(0)).unwrap();
+        create_round(&conn, &dialogue_id, 0, None, 10).unwrap();
+
+        let t1 = register_tension(&conn, &dialogue_id, 0, "Core conflict",
+            "Two competing priorities", &["muffin".to_string()], None).unwrap();
+
+        let expanded = expand_citation(&conn, &dialogue_id, &t1).unwrap();
+
+        assert_eq!(expanded.display_id, "T0001");
+        assert_eq!(expanded.entity_type, EntityType::Tension);
+        assert_eq!(expanded.label, "Core conflict");
+        assert_eq!(expanded.status, Some("open".to_string())); // Tensions have status
+    }
+
+    #[test]
+    fn test_expand_citation_recommendation_with_params() {
+        let conn = setup_test_db();
+
+        let dialogue_id = create_dialogue(&conn, "Rec Expansion", None, None, None).unwrap();
+        register_expert(&conn, &dialogue_id, "donut", "Strategist", ExpertTier::Core, ExpertSource::Pool,
+            None, None, None, None, None, Some(0)).unwrap();
+        create_round(&conn, &dialogue_id, 0, None, 10).unwrap();
+
+        let r1 = register_recommendation(&conn, &dialogue_id, 0, "Options strategy",
+            "Implement covered calls",
+            &["donut".to_string()],
+            Some(&serde_json::json!({"delta": 0.30, "dte": 45})),
+            None).unwrap();
+
+        let expanded = expand_citation(&conn, &dialogue_id, &r1).unwrap();
+
+        assert_eq!(expanded.display_id, "R0001");
+        assert_eq!(expanded.entity_type, EntityType::Recommendation);
+        assert!(expanded.parameters.is_some());
+        let params = expanded.parameters.unwrap();
+        assert_eq!(params["delta"], 0.30);
+    }
+
+    #[test]
+    fn test_expand_multiple_citations() {
+        let conn = setup_test_db();
+
+        let dialogue_id = create_dialogue(&conn, "Multi Citation", None, None, None).unwrap();
+        register_expert(&conn, &dialogue_id, "muffin", "Analyst", ExpertTier::Core, ExpertSource::Pool,
+            None, None, None, None, None, Some(0)).unwrap();
+        create_round(&conn, &dialogue_id, 0, None, 10).unwrap();
+
+        let p1 = register_perspective(&conn, &dialogue_id, 0, "First", "Content 1", &["muffin".to_string()], None).unwrap();
+        let p2 = register_perspective(&conn, &dialogue_id, 0, "Second", "Content 2", &["muffin".to_string()], None).unwrap();
+        let t1 = register_tension(&conn, &dialogue_id, 0, "Conflict", "Issue", &["muffin".to_string()], None).unwrap();
+
+        let results = expand_citations(&conn, &dialogue_id, &[p1, p2, t1, "X9999".to_string()]);
+
+        assert_eq!(results.len(), 4);
+        assert!(results[0].is_ok());
+        assert!(results[1].is_ok());
+        assert!(results[2].is_ok());
+        assert!(results[3].is_err()); // Invalid ID
+    }
+
+    #[test]
+    fn test_cross_dialogue_stats() {
+        let conn = setup_test_db();
+
+        // Create multiple dialogues
+        let d1 = create_dialogue(&conn, "Dialogue One", None, None, None).unwrap();
+        let d2 = create_dialogue(&conn, "Dialogue Two", None, None, None).unwrap();
+
+        register_expert(&conn, &d1, "muffin", "Analyst", ExpertTier::Core, ExpertSource::Pool,
+            None, None, None, None, None, Some(0)).unwrap();
+        register_expert(&conn, &d2, "muffin", "Analyst", ExpertTier::Core, ExpertSource::Pool,
+            None, None, None, None, None, Some(0)).unwrap();
+
+        create_round(&conn, &d1, 0, None, 30).unwrap();
+        create_round(&conn, &d2, 0, None, 20).unwrap();
+
+        register_perspective(&conn, &d1, 0, "P1", "Content", &["muffin".to_string()], None).unwrap();
+        register_perspective(&conn, &d1, 0, "P2", "Content", &["muffin".to_string()], None).unwrap();
+        register_perspective(&conn, &d2, 0, "P3", "Content", &["muffin".to_string()], None).unwrap();
+
+        register_tension(&conn, &d1, 0, "T1", "Issue", &["muffin".to_string()], None).unwrap();
+        update_tension_status(&conn, &d1, "T0001", TensionStatus::Resolved, &["muffin".to_string()], None, 0).unwrap();
+
+        register_tension(&conn, &d2, 0, "T2", "Issue", &["muffin".to_string()], None).unwrap();
+
+        update_expert_score(&conn, &d1, "muffin", 0, 15).unwrap();
+        update_expert_score(&conn, &d2, "muffin", 0, 10).unwrap();
+
+        let stats = get_cross_dialogue_stats(&conn).unwrap();
+
+        assert_eq!(stats.total_dialogues, 2);
+        assert_eq!(stats.total_perspectives, 3);
+        assert_eq!(stats.total_tensions, 2);
+        assert_eq!(stats.resolved_tensions, 1);
+        assert_eq!(stats.open_tensions, 1);
+        assert!(stats.avg_alignment > 0.0);
+        assert_eq!(stats.total_experts, 1); // Same expert in both dialogues
+        assert!(!stats.top_experts.is_empty());
+        assert_eq!(stats.top_experts[0].0, "muffin");
+    }
+
+    #[test]
+    fn test_dialogue_progress() {
+        let conn = setup_test_db();
+
+        let dialogue_id = create_dialogue(&conn, "Progress Test", None, None, None).unwrap();
+        register_expert(&conn, &dialogue_id, "muffin", "Analyst", ExpertTier::Core, ExpertSource::Pool,
+            None, None, None, None, None, Some(0)).unwrap();
+        register_expert(&conn, &dialogue_id, "donut", "Skeptic", ExpertTier::Core, ExpertSource::Pool,
+            None, None, None, None, None, Some(0)).unwrap();
+
+        create_round(&conn, &dialogue_id, 0, None, 30).unwrap();
+        create_round(&conn, &dialogue_id, 1, None, 25).unwrap();
+        create_round(&conn, &dialogue_id, 2, None, 20).unwrap();
+
+        register_tension(&conn, &dialogue_id, 0, "Open tension", "Still unresolved",
+            &["muffin".to_string()], None).unwrap();
+        let t2 = register_tension(&conn, &dialogue_id, 0, "Resolved tension", "This was resolved",
+            &["donut".to_string()], None).unwrap();
+        update_tension_status(&conn, &dialogue_id, &t2, TensionStatus::Resolved,
+            &["muffin".to_string(), "donut".to_string()], None, 1).unwrap();
+
+        update_expert_score(&conn, &dialogue_id, "muffin", 0, 12).unwrap();
+        update_expert_score(&conn, &dialogue_id, "muffin", 1, 8).unwrap();
+        update_expert_score(&conn, &dialogue_id, "donut", 0, 10).unwrap();
+        update_expert_score(&conn, &dialogue_id, "donut", 1, 15).unwrap();
+
+        let progress = get_dialogue_progress(&conn, &dialogue_id).unwrap();
+
+        assert_eq!(progress.dialogue_id, dialogue_id);
+        assert_eq!(progress.status, "open");
+        assert_eq!(progress.total_rounds, 3);
+        assert_eq!(progress.round_scores, vec![30, 25, 20]);
+        assert_eq!(progress.velocity, -5); // 20 - 25
+        assert_eq!(progress.open_tensions, 1);
+        assert_eq!(progress.resolved_tensions, 1);
+        assert_eq!(progress.active_experts.len(), 2);
+        assert!(!progress.leaderboard.is_empty());
+        // With velocity of -5, converging check needs 3 rounds of low velocity
+        // Current data: 30->25 (-5), 25->20 (-5) - both are -5, abs(-5) < 5 is false
+        assert!(!progress.converging);
+    }
+
+    #[test]
+    fn test_dialogue_progress_convergence() {
+        let conn = setup_test_db();
+
+        let dialogue_id = create_dialogue(&conn, "Converging Test", None, None, None).unwrap();
+        register_expert(&conn, &dialogue_id, "muffin", "Analyst", ExpertTier::Core, ExpertSource::Pool,
+            None, None, None, None, None, Some(0)).unwrap();
+
+        // Create rounds with diminishing velocity
+        create_round(&conn, &dialogue_id, 0, None, 30).unwrap();
+        create_round(&conn, &dialogue_id, 1, None, 32).unwrap(); // +2
+        create_round(&conn, &dialogue_id, 2, None, 33).unwrap(); // +1
+
+        let progress = get_dialogue_progress(&conn, &dialogue_id).unwrap();
+
+        // velocity = 33 - 32 = 1
+        assert_eq!(progress.velocity, 1);
+        // v1 = 1, v2 = 2; both < 5, so converging
+        assert!(progress.converging);
+    }
+
+    #[test]
+    fn test_find_similar_dialogues() {
+        let conn = setup_test_db();
+
+        create_dialogue(&conn, "Investment Portfolio Review", Some("Should we rebalance?"), None, None).unwrap();
+        create_dialogue(&conn, "Marketing Strategy", Some("How to increase reach"), None, None).unwrap();
+        create_dialogue(&conn, "Investment Risk Assessment", Some("What are the risks?"), None, None).unwrap();
+
+        let results = find_similar_dialogues(&conn, "investment", 10).unwrap();
+
+        assert_eq!(results.len(), 2); // Two dialogues match "investment"
+        assert!(results.iter().any(|(_, title, _)| title.contains("Portfolio")));
+        assert!(results.iter().any(|(_, title, _)| title.contains("Risk")));
     }
 }

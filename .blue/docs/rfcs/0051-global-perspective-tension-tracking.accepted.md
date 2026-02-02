@@ -2527,10 +2527,17 @@ This RFC defines **uncalibrated** dialogues — experts argue freely without dom
 - Both skills reference each other for complete workflow
 
 ### Phase 6: Tooling & Analysis
-- [ ] Citation auto-expansion (short form → composite key)
-- [ ] Visualization dashboard integration
-- [ ] Cross-dialogue analysis queries
-- [ ] Real-time dialogue monitoring dashboard
+- [x] Citation auto-expansion (short form → composite key)
+- [ ] Visualization dashboard integration (requires external UI)
+- [x] Cross-dialogue analysis queries
+- [x] Real-time dialogue monitoring dashboard
+
+**Implementation Notes:**
+- `expand_citation()` and `expand_citations()` - expand display ID to full entity context (label, content, contributors, status)
+- `get_cross_dialogue_stats()` - aggregated statistics across all dialogues (entity counts, averages, top experts)
+- `find_similar_dialogues()` - text-based search across dialogue titles and tension labels
+- `get_dialogue_progress()` - real-time status including velocity, convergence detection, leaderboard, estimated rounds remaining
+- Tests: `test_expand_citation_*`, `test_cross_dialogue_stats`, `test_dialogue_progress*`, `test_find_similar_dialogues`
 
 ## Test Plan
 
@@ -2584,6 +2591,16 @@ This RFC defines **uncalibrated** dialogues — experts argue freely without dom
 - [x] **Prompt Assembly**: Markdown prompt includes full content from all prior experts (via round_context)
 - [x] **Prompt Assembly**: Judge spawns agents with full prompt + `alignment-expert` skill reference
 - [ ] **Prompt Assembly**: Judge writes `prompt-{expert}.md` to disk for debugging (optional enhancement)
+
+### Phase 6: Tooling Tests ✅ Complete
+- [x] **Citation Expansion**: `expand_citation` returns full entity context from display ID (`test_expand_citation_perspective`)
+- [x] **Citation Expansion**: Tensions include status field (`test_expand_citation_tension`)
+- [x] **Citation Expansion**: Recommendations include parameters (`test_expand_citation_recommendation_with_params`)
+- [x] **Citation Expansion**: Batch expansion returns errors for invalid IDs (`test_expand_multiple_citations`)
+- [x] **Cross-Dialogue**: Statistics aggregate across all dialogues (`test_cross_dialogue_stats`)
+- [x] **Cross-Dialogue**: Similar dialogues found by text search (`test_find_similar_dialogues`)
+- [x] **Progress Tracking**: Real-time progress includes velocity and convergence (`test_dialogue_progress`)
+- [x] **Progress Tracking**: Convergence detected when velocity near zero (`test_dialogue_progress_convergence`)
 
 ### Pending Tests (Performance & Future)
 - [ ] **Output directory isolation**: Concurrent dialogues don't overwrite each other's files
