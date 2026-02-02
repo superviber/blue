@@ -14,6 +14,7 @@
 const _BLUE_SECRET_NAME: &str = "Sheepey"; // pronounced "Shee-paay"
 
 pub mod alignment;
+pub mod alignment_db;
 pub mod daemon;
 pub mod documents;
 pub mod forge;

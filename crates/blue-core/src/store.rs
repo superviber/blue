@@ -18,7 +18,7 @@ pub fn hash_content(content: &str) -> String {
 }
 
 /// Current schema version
-const SCHEMA_VERSION: i32 = 8;
+const SCHEMA_VERSION: i32 = 9;
 
 /// Core database schema
 const SCHEMA: &str = r#"
@@ -1585,6 +1585,344 @@ impl DocumentStore {
             // Add index for staleness checking
             self.conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_documents_content_hash ON documents(content_hash)",
+                [],
+            )?;
+        }
+
+        // Migration from v8 to v9: Add alignment dialogue tables (RFC 0051)
+        if from_version < 9 {
+            debug!("Adding alignment dialogue tables (RFC 0051)");
+
+            // Root table for dialogues
+            self.conn.execute(
+                "CREATE TABLE IF NOT EXISTS alignment_dialogues (
+                    dialogue_id     TEXT PRIMARY KEY,
+                    title           TEXT NOT NULL,
+                    question        TEXT,
+                    status          TEXT NOT NULL DEFAULT 'open',
+                    created_at      TEXT NOT NULL,
+                    converged_at    TEXT,
+                    total_rounds    INTEGER DEFAULT 0,
+                    total_alignment INTEGER DEFAULT 0,
+                    output_dir      TEXT,
+                    calibrated      INTEGER DEFAULT 0,
+                    domain_id       TEXT,
+                    ethos_id        TEXT,
+                    background      TEXT,
+                    CHECK (status IN ('open', 'converging', 'converged', 'abandoned'))
+                )",
+                [],
+            )?;
+
+            self.conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_alignment_dialogues_title_created
+                 ON alignment_dialogues(title, created_at)",
+                [],
+            )?;
+
+            // Experts table
+            self.conn.execute(
+                "CREATE TABLE IF NOT EXISTS alignment_experts (
+                    dialogue_id   TEXT NOT NULL,
+                    expert_slug   TEXT NOT NULL,
+                    role          TEXT NOT NULL,
+                    description   TEXT,
+                    focus         TEXT,
+                    tier          TEXT NOT NULL,
+                    source        TEXT NOT NULL,
+                    relevance     REAL,
+                    creation_reason TEXT,
+                    color         TEXT,
+                    scores        TEXT,
+                    raw_content   TEXT,
+                    total_score   INTEGER DEFAULT 0,
+                    first_round   INTEGER,
+                    created_at    TEXT NOT NULL,
+                    PRIMARY KEY (dialogue_id, expert_slug),
+                    FOREIGN KEY (dialogue_id) REFERENCES alignment_dialogues(dialogue_id),
+                    CHECK (tier IN ('Core', 'Adjacent', 'Wildcard')),
+                    CHECK (source IN ('pool', 'created', 'retained'))
+                )",
+                [],
+            )?;
+
+            // Rounds table
+            self.conn.execute(
+                "CREATE TABLE IF NOT EXISTS alignment_rounds (
+                    dialogue_id   TEXT NOT NULL,
+                    round         INTEGER NOT NULL,
+                    title         TEXT,
+                    score         INTEGER NOT NULL,
+                    summary       TEXT,
+                    status        TEXT NOT NULL DEFAULT 'open',
+                    created_at    TEXT NOT NULL,
+                    completed_at  TEXT,
+                    PRIMARY KEY (dialogue_id, round),
+                    FOREIGN KEY (dialogue_id) REFERENCES alignment_dialogues(dialogue_id),
+                    CHECK (status IN ('open', 'in_progress', 'completed'))
+                )",
+                [],
+            )?;
+
+            // Perspectives table
+            self.conn.execute(
+                "CREATE TABLE IF NOT EXISTS alignment_perspectives (
+                    dialogue_id    TEXT NOT NULL,
+                    round          INTEGER NOT NULL,
+                    seq            INTEGER NOT NULL,
+                    label          TEXT NOT NULL,
+                    content        TEXT NOT NULL,
+                    contributors   TEXT NOT NULL,
+                    status         TEXT NOT NULL DEFAULT 'open',
+                    refs           TEXT,
+                    created_at     TEXT NOT NULL,
+                    PRIMARY KEY (dialogue_id, round, seq),
+                    FOREIGN KEY (dialogue_id) REFERENCES alignment_dialogues(dialogue_id),
+                    CHECK (status IN ('open', 'refined', 'conceded', 'merged'))
+                )",
+                [],
+            )?;
+
+            self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_alignment_perspectives_dialogue_round
+                 ON alignment_perspectives(dialogue_id, round, created_at)",
+                [],
+            )?;
+
+            // Perspective events
+            self.conn.execute(
+                "CREATE TABLE IF NOT EXISTS alignment_perspective_events (
+                    dialogue_id       TEXT NOT NULL,
+                    perspective_round INTEGER NOT NULL,
+                    perspective_seq   INTEGER NOT NULL,
+                    event_type        TEXT NOT NULL,
+                    event_round       INTEGER NOT NULL,
+                    actors            TEXT NOT NULL,
+                    result_id         TEXT,
+                    created_at        TEXT NOT NULL,
+                    PRIMARY KEY (dialogue_id, perspective_round, perspective_seq, created_at),
+                    FOREIGN KEY (dialogue_id, perspective_round, perspective_seq)
+                      REFERENCES alignment_perspectives(dialogue_id, round, seq),
+                    CHECK (event_type IN ('created', 'refined', 'conceded', 'merged'))
+                )",
+                [],
+            )?;
+
+            // Tensions table
+            self.conn.execute(
+                "CREATE TABLE IF NOT EXISTS alignment_tensions (
+                    dialogue_id      TEXT NOT NULL,
+                    round            INTEGER NOT NULL,
+                    seq              INTEGER NOT NULL,
+                    label            TEXT NOT NULL,
+                    description      TEXT NOT NULL,
+                    contributors     TEXT NOT NULL,
+                    status           TEXT NOT NULL DEFAULT 'open',
+                    refs             TEXT,
+                    created_at       TEXT NOT NULL,
+                    PRIMARY KEY (dialogue_id, round, seq),
+                    FOREIGN KEY (dialogue_id) REFERENCES alignment_dialogues(dialogue_id),
+                    CHECK (status IN ('open', 'addressed', 'resolved', 'reopened'))
+                )",
+                [],
+            )?;
+
+            self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_alignment_tensions_status
+                 ON alignment_tensions(dialogue_id, status)",
+                [],
+            )?;
+
+            // Tension events
+            self.conn.execute(
+                "CREATE TABLE IF NOT EXISTS alignment_tension_events (
+                    dialogue_id    TEXT NOT NULL,
+                    tension_round  INTEGER NOT NULL,
+                    tension_seq    INTEGER NOT NULL,
+                    event_type     TEXT NOT NULL,
+                    event_round    INTEGER NOT NULL,
+                    actors         TEXT NOT NULL,
+                    reason         TEXT,
+                    reference      TEXT,
+                    created_at     TEXT NOT NULL,
+                    PRIMARY KEY (dialogue_id, tension_round, tension_seq, created_at),
+                    FOREIGN KEY (dialogue_id, tension_round, tension_seq)
+                      REFERENCES alignment_tensions(dialogue_id, round, seq),
+                    CHECK (event_type IN ('created', 'addressed', 'resolved', 'reopened', 'commented'))
+                )",
+                [],
+            )?;
+
+            // Recommendations table
+            self.conn.execute(
+                "CREATE TABLE IF NOT EXISTS alignment_recommendations (
+                    dialogue_id        TEXT NOT NULL,
+                    round              INTEGER NOT NULL,
+                    seq                INTEGER NOT NULL,
+                    label              TEXT NOT NULL,
+                    content            TEXT NOT NULL,
+                    contributors       TEXT NOT NULL,
+                    parameters         TEXT,
+                    status             TEXT NOT NULL DEFAULT 'proposed',
+                    refs               TEXT,
+                    adopted_in_verdict TEXT,
+                    created_at         TEXT NOT NULL,
+                    PRIMARY KEY (dialogue_id, round, seq),
+                    FOREIGN KEY (dialogue_id) REFERENCES alignment_dialogues(dialogue_id),
+                    CHECK (status IN ('proposed', 'amended', 'adopted', 'rejected'))
+                )",
+                [],
+            )?;
+
+            self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_alignment_recommendations_status
+                 ON alignment_recommendations(dialogue_id, status)",
+                [],
+            )?;
+
+            // Recommendation events
+            self.conn.execute(
+                "CREATE TABLE IF NOT EXISTS alignment_recommendation_events (
+                    dialogue_id     TEXT NOT NULL,
+                    rec_round       INTEGER NOT NULL,
+                    rec_seq         INTEGER NOT NULL,
+                    event_type      TEXT NOT NULL,
+                    event_round     INTEGER NOT NULL,
+                    actors          TEXT NOT NULL,
+                    result_id       TEXT,
+                    created_at      TEXT NOT NULL,
+                    PRIMARY KEY (dialogue_id, rec_round, rec_seq, created_at),
+                    FOREIGN KEY (dialogue_id, rec_round, rec_seq)
+                      REFERENCES alignment_recommendations(dialogue_id, round, seq),
+                    CHECK (event_type IN ('created', 'amended', 'adopted', 'rejected'))
+                )",
+                [],
+            )?;
+
+            // Evidence table
+            self.conn.execute(
+                "CREATE TABLE IF NOT EXISTS alignment_evidence (
+                    dialogue_id    TEXT NOT NULL,
+                    round          INTEGER NOT NULL,
+                    seq            INTEGER NOT NULL,
+                    label          TEXT NOT NULL,
+                    content        TEXT NOT NULL,
+                    contributors   TEXT NOT NULL,
+                    status         TEXT NOT NULL DEFAULT 'cited',
+                    refs           TEXT,
+                    created_at     TEXT NOT NULL,
+                    PRIMARY KEY (dialogue_id, round, seq),
+                    FOREIGN KEY (dialogue_id) REFERENCES alignment_dialogues(dialogue_id),
+                    CHECK (status IN ('cited', 'challenged', 'confirmed', 'refuted'))
+                )",
+                [],
+            )?;
+
+            self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_alignment_evidence_status
+                 ON alignment_evidence(dialogue_id, status)",
+                [],
+            )?;
+
+            // Claims table
+            self.conn.execute(
+                "CREATE TABLE IF NOT EXISTS alignment_claims (
+                    dialogue_id    TEXT NOT NULL,
+                    round          INTEGER NOT NULL,
+                    seq            INTEGER NOT NULL,
+                    label          TEXT NOT NULL,
+                    content        TEXT NOT NULL,
+                    contributors   TEXT NOT NULL,
+                    status         TEXT NOT NULL DEFAULT 'asserted',
+                    refs           TEXT,
+                    created_at     TEXT NOT NULL,
+                    PRIMARY KEY (dialogue_id, round, seq),
+                    FOREIGN KEY (dialogue_id) REFERENCES alignment_dialogues(dialogue_id),
+                    CHECK (status IN ('asserted', 'supported', 'opposed', 'adopted', 'withdrawn'))
+                )",
+                [],
+            )?;
+
+            self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_alignment_claims_status
+                 ON alignment_claims(dialogue_id, status)",
+                [],
+            )?;
+
+            // Cross-references table
+            self.conn.execute(
+                "CREATE TABLE IF NOT EXISTS alignment_refs (
+                    dialogue_id   TEXT NOT NULL,
+                    source_type   TEXT NOT NULL,
+                    source_id     TEXT NOT NULL,
+                    ref_type      TEXT NOT NULL,
+                    target_type   TEXT NOT NULL,
+                    target_id     TEXT NOT NULL,
+                    created_at    TEXT NOT NULL,
+                    PRIMARY KEY (dialogue_id, source_id, ref_type, target_id),
+                    FOREIGN KEY (dialogue_id) REFERENCES alignment_dialogues(dialogue_id),
+                    CHECK (source_type IN ('P', 'R', 'T', 'E', 'C')),
+                    CHECK (target_type IN ('P', 'R', 'T', 'E', 'C')),
+                    CHECK (ref_type IN ('support', 'oppose', 'refine', 'address', 'resolve', 'reopen', 'question', 'depend'))
+                )",
+                [],
+            )?;
+
+            self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_alignment_refs_target
+                 ON alignment_refs(dialogue_id, target_id, ref_type)",
+                [],
+            )?;
+
+            self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_alignment_refs_source
+                 ON alignment_refs(dialogue_id, source_id)",
+                [],
+            )?;
+
+            // Dialogue moves table
+            self.conn.execute(
+                "CREATE TABLE IF NOT EXISTS alignment_moves (
+                    dialogue_id   TEXT NOT NULL,
+                    round         INTEGER NOT NULL,
+                    seq           INTEGER NOT NULL,
+                    expert_slug   TEXT NOT NULL,
+                    move_type     TEXT NOT NULL,
+                    targets       TEXT NOT NULL,
+                    context       TEXT,
+                    created_at    TEXT NOT NULL,
+                    PRIMARY KEY (dialogue_id, round, expert_slug, seq),
+                    FOREIGN KEY (dialogue_id) REFERENCES alignment_dialogues(dialogue_id),
+                    CHECK (move_type IN ('defend', 'challenge', 'bridge', 'request', 'concede', 'converge'))
+                )",
+                [],
+            )?;
+
+            // Verdicts table
+            self.conn.execute(
+                "CREATE TABLE IF NOT EXISTS alignment_verdicts (
+                    dialogue_id     TEXT NOT NULL,
+                    verdict_id      TEXT NOT NULL,
+                    verdict_type    TEXT NOT NULL,
+                    round           INTEGER NOT NULL,
+                    author_expert   TEXT,
+                    recommendation  TEXT NOT NULL,
+                    description     TEXT NOT NULL,
+                    conditions      TEXT,
+                    vote            TEXT,
+                    confidence      TEXT,
+                    tensions_resolved TEXT,
+                    tensions_accepted TEXT,
+                    recommendations_adopted TEXT,
+                    key_evidence    TEXT,
+                    key_claims      TEXT,
+                    supporting_experts TEXT,
+                    ethos_compliance TEXT,
+                    created_at      TEXT NOT NULL,
+                    PRIMARY KEY (dialogue_id, verdict_id),
+                    FOREIGN KEY (dialogue_id) REFERENCES alignment_dialogues(dialogue_id),
+                    CHECK (verdict_type IN ('interim', 'final', 'minority', 'dissent'))
+                )",
                 [],
             )?;
         }

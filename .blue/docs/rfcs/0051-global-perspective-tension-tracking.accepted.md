@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Draft |
+| **Status** | Accepted |
 | **Date** | 2026-02-02 |
 | **ADRs** | 0014 (Alignment Dialogue Agents), 0005 (Single Source), 0018 (DynamoDB-Portable Schema) |
 | **Extends** | RFC 0048 (Expert Pools), RFC 0050 (Graduated Rotation) |
