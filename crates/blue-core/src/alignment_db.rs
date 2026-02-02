@@ -1447,3 +1447,649 @@ pub fn get_verdicts(
 
     Ok(verdicts)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rusqlite::Connection;
+
+    /// Create an in-memory database with the alignment schema
+    fn setup_test_db() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+
+        // Create all alignment tables
+        conn.execute_batch(
+            r#"
+            CREATE TABLE alignment_dialogues (
+                dialogue_id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                question TEXT,
+                status TEXT NOT NULL DEFAULT 'open',
+                created_at TEXT NOT NULL,
+                converged_at TEXT,
+                total_rounds INTEGER DEFAULT 0,
+                total_alignment INTEGER DEFAULT 0,
+                output_dir TEXT,
+                calibrated INTEGER DEFAULT 0,
+                domain_id TEXT,
+                ethos_id TEXT,
+                background TEXT
+            );
+
+            CREATE TABLE alignment_experts (
+                dialogue_id TEXT NOT NULL,
+                expert_slug TEXT NOT NULL,
+                role TEXT NOT NULL,
+                description TEXT,
+                focus TEXT,
+                tier TEXT NOT NULL,
+                source TEXT NOT NULL,
+                relevance REAL,
+                creation_reason TEXT,
+                color TEXT,
+                scores TEXT DEFAULT '{}',
+                raw_content TEXT,
+                total_score INTEGER DEFAULT 0,
+                first_round INTEGER,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (dialogue_id, expert_slug)
+            );
+
+            CREATE TABLE alignment_rounds (
+                dialogue_id TEXT NOT NULL,
+                round INTEGER NOT NULL,
+                title TEXT,
+                score INTEGER NOT NULL,
+                summary TEXT,
+                status TEXT NOT NULL DEFAULT 'open',
+                created_at TEXT NOT NULL,
+                completed_at TEXT,
+                PRIMARY KEY (dialogue_id, round)
+            );
+
+            CREATE TABLE alignment_perspectives (
+                dialogue_id TEXT NOT NULL,
+                round INTEGER NOT NULL,
+                seq INTEGER NOT NULL,
+                label TEXT NOT NULL,
+                content TEXT NOT NULL,
+                contributors TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'open',
+                refs TEXT,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (dialogue_id, round, seq)
+            );
+
+            CREATE TABLE alignment_perspective_events (
+                dialogue_id TEXT NOT NULL,
+                perspective_round INTEGER NOT NULL,
+                perspective_seq INTEGER NOT NULL,
+                event_type TEXT NOT NULL,
+                event_round INTEGER NOT NULL,
+                actors TEXT NOT NULL,
+                result_id TEXT,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (dialogue_id, perspective_round, perspective_seq, created_at)
+            );
+
+            CREATE TABLE alignment_tensions (
+                dialogue_id TEXT NOT NULL,
+                round INTEGER NOT NULL,
+                seq INTEGER NOT NULL,
+                label TEXT NOT NULL,
+                description TEXT NOT NULL,
+                contributors TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'open',
+                refs TEXT,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (dialogue_id, round, seq)
+            );
+
+            CREATE TABLE alignment_tension_events (
+                dialogue_id TEXT NOT NULL,
+                tension_round INTEGER NOT NULL,
+                tension_seq INTEGER NOT NULL,
+                event_type TEXT NOT NULL,
+                event_round INTEGER NOT NULL,
+                actors TEXT NOT NULL,
+                reason TEXT,
+                reference TEXT,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (dialogue_id, tension_round, tension_seq, created_at)
+            );
+
+            CREATE TABLE alignment_recommendations (
+                dialogue_id TEXT NOT NULL,
+                round INTEGER NOT NULL,
+                seq INTEGER NOT NULL,
+                label TEXT NOT NULL,
+                content TEXT NOT NULL,
+                contributors TEXT NOT NULL,
+                parameters TEXT,
+                status TEXT NOT NULL DEFAULT 'proposed',
+                refs TEXT,
+                adopted_in_verdict TEXT,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (dialogue_id, round, seq)
+            );
+
+            CREATE TABLE alignment_recommendation_events (
+                dialogue_id TEXT NOT NULL,
+                rec_round INTEGER NOT NULL,
+                rec_seq INTEGER NOT NULL,
+                event_type TEXT NOT NULL,
+                event_round INTEGER NOT NULL,
+                actors TEXT NOT NULL,
+                result_id TEXT,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (dialogue_id, rec_round, rec_seq, created_at)
+            );
+
+            CREATE TABLE alignment_evidence (
+                dialogue_id TEXT NOT NULL,
+                round INTEGER NOT NULL,
+                seq INTEGER NOT NULL,
+                label TEXT NOT NULL,
+                content TEXT NOT NULL,
+                contributors TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'cited',
+                refs TEXT,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (dialogue_id, round, seq)
+            );
+
+            CREATE TABLE alignment_claims (
+                dialogue_id TEXT NOT NULL,
+                round INTEGER NOT NULL,
+                seq INTEGER NOT NULL,
+                label TEXT NOT NULL,
+                content TEXT NOT NULL,
+                contributors TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'asserted',
+                refs TEXT,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (dialogue_id, round, seq)
+            );
+
+            CREATE TABLE alignment_refs (
+                dialogue_id TEXT NOT NULL,
+                source_type TEXT NOT NULL,
+                source_id TEXT NOT NULL,
+                ref_type TEXT NOT NULL,
+                target_type TEXT NOT NULL,
+                target_id TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (dialogue_id, source_id, ref_type, target_id)
+            );
+
+            CREATE TABLE alignment_verdicts (
+                dialogue_id TEXT NOT NULL,
+                verdict_id TEXT NOT NULL,
+                verdict_type TEXT NOT NULL,
+                round INTEGER NOT NULL,
+                author_expert TEXT,
+                recommendation TEXT NOT NULL,
+                description TEXT NOT NULL,
+                conditions TEXT,
+                vote TEXT,
+                confidence TEXT,
+                tensions_resolved TEXT,
+                tensions_accepted TEXT,
+                recommendations_adopted TEXT,
+                key_evidence TEXT,
+                key_claims TEXT,
+                supporting_experts TEXT,
+                ethos_compliance TEXT,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (dialogue_id, verdict_id)
+            );
+            "#,
+        )
+        .unwrap();
+
+        conn
+    }
+
+    #[test]
+    fn test_generate_dialogue_id() {
+        let conn = setup_test_db();
+
+        let id1 = generate_dialogue_id(&conn, "Test Dialogue").unwrap();
+        assert_eq!(id1, "test-dialogue");
+
+        // Create the first dialogue
+        create_dialogue(&conn, "Test Dialogue", None, None, None).unwrap();
+
+        // Second dialogue with same title should get suffix
+        let id2 = generate_dialogue_id(&conn, "Test Dialogue").unwrap();
+        assert_eq!(id2, "test-dialogue-2");
+    }
+
+    #[test]
+    fn test_display_id_format() {
+        assert_eq!(display_id(EntityType::Perspective, 0, 1), "P0001");
+        assert_eq!(display_id(EntityType::Tension, 1, 5), "T0105");
+        assert_eq!(display_id(EntityType::Recommendation, 2, 15), "R0215");
+        assert_eq!(display_id(EntityType::Evidence, 0, 99), "E0099");
+        assert_eq!(display_id(EntityType::Claim, 3, 1), "C0301");
+    }
+
+    #[test]
+    fn test_parse_display_id() {
+        let (entity, round, seq) = parse_display_id("P0001").unwrap();
+        assert_eq!(entity, EntityType::Perspective);
+        assert_eq!(round, 0);
+        assert_eq!(seq, 1);
+
+        let (entity, round, seq) = parse_display_id("T0105").unwrap();
+        assert_eq!(entity, EntityType::Tension);
+        assert_eq!(round, 1);
+        assert_eq!(seq, 5);
+
+        let (entity, round, seq) = parse_display_id("R0215").unwrap();
+        assert_eq!(entity, EntityType::Recommendation);
+        assert_eq!(round, 2);
+        assert_eq!(seq, 15);
+
+        // Invalid IDs
+        assert!(parse_display_id("X0001").is_none()); // Invalid type
+        assert!(parse_display_id("P001").is_none()); // Too short
+        assert!(parse_display_id("P00001").is_none()); // Too long
+    }
+
+    #[test]
+    fn test_create_and_get_dialogue() {
+        let conn = setup_test_db();
+
+        let id = create_dialogue(
+            &conn,
+            "NVIDIA Investment Analysis",
+            Some("Should Acme Trust swap NVAI for NVDA?"),
+            Some("/tmp/blue-dialogue/nvidia"),
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(id, "nvidia-investment-analysis");
+
+        let dialogue = get_dialogue(&conn, &id).unwrap();
+        assert_eq!(dialogue.title, "NVIDIA Investment Analysis");
+        assert_eq!(
+            dialogue.question,
+            Some("Should Acme Trust swap NVAI for NVDA?".to_string())
+        );
+        assert_eq!(dialogue.status, DialogueStatus::Open);
+        assert_eq!(dialogue.total_rounds, 0);
+        assert_eq!(dialogue.total_alignment, 0);
+    }
+
+    #[test]
+    fn test_register_expert() {
+        let conn = setup_test_db();
+        create_dialogue(&conn, "Test", None, None, None).unwrap();
+
+        register_expert(
+            &conn,
+            "test",
+            "muffin",
+            "Value Analyst",
+            ExpertTier::Core,
+            ExpertSource::Pool,
+            Some("Evaluates intrinsic value"),
+            Some("Margin of safety"),
+            Some(0.95),
+            None,
+            Some("#ff6b6b"),
+            Some(0),
+        )
+        .unwrap();
+
+        let experts = get_experts(&conn, "test").unwrap();
+        assert_eq!(experts.len(), 1);
+        assert_eq!(experts[0].expert_slug, "muffin");
+        assert_eq!(experts[0].role, "Value Analyst");
+        assert_eq!(experts[0].tier, ExpertTier::Core);
+        assert_eq!(experts[0].source, ExpertSource::Pool);
+    }
+
+    #[test]
+    fn test_register_perspective() {
+        let conn = setup_test_db();
+        create_dialogue(&conn, "Test", None, None, None).unwrap();
+
+        let id = register_perspective(
+            &conn,
+            "test",
+            0,
+            "Income mandate mismatch",
+            "NVIDIA's zero dividend conflicts with the trust's 4% income requirement.",
+            &["muffin".to_string()],
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(id, "P0001");
+
+        // Register another perspective
+        let id2 = register_perspective(
+            &conn,
+            "test",
+            0,
+            "Concentration risk",
+            "Adding NVDA increases semiconductor exposure.",
+            &["cupcake".to_string()],
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(id2, "P0002");
+
+        let perspectives = get_perspectives(&conn, "test").unwrap();
+        assert_eq!(perspectives.len(), 2);
+        assert_eq!(perspectives[0].label, "Income mandate mismatch");
+        assert_eq!(perspectives[1].label, "Concentration risk");
+    }
+
+    #[test]
+    fn test_register_tension() {
+        let conn = setup_test_db();
+        create_dialogue(&conn, "Test", None, None, None).unwrap();
+
+        let id = register_tension(
+            &conn,
+            "test",
+            0,
+            "Growth vs income",
+            "NVIDIA's zero dividend conflicts with 4% income mandate",
+            &["muffin".to_string(), "cupcake".to_string()],
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(id, "T0001");
+
+        let tensions = get_tensions(&conn, "test").unwrap();
+        assert_eq!(tensions.len(), 1);
+        assert_eq!(tensions[0].status, TensionStatus::Open);
+    }
+
+    #[test]
+    fn test_tension_lifecycle() {
+        let conn = setup_test_db();
+        create_dialogue(&conn, "Test", None, None, None).unwrap();
+
+        register_tension(
+            &conn,
+            "test",
+            0,
+            "Growth vs income",
+            "Income mandate conflict",
+            &["muffin".to_string()],
+            None,
+        )
+        .unwrap();
+
+        // Address the tension
+        update_tension_status(
+            &conn,
+            "test",
+            "T0001",
+            TensionStatus::Addressed,
+            &["donut".to_string()],
+            Some("R0001"),
+            1,
+        )
+        .unwrap();
+
+        let tensions = get_tensions(&conn, "test").unwrap();
+        assert_eq!(tensions[0].status, TensionStatus::Addressed);
+
+        // Resolve the tension
+        update_tension_status(
+            &conn,
+            "test",
+            "T0001",
+            TensionStatus::Resolved,
+            &["muffin".to_string()],
+            Some("P0101"),
+            2,
+        )
+        .unwrap();
+
+        let tensions = get_tensions(&conn, "test").unwrap();
+        assert_eq!(tensions[0].status, TensionStatus::Resolved);
+    }
+
+    #[test]
+    fn test_expert_scores() {
+        let conn = setup_test_db();
+        create_dialogue(&conn, "Test", None, None, None).unwrap();
+
+        register_expert(
+            &conn,
+            "test",
+            "muffin",
+            "Value Analyst",
+            ExpertTier::Core,
+            ExpertSource::Pool,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(0),
+        )
+        .unwrap();
+
+        // Update score for round 0
+        update_expert_score(&conn, "test", "muffin", 0, 12).unwrap();
+
+        let experts = get_experts(&conn, "test").unwrap();
+        assert_eq!(experts[0].total_score, 12);
+        assert_eq!(experts[0].scores["0"], 12);
+
+        // Update score for round 1
+        update_expert_score(&conn, "test", "muffin", 1, 8).unwrap();
+
+        let experts = get_experts(&conn, "test").unwrap();
+        assert_eq!(experts[0].total_score, 20);
+        assert_eq!(experts[0].scores["1"], 8);
+    }
+
+    #[test]
+    fn test_cross_references() {
+        let conn = setup_test_db();
+        create_dialogue(&conn, "Test", None, None, None).unwrap();
+
+        register_ref(
+            &conn,
+            "test",
+            EntityType::Perspective,
+            "P0101",
+            RefType::Refine,
+            EntityType::Perspective,
+            "P0001",
+        )
+        .unwrap();
+
+        register_ref(
+            &conn,
+            "test",
+            EntityType::Recommendation,
+            "R0001",
+            RefType::Address,
+            EntityType::Tension,
+            "T0001",
+        )
+        .unwrap();
+
+        // Verify refs are stored (we'd need a get_refs function to fully test)
+        // For now, just verify no errors
+    }
+
+    #[test]
+    fn test_verdict_registration() {
+        let conn = setup_test_db();
+        create_dialogue(&conn, "Test", None, None, None).unwrap();
+
+        let verdict = Verdict {
+            dialogue_id: "test".to_string(),
+            verdict_id: "final".to_string(),
+            verdict_type: VerdictType::Final,
+            round: 3,
+            author_expert: None,
+            recommendation: "APPROVE conditional partial trim".to_string(),
+            description: "The panel approved the strategy with conditions.".to_string(),
+            conditions: Some(vec![
+                "Execute 60-90 days post-refinancing".to_string(),
+                "Implement 30-delta covered calls".to_string(),
+            ]),
+            vote: Some("12-0".to_string()),
+            confidence: Some("unanimous".to_string()),
+            tensions_resolved: Some(vec!["T0001".to_string(), "T0002".to_string()]),
+            tensions_accepted: None,
+            recommendations_adopted: Some(vec!["R0001".to_string()]),
+            key_evidence: None,
+            key_claims: None,
+            supporting_experts: None,
+            ethos_compliance: None,
+            created_at: Utc::now(),
+        };
+
+        register_verdict(&conn, &verdict).unwrap();
+
+        // Verify dialogue status updated to converged
+        let dialogue = get_dialogue(&conn, "test").unwrap();
+        assert_eq!(dialogue.status, DialogueStatus::Converged);
+
+        let verdicts = get_verdicts(&conn, "test").unwrap();
+        assert_eq!(verdicts.len(), 1);
+        assert_eq!(verdicts[0].verdict_type, VerdictType::Final);
+        assert_eq!(verdicts[0].vote, Some("12-0".to_string()));
+    }
+
+    #[test]
+    fn test_full_dialogue_workflow() {
+        let conn = setup_test_db();
+
+        // Create dialogue
+        let id = create_dialogue(
+            &conn,
+            "NVIDIA Investment",
+            Some("Should we swap NVAI for NVDA?"),
+            None,
+            None,
+        )
+        .unwrap();
+
+        // Register experts
+        register_expert(
+            &conn,
+            &id,
+            "muffin",
+            "Value Analyst",
+            ExpertTier::Core,
+            ExpertSource::Pool,
+            None,
+            None,
+            Some(0.95),
+            None,
+            None,
+            Some(0),
+        )
+        .unwrap();
+
+        register_expert(
+            &conn,
+            &id,
+            "donut",
+            "Options Strategist",
+            ExpertTier::Adjacent,
+            ExpertSource::Pool,
+            None,
+            None,
+            Some(0.70),
+            None,
+            None,
+            Some(0),
+        )
+        .unwrap();
+
+        // Create round 0
+        create_round(&conn, &id, 0, Some("Opening Arguments"), 0).unwrap();
+
+        // Register perspectives
+        let p1 = register_perspective(
+            &conn,
+            &id,
+            0,
+            "Income mandate mismatch",
+            "Zero dividend conflicts with 4% requirement",
+            &["muffin".to_string()],
+            None,
+        )
+        .unwrap();
+        assert_eq!(p1, "P0001");
+
+        let p2 = register_perspective(
+            &conn,
+            &id,
+            0,
+            "Options overlay opportunity",
+            "Covered calls can generate income",
+            &["donut".to_string()],
+            None,
+        )
+        .unwrap();
+        assert_eq!(p2, "P0002");
+
+        // Register tension
+        let t1 = register_tension(
+            &conn,
+            &id,
+            0,
+            "Growth vs income",
+            "Fundamental conflict",
+            &["muffin".to_string()],
+            None,
+        )
+        .unwrap();
+        assert_eq!(t1, "T0001");
+
+        // Register recommendation
+        let r1 = register_recommendation(
+            &conn,
+            &id,
+            0,
+            "Income Collar Structure",
+            "Use 30-delta covered calls",
+            &["donut".to_string()],
+            Some(&serde_json::json!({"delta": "0.30", "dte": "45"})),
+            None,
+        )
+        .unwrap();
+        assert_eq!(r1, "R0001");
+
+        // Update scores
+        update_expert_score(&conn, &id, "muffin", 0, 12).unwrap();
+        update_expert_score(&conn, &id, "donut", 0, 15).unwrap();
+
+        // Verify state
+        let dialogue = get_dialogue(&conn, &id).unwrap();
+        assert_eq!(dialogue.total_rounds, 1);
+
+        let perspectives = get_perspectives(&conn, &id).unwrap();
+        assert_eq!(perspectives.len(), 2);
+
+        let tensions = get_tensions(&conn, &id).unwrap();
+        assert_eq!(tensions.len(), 1);
+
+        let recommendations = get_recommendations(&conn, &id).unwrap();
+        assert_eq!(recommendations.len(), 1);
+        assert!(recommendations[0].parameters.is_some());
+
+        let experts = get_experts(&conn, &id).unwrap();
+        let total_score: i32 = experts.iter().map(|e| e.total_score).sum();
+        assert_eq!(total_score, 27);
+    }
+}
