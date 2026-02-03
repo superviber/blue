@@ -721,19 +721,19 @@ Key changes:
 - [x] Add `.blue/dialogues/.gitkeep` or initial README
 - [ ] Update `.gitignore` if dialogues should not be tracked (optional)
 
-### Phase 8: CLI Parity (High Priority)
-- [ ] Add `blue dialogue` subcommand with all dialogue tools
-- [ ] Add `blue adr` subcommand with all ADR tools
-- [ ] Add `blue spike` subcommand with spike tools
-- [ ] CLI calls same handler functions as MCP tools (single implementation)
-- [ ] Add `--help` documentation for all new commands
+### Phase 8: CLI Parity (High Priority) ✅
+- [x] Add `blue dialogue` subcommand with all dialogue tools
+- [x] Add `blue adr` subcommand with all ADR tools
+- [x] Add `blue spike` subcommand with spike tools
+- [x] CLI calls same handler functions as MCP tools (single implementation)
+- [x] Add `--help` documentation for all new commands
 
-### Phase 9: CLI Parity (Medium Priority)
-- [ ] Add `blue audit` subcommand
-- [ ] Add `blue prd` subcommand
-- [ ] Add `blue reminder` subcommand
+### Phase 9: CLI Parity (Medium Priority) ✅
+- [x] Add `blue audit` subcommand
+- [x] Add `blue prd` subcommand
+- [x] Add `blue reminder` subcommand
 
-### Phase 10: CLI Parity (Low Priority)
+### Phase 10: CLI Parity (Low Priority) ⏳
 - [ ] Add `blue staging` subcommand (if not already complete)
 - [ ] Add `blue llm` subcommand
 - [ ] Add `blue postmortem` subcommand

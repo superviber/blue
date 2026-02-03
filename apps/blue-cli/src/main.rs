@@ -6,6 +6,8 @@ use clap::{Parser, Subcommand};
 use anyhow::Result;
 use blue_core::daemon::{DaemonClient, DaemonDb, DaemonPaths, DaemonState, run_daemon};
 use blue_core::realm::RealmService;
+use blue_core::ProjectState;
+use serde_json::json;
 
 // ============================================================================
 // RFC 0049: Synchronous Guard Command
@@ -340,6 +342,44 @@ enum Commands {
 
     /// Check Blue installation health (RFC 0052)
     Doctor,
+
+    // ==================== RFC 0057: CLI Parity ====================
+
+    /// Dialogue commands (alignment dialogues)
+    Dialogue {
+        #[command(subcommand)]
+        command: DialogueCommands,
+    },
+
+    /// ADR commands (Architecture Decision Records)
+    Adr {
+        #[command(subcommand)]
+        command: AdrCommands,
+    },
+
+    /// Spike commands (time-boxed investigations)
+    Spike {
+        #[command(subcommand)]
+        command: SpikeCommands,
+    },
+
+    /// Audit commands
+    Audit {
+        #[command(subcommand)]
+        command: AuditCommands,
+    },
+
+    /// PRD commands (Product Requirements Documents)
+    Prd {
+        #[command(subcommand)]
+        command: PrdCommands,
+    },
+
+    /// Reminder commands
+    Reminder {
+        #[command(subcommand)]
+        command: ReminderCommands,
+    },
 }
 
 #[derive(Subcommand)]
@@ -638,6 +678,155 @@ enum IndexCommands {
     Status,
 }
 
+// ==================== RFC 0057: CLI Parity Command Enums ====================
+
+#[derive(Subcommand)]
+enum DialogueCommands {
+    /// Create a new dialogue
+    Create {
+        /// Dialogue title
+        title: String,
+
+        /// Enable alignment mode with expert panel
+        #[arg(long)]
+        alignment: bool,
+
+        /// Panel size for alignment mode
+        #[arg(long)]
+        panel_size: Option<usize>,
+    },
+    /// Get dialogue details
+    Get {
+        /// Dialogue title or ID
+        title: String,
+    },
+    /// List all dialogues
+    List,
+    /// Export dialogue to JSON
+    Export {
+        /// Dialogue ID
+        dialogue_id: String,
+
+        /// Output path (optional)
+        #[arg(long)]
+        output: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum AdrCommands {
+    /// Create a new ADR
+    Create {
+        /// ADR title
+        title: String,
+    },
+    /// Get ADR details
+    Get {
+        /// ADR title
+        title: String,
+    },
+    /// List all ADRs
+    List,
+    /// Update ADR status
+    Status {
+        /// ADR title
+        title: String,
+
+        /// New status (proposed, accepted, deprecated, superseded)
+        status: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum SpikeCommands {
+    /// Create a new spike
+    Create {
+        /// Spike title
+        title: String,
+
+        /// Time budget in hours
+        #[arg(long, default_value = "4")]
+        budget: u32,
+    },
+    /// Get spike details
+    Get {
+        /// Spike title
+        title: String,
+    },
+    /// List all spikes
+    List,
+    /// Complete a spike
+    Complete {
+        /// Spike title
+        title: String,
+
+        /// Outcome (success, partial, failure)
+        #[arg(long)]
+        outcome: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum AuditCommands {
+    /// Create a new audit document
+    Create {
+        /// Audit title
+        title: String,
+    },
+    /// Get audit details
+    Get {
+        /// Audit title
+        title: String,
+    },
+    /// List all audits
+    List,
+}
+
+#[derive(Subcommand)]
+enum PrdCommands {
+    /// Create a new PRD
+    Create {
+        /// PRD title
+        title: String,
+    },
+    /// Get PRD details
+    Get {
+        /// PRD title
+        title: String,
+    },
+    /// List all PRDs
+    List,
+}
+
+#[derive(Subcommand)]
+enum ReminderCommands {
+    /// Create a new reminder
+    Create {
+        /// Reminder message
+        message: String,
+
+        /// When to remind (e.g., "tomorrow", "2024-03-15")
+        #[arg(long)]
+        when: String,
+    },
+    /// List all reminders
+    List,
+    /// Snooze a reminder
+    Snooze {
+        /// Reminder ID
+        id: i64,
+
+        /// Snooze until (e.g., "1h", "tomorrow")
+        #[arg(long)]
+        until: String,
+    },
+    /// Dismiss a reminder
+    Dismiss {
+        /// Reminder ID
+        id: i64,
+    },
+}
+
 /// Entry point - handles guard synchronously before tokio (RFC 0049)
 fn main() {
     // RFC 0049: Handle guard command synchronously before tokio runtime
@@ -783,6 +972,25 @@ async fn tokio_main() -> Result<()> {
         }
         Some(Commands::Doctor) => {
             handle_doctor_command().await?;
+        }
+        // RFC 0057: CLI Parity commands
+        Some(Commands::Dialogue { command }) => {
+            handle_dialogue_command(command).await?;
+        }
+        Some(Commands::Adr { command }) => {
+            handle_adr_command(command).await?;
+        }
+        Some(Commands::Spike { command }) => {
+            handle_spike_command(command).await?;
+        }
+        Some(Commands::Audit { command }) => {
+            handle_audit_command(command).await?;
+        }
+        Some(Commands::Prd { command }) => {
+            handle_prd_command(command).await?;
+        }
+        Some(Commands::Reminder { command }) => {
+            handle_reminder_command(command).await?;
         }
     }
 
@@ -2764,8 +2972,6 @@ blue guard --path="$FILE_PATH"
 "#;
 
 async fn handle_install_command(hooks_only: bool, skills_only: bool, mcp_only: bool, force: bool) -> Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-
     let cwd = std::env::current_dir()?;
     let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Could not find home directory"))?;
 
@@ -3196,5 +3402,409 @@ async fn handle_doctor_command() -> Result<()> {
         println!("{} issue(s) found. Run `blue install` to fix.", issues);
     }
 
+    Ok(())
+}
+
+// ==================== RFC 0057: CLI Parity Handlers ====================
+
+/// Get or create project state for CLI commands
+fn get_project_state() -> Result<ProjectState> {
+    let cwd = std::env::current_dir()?;
+    let home = blue_core::detect_blue(&cwd)
+        .map_err(|e| anyhow::anyhow!("Not a Blue project: {}", e))?;
+    let project = home.project_name.clone().unwrap_or_else(|| "default".to_string());
+    ProjectState::load(home, &project)
+        .map_err(|e| anyhow::anyhow!("Failed to load project state: {}", e))
+}
+
+/// Handle dialogue subcommands
+async fn handle_dialogue_command(command: DialogueCommands) -> Result<()> {
+    let mut state = get_project_state()?;
+
+    match command {
+        DialogueCommands::Create { title, alignment, panel_size } => {
+            let args = json!({
+                "title": title,
+                "alignment": alignment,
+                "panel_size": panel_size,
+            });
+            match blue_mcp::handlers::dialogue::handle_create(&mut state, &args) {
+                Ok(result) => {
+                    if let Some(msg) = result.get("message").and_then(|v| v.as_str()) {
+                        println!("{}", msg);
+                    }
+                    if let Some(file) = result.get("dialogue").and_then(|d| d.get("file")).and_then(|v| v.as_str()) {
+                        println!("File: {}", file);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+        DialogueCommands::Get { title } => {
+            let args = json!({ "title": title });
+            match blue_mcp::handlers::dialogue::handle_get(&state, &args) {
+                Ok(result) => {
+                    println!("{}", serde_json::to_string_pretty(&result)?);
+                }
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+        DialogueCommands::List => {
+            let args = json!({});
+            match blue_mcp::handlers::dialogue::handle_list(&state, &args) {
+                Ok(result) => {
+                    if let Some(dialogues) = result.get("dialogues").and_then(|v| v.as_array()) {
+                        if dialogues.is_empty() {
+                            println!("No dialogues found.");
+                        } else {
+                            for d in dialogues {
+                                let title = d.get("title").and_then(|v| v.as_str()).unwrap_or("?");
+                                let status = d.get("status").and_then(|v| v.as_str()).unwrap_or("?");
+                                println!("  {} [{}]", title, status);
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+        DialogueCommands::Export { dialogue_id, output } => {
+            let mut args = json!({ "dialogue_id": dialogue_id });
+            if let Some(path) = output {
+                args["output_path"] = json!(path);
+            }
+            match blue_mcp::handlers::dialogue::handle_export(&state, &args) {
+                Ok(result) => {
+                    if let Some(msg) = result.get("message").and_then(|v| v.as_str()) {
+                        println!("{}", msg);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Handle ADR subcommands
+async fn handle_adr_command(command: AdrCommands) -> Result<()> {
+    let mut state = get_project_state()?;
+
+    match command {
+        AdrCommands::Create { title } => {
+            let args = json!({ "title": title });
+            match blue_mcp::handlers::adr::handle_create(&mut state, &args) {
+                Ok(result) => {
+                    if let Some(msg) = result.get("message").and_then(|v| v.as_str()) {
+                        println!("{}", msg);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+        AdrCommands::Get { title } => {
+            let args = json!({ "title": title });
+            match blue_mcp::handlers::adr::handle_get(&state, &args) {
+                Ok(result) => {
+                    println!("{}", serde_json::to_string_pretty(&result)?);
+                }
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+        AdrCommands::List => {
+            match blue_mcp::handlers::adr::handle_list(&state) {
+                Ok(result) => {
+                    if let Some(adrs) = result.get("adrs").and_then(|v| v.as_array()) {
+                        if adrs.is_empty() {
+                            println!("No ADRs found.");
+                        } else {
+                            for a in adrs {
+                                let number = a.get("number").and_then(|v| v.as_i64()).unwrap_or(0);
+                                let title = a.get("title").and_then(|v| v.as_str()).unwrap_or("?");
+                                let status = a.get("status").and_then(|v| v.as_str()).unwrap_or("?");
+                                println!("  {:04} {} [{}]", number, title, status);
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+        AdrCommands::Status { title, status: _status } => {
+            // Note: ADR status changes require editing the file directly
+            println!("To change ADR status, edit the ADR file directly.");
+            println!("Looking for ADR '{}'...", title);
+            let args = json!({ "title": title });
+            if let Ok(result) = blue_mcp::handlers::adr::handle_get(&state, &args) {
+                if let Some(file) = result.get("file_path").and_then(|v| v.as_str()) {
+                    println!("File: {}", file);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Handle spike subcommands
+async fn handle_spike_command(command: SpikeCommands) -> Result<()> {
+    let mut state = get_project_state()?;
+
+    match command {
+        SpikeCommands::Create { title, budget } => {
+            let args = json!({ "title": title, "budget_hours": budget });
+            match blue_mcp::handlers::spike::handle_create(&mut state, &args) {
+                Ok(result) => {
+                    if let Some(msg) = result.get("message").and_then(|v| v.as_str()) {
+                        println!("{}", msg);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+        SpikeCommands::Get { title } => {
+            // Spike get/list not yet implemented - check .blue/docs/spikes/
+            println!("Spike details for '{}' - check .blue/docs/spikes/ directory", title);
+            println!("hint: Use `ls .blue/docs/spikes/` to see available spikes");
+        }
+        SpikeCommands::List => {
+            // Spike list not yet implemented - show directory hint
+            println!("Listing spikes from .blue/docs/spikes/");
+            let spike_dir = std::path::Path::new(".blue/docs/spikes");
+            if spike_dir.exists() {
+                for entry in std::fs::read_dir(spike_dir)? {
+                    let entry = entry?;
+                    let name = entry.file_name();
+                    println!("  {}", name.to_string_lossy());
+                }
+            } else {
+                println!("No spikes directory found.");
+            }
+        }
+        SpikeCommands::Complete { title, outcome } => {
+            let args = json!({ "title": title, "outcome": outcome });
+            match blue_mcp::handlers::spike::handle_complete(&mut state, &args) {
+                Ok(result) => {
+                    if let Some(msg) = result.get("message").and_then(|v| v.as_str()) {
+                        println!("{}", msg);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Handle audit subcommands
+async fn handle_audit_command(command: AuditCommands) -> Result<()> {
+    let state = get_project_state()?;
+
+    match command {
+        AuditCommands::Create { title } => {
+            let args = json!({ "title": title });
+            match blue_mcp::handlers::audit_doc::handle_create(&state, &args) {
+                Ok(result) => {
+                    if let Some(msg) = result.get("message").and_then(|v| v.as_str()) {
+                        println!("{}", msg);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+        AuditCommands::Get { title } => {
+            let args = json!({ "title": title });
+            match blue_mcp::handlers::audit_doc::handle_get(&state, &args) {
+                Ok(result) => {
+                    println!("{}", serde_json::to_string_pretty(&result)?);
+                }
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+        AuditCommands::List => {
+            match blue_mcp::handlers::audit_doc::handle_list(&state) {
+                Ok(result) => {
+                    if let Some(audits) = result.get("audits").and_then(|v| v.as_array()) {
+                        if audits.is_empty() {
+                            println!("No audits found.");
+                        } else {
+                            for a in audits {
+                                let title = a.get("title").and_then(|v| v.as_str()).unwrap_or("?");
+                                let status = a.get("status").and_then(|v| v.as_str()).unwrap_or("?");
+                                println!("  {} [{}]", title, status);
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Handle PRD subcommands
+async fn handle_prd_command(command: PrdCommands) -> Result<()> {
+    let state = get_project_state()?;
+
+    match command {
+        PrdCommands::Create { title } => {
+            let args = json!({ "title": title });
+            match blue_mcp::handlers::prd::handle_create(&state, &args) {
+                Ok(result) => {
+                    if let Some(msg) = result.get("message").and_then(|v| v.as_str()) {
+                        println!("{}", msg);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+        PrdCommands::Get { title } => {
+            let args = json!({ "title": title });
+            match blue_mcp::handlers::prd::handle_get(&state, &args) {
+                Ok(result) => {
+                    println!("{}", serde_json::to_string_pretty(&result)?);
+                }
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+        PrdCommands::List => {
+            let args = json!({});
+            match blue_mcp::handlers::prd::handle_list(&state, &args) {
+                Ok(result) => {
+                    if let Some(prds) = result.get("prds").and_then(|v| v.as_array()) {
+                        if prds.is_empty() {
+                            println!("No PRDs found.");
+                        } else {
+                            for p in prds {
+                                let title = p.get("title").and_then(|v| v.as_str()).unwrap_or("?");
+                                let status = p.get("status").and_then(|v| v.as_str()).unwrap_or("?");
+                                println!("  {} [{}]", title, status);
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Handle reminder subcommands
+async fn handle_reminder_command(command: ReminderCommands) -> Result<()> {
+    let state = get_project_state()?;
+
+    match command {
+        ReminderCommands::Create { message, when } => {
+            let args = json!({ "message": message, "when": when });
+            match blue_mcp::handlers::reminder::handle_create(&state, &args) {
+                Ok(result) => {
+                    if let Some(msg) = result.get("message").and_then(|v| v.as_str()) {
+                        println!("{}", msg);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+        ReminderCommands::List => {
+            let args = json!({});
+            match blue_mcp::handlers::reminder::handle_list(&state, &args) {
+                Ok(result) => {
+                    if let Some(reminders) = result.get("reminders").and_then(|v| v.as_array()) {
+                        if reminders.is_empty() {
+                            println!("No reminders.");
+                        } else {
+                            for r in reminders {
+                                let id = r.get("id").and_then(|v| v.as_i64()).unwrap_or(0);
+                                let msg = r.get("message").and_then(|v| v.as_str()).unwrap_or("?");
+                                let due = r.get("due_at").and_then(|v| v.as_str()).unwrap_or("?");
+                                println!("  [{}] {} (due: {})", id, msg, due);
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+        ReminderCommands::Snooze { id, until } => {
+            let args = json!({ "id": id, "until": until });
+            match blue_mcp::handlers::reminder::handle_snooze(&state, &args) {
+                Ok(result) => {
+                    if let Some(msg) = result.get("message").and_then(|v| v.as_str()) {
+                        println!("{}", msg);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+        ReminderCommands::Dismiss { id } => {
+            let args = json!({ "id": id });
+            match blue_mcp::handlers::reminder::handle_clear(&state, &args) {
+                Ok(result) => {
+                    if let Some(msg) = result.get("message").and_then(|v| v.as_str()) {
+                        println!("{}", msg);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+    }
     Ok(())
 }

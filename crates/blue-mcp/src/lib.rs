@@ -6,7 +6,7 @@
 #![recursion_limit = "512"]
 
 mod error;
-mod handlers;
+pub mod handlers;
 mod server;
 
 pub use error::ServerError;
