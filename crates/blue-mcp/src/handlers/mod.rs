@@ -1,6 +1,7 @@
 //! Tool handlers for Blue MCP
 //!
 //! Each module handles a specific document type or workflow.
+//! Standalone functions can be called by both MCP server and CLI.
 
 pub mod adr;
 // alignment module removed per RFC 0015 - Claude orchestrates via Task tool, not MCP
@@ -28,4 +29,5 @@ pub mod runbook;
 pub mod session;
 pub mod spike;
 pub mod staging;
+pub mod status; // Project status (blue_status, blue_next)
 pub mod worktree;
