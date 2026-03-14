@@ -29,11 +29,11 @@ Installs CLI to `/usr/local/bin` and configures MCP for Claude Code. See [INSTAL
 ## Getting Started
 
 ```bash
-blue init       # Welcome home
-blue create     # Start a new idea
-blue plan       # Break it into steps
-blue status     # Where are we?
-blue next       # What's next?
+blue init        # Welcome home
+blue rfc create  # Start a new RFC
+blue rfc plan    # Create a plan for an RFC
+blue status      # Where are we?
+blue next        # What's next?
 ```
 
 ## The Beliefs
