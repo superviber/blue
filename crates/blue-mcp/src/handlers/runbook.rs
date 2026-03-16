@@ -6,7 +6,7 @@
 use std::fs;
 use std::path::PathBuf;
 
-use blue_core::{DocType, Document, ProjectState, title_to_slug};
+use blue_core::{title_to_slug, DocType, Document, ProjectState};
 use serde_json::{json, Value};
 
 use crate::error::ServerError;
@@ -73,7 +73,14 @@ pub fn handle_create(state: &mut ProjectState, args: &Value) -> Result<Value, Se
     let runbook_path = docs_path.join(&file_path);
 
     // Generate markdown content (with actions for RFC 0002)
-    let markdown = generate_runbook_markdown(title, &source_rfc_doc, service_name, owner, &operations, &actions);
+    let markdown = generate_runbook_markdown(
+        title,
+        &source_rfc_doc,
+        service_name,
+        owner,
+        &operations,
+        &actions,
+    );
 
     // Create document in SQLite store
     let doc = Document {
@@ -114,10 +121,8 @@ pub fn handle_create(state: &mut ProjectState, args: &Value) -> Result<Value, Se
             let rfc_path = docs_path.join(rfc_file_path);
             if rfc_path.exists() {
                 if let Ok(rfc_content) = fs::read_to_string(&rfc_path) {
-                    let runbook_link = format!(
-                        "| **Runbook** | [{}](../runbooks/{}) |",
-                        title, file_name
-                    );
+                    let runbook_link =
+                        format!("| **Runbook** | [{}](../runbooks/{}) |", title, file_name);
 
                     // Insert after Status line if not already present
                     if !rfc_content.contains("| **Runbook** |") {
@@ -167,9 +172,10 @@ pub fn handle_update(state: &mut ProjectState, args: &Value) -> Result<Value, Se
         .find_document(DocType::Runbook, title)
         .map_err(|_| ServerError::NotFound(format!("Runbook '{}' not found", title)))?;
 
-    let runbook_file_path = doc.file_path.as_ref().ok_or_else(|| {
-        ServerError::CommandFailed("Runbook has no file path".to_string())
-    })?;
+    let runbook_file_path = doc
+        .file_path
+        .as_ref()
+        .ok_or_else(|| ServerError::CommandFailed("Runbook has no file path".to_string()))?;
 
     let docs_path = state.home.docs_path.clone();
     let runbook_path = docs_path.join(runbook_file_path);
@@ -253,10 +259,7 @@ fn generate_runbook_markdown(
     let mut md = String::new();
 
     // Title
-    md.push_str(&format!(
-        "# Runbook: {}\n\n",
-        to_title_case(title)
-    ));
+    md.push_str(&format!("# Runbook: {}\n\n", to_title_case(title)));
 
     // Metadata table
     md.push_str("| | |\n|---|---|\n");
@@ -278,7 +281,8 @@ fn generate_runbook_markdown(
         if let Some(ref rfc_file_path) = rfc_doc.file_path {
             md.push_str(&format!(
                 "| **Source RFC** | [{}](../rfcs/{}) |\n",
-                rfc_doc.title, rfc_file_path.replace("rfcs/", "")
+                rfc_doc.title,
+                rfc_file_path.replace("rfcs/", "")
             ));
         }
     }
@@ -337,7 +341,6 @@ fn generate_runbook_markdown(
     md
 }
 
-
 /// Convert slug to title case
 fn to_title_case(s: &str) -> String {
     s.split('-')
@@ -385,11 +388,10 @@ pub fn handle_lookup(state: &ProjectState, args: &Value) -> Result<Value, Server
             // Calculate best match score for this runbook
             for action in &actions {
                 let score = calculate_match_score(&action_query, action);
-                if score > 0
-                    && best_match.as_ref().is_none_or(|(_, _, s)| score > *s) {
-                        best_match = Some((runbook.clone(), actions.clone(), score));
-                        break; // This runbook matches, move to next
-                    }
+                if score > 0 && best_match.as_ref().is_none_or(|(_, _, s)| score > *s) {
+                    best_match = Some((runbook.clone(), actions.clone(), score));
+                    break; // This runbook matches, move to next
+                }
             }
         }
     }
@@ -423,12 +425,10 @@ pub fn handle_lookup(state: &ProjectState, args: &Value) -> Result<Value, Server
                 "hint": "Follow the steps above. Use verification to confirm success."
             }))
         }
-        None => {
-            Ok(json!({
-                "found": false,
-                "hint": "No runbook found. Proceed with caution."
-            }))
-        }
+        None => Ok(json!({
+            "found": false,
+            "hint": "No runbook found. Proceed with caution."
+        })),
     }
 }
 
@@ -465,9 +465,10 @@ pub fn handle_actions(state: &ProjectState) -> Result<Value, ServerError> {
 fn get_runbook_actions(store: &blue_core::DocumentStore, doc_id: i64) -> Vec<String> {
     let mut actions = Vec::new();
 
-    if let Ok(mut stmt) = store.conn().prepare(
-        "SELECT value FROM metadata WHERE document_id = ?1 AND key = ?2"
-    ) {
+    if let Ok(mut stmt) = store
+        .conn()
+        .prepare("SELECT value FROM metadata WHERE document_id = ?1 AND key = ?2")
+    {
         if let Ok(rows) = stmt.query_map(rusqlite::params![doc_id, ACTION_KEY], |row| {
             row.get::<_, String>(0)
         }) {
@@ -503,7 +504,10 @@ fn calculate_match_score(query: &str, action: &str) -> i32 {
     }
 
     // Count how many query words are in action
-    let matched = query_words.iter().filter(|qw| action_words.contains(qw)).count();
+    let matched = query_words
+        .iter()
+        .filter(|qw| action_words.contains(qw))
+        .count();
 
     // All query words match (subset)
     if matched == query_words.len() {
@@ -517,7 +521,9 @@ fn calculate_match_score(query: &str, action: &str) -> i32 {
 
     // Check for substring match in any word
     let has_substring = query_words.iter().any(|qw| {
-        action_words.iter().any(|aw| aw.contains(qw) || qw.contains(aw))
+        action_words
+            .iter()
+            .any(|aw| aw.contains(qw) || qw.contains(aw))
     });
 
     if has_substring {
@@ -553,7 +559,10 @@ fn parse_operations(content: &str) -> Vec<Value> {
 
         // Detect section headers within operation
         if line.starts_with("**When to use**:") {
-            op.when_to_use = line.trim_start_matches("**When to use**:").trim().to_string();
+            op.when_to_use = line
+                .trim_start_matches("**When to use**:")
+                .trim()
+                .to_string();
             continue;
         }
 
@@ -583,9 +592,15 @@ fn parse_operations(content: &str) -> Vec<Value> {
         // Collect content based on current section
         match current_section {
             Section::Steps => {
-                if line.starts_with("1.") || line.starts_with("2.") || line.starts_with("3.")
-                   || line.starts_with("4.") || line.starts_with("5.") {
-                    let step = line.trim_start_matches(|c: char| c.is_numeric() || c == '.').trim();
+                if line.starts_with("1.")
+                    || line.starts_with("2.")
+                    || line.starts_with("3.")
+                    || line.starts_with("4.")
+                    || line.starts_with("5.")
+                {
+                    let step = line
+                        .trim_start_matches(|c: char| c.is_numeric() || c == '.')
+                        .trim();
                     if !step.is_empty() {
                         op.steps.push(step.to_string());
                     }

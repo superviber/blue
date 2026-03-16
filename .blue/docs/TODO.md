@@ -25,6 +25,33 @@ Fix the heartbeat and put these back:
         }
       ]
 ```
+```
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "command": ".claude/hooks/guard-write.sh",
+            "type": "command"
+          }
+        ],
+        "matcher": "Write|Edit|MultiEdit"
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "command": ".claude/hooks/session-start.sh",
+            "type": "command"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
 
 
 /Users/ericg/letemcook/blue/.claude/settings.json

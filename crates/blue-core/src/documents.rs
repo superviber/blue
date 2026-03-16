@@ -318,7 +318,10 @@ impl Spike {
             md.push_str(&format!("| **Outcome** | {} |\n", outcome.as_str()));
         }
         if !self.produces_rfcs.is_empty() {
-            md.push_str(&format!("| **Produces RFCs** | {} |\n", self.produces_rfcs.join(", ")));
+            md.push_str(&format!(
+                "| **Produces RFCs** | {} |\n",
+                self.produces_rfcs.join(", ")
+            ));
         }
         md.push_str("\n---\n\n");
 
@@ -563,7 +566,10 @@ pub fn update_markdown_status(
     // Try table format: | **Status** | <anything> |
     let table_pattern = regex::Regex::new(r"\| \*\*Status\*\* \| [^|]+ \|").unwrap();
     let mut updated = table_pattern
-        .replace(&content, format!("| **Status** | {} |", display_status).as_str())
+        .replace(
+            &content,
+            format!("| **Status** | {} |", display_status).as_str(),
+        )
         .to_string();
 
     // Also try inline format: **Status:** <word>
@@ -740,7 +746,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("test.md");
 
-        let content = "# RFC\n\n| | |\n|---|---|\n| **Status** | Draft |\n| **Date** | 2026-01-24 |\n";
+        let content =
+            "# RFC\n\n| | |\n|---|---|\n| **Status** | Draft |\n| **Date** | 2026-01-24 |\n";
         fs::write(&file, content).unwrap();
 
         let changed = update_markdown_status(&file, "implemented").unwrap();
@@ -807,7 +814,8 @@ mod tests {
 
     #[test]
     fn test_convert_inline_to_table_header_no_change() {
-        let content = "# RFC 0001: Test\n\n| | |\n|---|---|\n| **Status** | Draft |\n\n## Problem\n";
+        let content =
+            "# RFC 0001: Test\n\n| | |\n|---|---|\n| **Status** | Draft |\n\n## Problem\n";
         let converted = convert_inline_to_table_header(content);
         // Should not change already-table-formatted content
         assert_eq!(converted, content);

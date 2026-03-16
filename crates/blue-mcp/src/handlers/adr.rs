@@ -6,7 +6,7 @@
 use std::fs;
 use std::path::Path;
 
-use blue_core::{Adr, DocType, Document, ProjectState, title_to_slug};
+use blue_core::{title_to_slug, Adr, DocType, Document, ProjectState};
 use serde_json::{json, Value};
 
 use crate::error::ServerError;
@@ -35,7 +35,11 @@ pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, Server
     let consequences: Vec<String> = args
         .get("consequences")
         .and_then(|v| v.as_array())
-        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
         .unwrap_or_default();
 
     // Check if linked RFC exists and is implemented
@@ -112,11 +116,9 @@ pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, Server
     if let Some(rfc_title) = source_rfc {
         if let Ok(rfc_doc) = state.store.find_document(DocType::Rfc, rfc_title) {
             if let (Some(rfc_id), Some(adr_id)) = (rfc_doc.id, Some(id)) {
-                let _ = state.store.link_documents(
-                    rfc_id,
-                    adr_id,
-                    blue_core::LinkType::RfcToAdr,
-                );
+                let _ = state
+                    .store
+                    .link_documents(rfc_id, adr_id, blue_core::LinkType::RfcToAdr);
             }
         }
     }
@@ -186,7 +188,10 @@ pub fn handle_get(state: &ProjectState, args: &Value) -> Result<Value, ServerErr
         .ok_or_else(|| ServerError::StateLoadFailed(format!("ADR {} not found", number)))?;
 
     // Read content
-    let file_path = adr_doc.file_path.as_ref().ok_or(ServerError::InvalidParams)?;
+    let file_path = adr_doc
+        .file_path
+        .as_ref()
+        .ok_or(ServerError::InvalidParams)?;
     let full_path = state.home.docs_path.join(file_path);
     let content = fs::read_to_string(&full_path)
         .map_err(|e| ServerError::CommandFailed(format!("Couldn't read ADR: {}", e)))?;
@@ -388,11 +393,7 @@ fn parse_adr_file(path: &Path, content: &str) -> Option<AdrSummary> {
     let file_name = path.file_name()?.to_string_lossy();
 
     // Extract number from filename (e.g., "0004-evidence.md")
-    let number: i64 = file_name
-        .split('-')
-        .next()?
-        .parse()
-        .ok()?;
+    let number: i64 = file_name.split('-').next()?.parse().ok()?;
 
     // Extract title from first heading
     let title = content
@@ -470,19 +471,49 @@ fn extract_keywords(content: &str) -> Vec<String> {
 
     // Common ADR-related keywords to look for
     let important_terms = [
-        "test", "testing", "evidence", "proof", "verify",
-        "single", "source", "truth", "duplicate",
-        "integrity", "whole", "complete",
-        "honor", "commit", "promise",
-        "courage", "delete", "remove", "refactor",
-        "dead", "code", "unused",
-        "freedom", "constraint", "limit",
-        "faith", "believe", "trust",
-        "overflow", "full", "abundance",
-        "presence", "present", "aware",
-        "purpose", "meaning", "why",
-        "home", "belong", "welcome",
-        "relationship", "connect", "link",
+        "test",
+        "testing",
+        "evidence",
+        "proof",
+        "verify",
+        "single",
+        "source",
+        "truth",
+        "duplicate",
+        "integrity",
+        "whole",
+        "complete",
+        "honor",
+        "commit",
+        "promise",
+        "courage",
+        "delete",
+        "remove",
+        "refactor",
+        "dead",
+        "code",
+        "unused",
+        "freedom",
+        "constraint",
+        "limit",
+        "faith",
+        "believe",
+        "trust",
+        "overflow",
+        "full",
+        "abundance",
+        "presence",
+        "present",
+        "aware",
+        "purpose",
+        "meaning",
+        "why",
+        "home",
+        "belong",
+        "welcome",
+        "relationship",
+        "connect",
+        "link",
     ];
 
     let content_lower = content.to_lowercase();
@@ -525,7 +556,10 @@ fn parse_adr_metadata(content: &str) -> AdrMetadata {
         if let Some(section) = current_section {
             let trimmed = line.trim();
             if trimmed.starts_with("- ") || trimmed.starts_with("* ") {
-                let item = trimmed.trim_start_matches("- ").trim_start_matches("* ").to_string();
+                let item = trimmed
+                    .trim_start_matches("- ")
+                    .trim_start_matches("* ")
+                    .to_string();
                 match section {
                     "applies_when" => applies_when.push(item),
                     "anti_patterns" => anti_patterns.push(item),
@@ -561,10 +595,10 @@ fn calculate_relevance_score(context_words: &[&str], adr: &AdrSummary) -> (f64, 
         // Match if word or keyword share a common stem (3+ chars)
         let word_stem = &word[..word.len().min(4)];
         if adr.keywords.iter().any(|k| {
-            k.contains(word) ||
-            word.contains(k.as_str()) ||
-            (word.len() >= 4 && k.starts_with(word_stem)) ||
-            (k.len() >= 4 && word.starts_with(&k[..k.len().min(4)]))
+            k.contains(word)
+                || word.contains(k.as_str())
+                || (word.len() >= 4 && k.starts_with(word_stem))
+                || (k.len() >= 4 && word.starts_with(&k[..k.len().min(4)]))
         }) {
             keyword_matches += 1;
         }
@@ -581,12 +615,13 @@ fn calculate_relevance_score(context_words: &[&str], adr: &AdrSummary) -> (f64, 
         for word in context_words {
             let word_stem = &word[..word.len().min(4)];
             // Check for word match or stem match
-            if applies_lower.contains(word) ||
-               applies_lower.split_whitespace().any(|w| {
-                   w.contains(word) ||
-                   word.contains(w) ||
-                   (w.len() >= 4 && w.starts_with(word_stem))
-               }) {
+            if applies_lower.contains(word)
+                || applies_lower.split_whitespace().any(|w| {
+                    w.contains(word)
+                        || word.contains(w)
+                        || (w.len() >= 4 && w.starts_with(word_stem))
+                })
+            {
                 score += 0.25;
                 reasons.push(format!("Applies when: {}", applies));
                 break;
@@ -599,12 +634,13 @@ fn calculate_relevance_score(context_words: &[&str], adr: &AdrSummary) -> (f64, 
         let anti_lower = anti.to_lowercase();
         for word in context_words {
             let word_stem = &word[..word.len().min(4)];
-            if anti_lower.contains(word) ||
-               anti_lower.split_whitespace().any(|w| {
-                   w.contains(word) ||
-                   word.contains(w) ||
-                   (w.len() >= 4 && w.starts_with(word_stem))
-               }) {
+            if anti_lower.contains(word)
+                || anti_lower.split_whitespace().any(|w| {
+                    w.contains(word)
+                        || word.contains(w)
+                        || (w.len() >= 4 && w.starts_with(word_stem))
+                })
+            {
                 score += 0.25;
                 reasons.push(format!("Anti-pattern match: {}", anti));
                 break;
@@ -625,7 +661,10 @@ fn calculate_relevance_score(context_words: &[&str], adr: &AdrSummary) -> (f64, 
 }
 
 /// Find documents that reference an ADR
-fn find_adr_references(state: &ProjectState, adr_id: Option<i64>) -> Result<Vec<Value>, ServerError> {
+fn find_adr_references(
+    state: &ProjectState,
+    adr_id: Option<i64>,
+) -> Result<Vec<Value>, ServerError> {
     let mut references = Vec::new();
 
     let Some(id) = adr_id else {
@@ -647,8 +686,8 @@ fn find_adr_references(state: &ProjectState, adr_id: Option<i64>) -> Result<Vec<
     let rows = stmt
         .query_map(rusqlite::params![id], |row| {
             Ok((
-                row.get::<_, String>(1)?, // doc_type
-                row.get::<_, String>(2)?, // title
+                row.get::<_, String>(1)?,         // doc_type
+                row.get::<_, String>(2)?,         // title
                 row.get::<_, Option<String>>(3)?, // created_at
             ))
         })
@@ -668,7 +707,7 @@ fn find_adr_references(state: &ProjectState, adr_id: Option<i64>) -> Result<Vec<
 
 /// Compute hash for caching relevance results
 fn compute_context_hash(context: &str) -> String {
-    use sha2::{Sha256, Digest};
+    use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
     hasher.update(context.as_bytes());
     format!("{:x}", hasher.finalize())[..16].to_string()
@@ -730,7 +769,6 @@ fn check_dead_code(project_root: &Path) -> DeadCodeResult {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -743,7 +781,8 @@ mod tests {
 
     #[test]
     fn test_extract_keywords() {
-        let content = "# ADR 0004: Evidence\n\nShow, don't tell. Testing is the primary form of evidence.";
+        let content =
+            "# ADR 0004: Evidence\n\nShow, don't tell. Testing is the primary form of evidence.";
         let keywords = extract_keywords(content);
         assert!(keywords.contains(&"evidence".to_string()));
         assert!(keywords.contains(&"testing".to_string()));
@@ -755,14 +794,22 @@ mod tests {
             number: 4,
             title: "Evidence".to_string(),
             summary: "Show, don't tell".to_string(),
-            keywords: vec!["test".to_string(), "testing".to_string(), "evidence".to_string()],
+            keywords: vec![
+                "test".to_string(),
+                "testing".to_string(),
+                "evidence".to_string(),
+            ],
             applies_when: vec!["Writing tests".to_string()],
             anti_patterns: vec!["Claiming code works without tests".to_string()],
         };
 
         let context: Vec<&str> = vec!["testing", "strategy"];
         let (score, reason) = calculate_relevance_score(&context, &adr);
-        assert!(score > 0.5, "Expected high relevance for testing context, got {}", score);
+        assert!(
+            score > 0.5,
+            "Expected high relevance for testing context, got {}",
+            score
+        );
         assert!(!reason.is_empty());
     }
 

@@ -1,0 +1,10 @@
+[PERSPECTIVE P01: In-memory assembly eliminates verdict denormalization entirely, resolving all three Cluster E tensions at once]
+The verdict's denormalized arrays (`tensions_resolved`, `key_evidence`, `key_claims`, `recommendations_adopted`) exist solely because RFC 0058 assumes read-time graph traversal is expensive in DynamoDB. It is not -- at actual volumes (~100 items per dialogue), a single `Query(PK=dialogue#{id})` returns every entity and every ref in one round-trip, under 10KB. Build the adjacency map in memory, traverse it in microseconds, and the verdict entity stores only its own semantic content -- no pre-computed arrays, no write-amplification, no staleness risk. This dissolves MUFFIN R1-T01 (consistency) because there is nothing to go stale, MACARON R1-T01 (unmeasured cost) because there is no denormalization to measure, and ECLAIR R1-T01 (domain model leakage) because the denormalized fields never enter the domain model in the first place.
+
+[PERSPECTIVE P02: Refs stay in the table as structural metadata; Strudel's per-entity adjacency lists are unnecessary]
+Strudel's R1 proposal to replace the refs table with per-entity JSON adjacency lists trades one denormalization problem for another -- now every ref mutation requires updating two entities (source and target) inside the encrypted payload, which is worse write-amplification than the verdict arrays. The refs as they exist in RFC 0058 (`SK: ref#{source}#{type}#{target}`, cleartext, no encryption) are already the cheapest possible representation: one item per edge, no encrypted payload to re-seal on update, and they arrive for free in the full-partition load that powers in-memory assembly.
+
+[RESOLVED MUFFIN R1-T01, MACARON R1-T01, ECLAIR R1-T01]
+If the trait contract specifies that verdict assembly is computed at read time via full-partition load plus in-memory traversal -- not stored as denormalized arrays -- all three denormalization tensions become moot because the denormalization itself is eliminated.
+
+---

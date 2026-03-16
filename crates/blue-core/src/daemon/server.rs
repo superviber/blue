@@ -253,7 +253,10 @@ impl IntoResponse for AppError {
             }
             AppError::LockPoisoned => {
                 warn!("Lock poisoned");
-                (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error".to_string())
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Internal server error".to_string(),
+                )
             }
         };
 
@@ -278,7 +281,12 @@ mod tests {
     async fn test_health() {
         let app = create_router(test_state());
         let response = app
-            .oneshot(Request::builder().uri("/health").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
 
@@ -289,7 +297,12 @@ mod tests {
     async fn test_list_realms_empty() {
         let app = create_router(test_state());
         let response = app
-            .oneshot(Request::builder().uri("/realms").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/realms")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
 

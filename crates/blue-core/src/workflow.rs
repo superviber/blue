@@ -65,7 +65,11 @@ impl RfcStatus {
         match self {
             RfcStatus::Draft => vec![RfcStatus::Accepted, RfcStatus::Superseded],
             RfcStatus::Accepted => {
-                vec![RfcStatus::InProgress, RfcStatus::Draft, RfcStatus::Superseded]
+                vec![
+                    RfcStatus::InProgress,
+                    RfcStatus::Draft,
+                    RfcStatus::Superseded,
+                ]
             }
             RfcStatus::InProgress => vec![RfcStatus::Implemented, RfcStatus::Superseded],
             RfcStatus::Implemented => vec![],
@@ -184,7 +188,9 @@ pub enum WorkflowError {
     #[error("'{0}' isn't a valid status. Try: draft, accepted, in-progress, implemented")]
     InvalidStatus(String),
 
-    #[error("'{0}' isn't a valid outcome. Try: no-action, decision-made, recommends-implementation")]
+    #[error(
+        "'{0}' isn't a valid outcome. Try: no-action, decision-made, recommends-implementation"
+    )]
     InvalidOutcome(String),
 
     #[error("Can't go from {from} to {to}. {hint}")]
@@ -208,7 +214,11 @@ pub fn validate_rfc_transition(from: RfcStatus, to: RfcStatus) -> Result<(), Wor
                 "Already implemented. Create a new RFC for changes".to_string()
             }
             (RfcStatus::Superseded, _) => "This RFC has been superseded".to_string(),
-            _ => format!("From {} you can go to: {:?}", from.as_str(), from.allowed_transitions()),
+            _ => format!(
+                "From {} you can go to: {:?}",
+                from.as_str(),
+                from.allowed_transitions()
+            ),
         };
 
         Err(WorkflowError::InvalidTransition {
@@ -236,8 +246,14 @@ mod tests {
     #[test]
     fn test_parse_status() {
         assert_eq!(RfcStatus::parse("draft").unwrap(), RfcStatus::Draft);
-        assert_eq!(RfcStatus::parse("in-progress").unwrap(), RfcStatus::InProgress);
-        assert_eq!(RfcStatus::parse("IN_PROGRESS").unwrap(), RfcStatus::InProgress);
+        assert_eq!(
+            RfcStatus::parse("in-progress").unwrap(),
+            RfcStatus::InProgress
+        );
+        assert_eq!(
+            RfcStatus::parse("IN_PROGRESS").unwrap(),
+            RfcStatus::InProgress
+        );
     }
 
     #[test]

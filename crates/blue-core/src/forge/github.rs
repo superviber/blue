@@ -45,7 +45,8 @@ impl Forge for GitHubForge {
             draft: opts.draft,
         };
 
-        let response = self.client
+        let response = self
+            .client
             .post(&url)
             .header("Authorization", self.auth_header())
             .header("Accept", "application/vnd.github+json")
@@ -73,7 +74,8 @@ impl Forge for GitHubForge {
     fn get_pr(&self, owner: &str, repo: &str, number: u64) -> Result<PullRequest, ForgeError> {
         let url = Self::api_url(&format!("/repos/{}/{}/pulls/{}", owner, repo, number));
 
-        let response = self.client
+        let response = self
+            .client
             .get(&url)
             .header("Authorization", self.auth_header())
             .header("Accept", "application/vnd.github+json")
@@ -105,7 +107,13 @@ impl Forge for GitHubForge {
         Ok(pr.into_pull_request())
     }
 
-    fn merge_pr(&self, owner: &str, repo: &str, number: u64, strategy: MergeStrategy) -> Result<(), ForgeError> {
+    fn merge_pr(
+        &self,
+        owner: &str,
+        repo: &str,
+        number: u64,
+        strategy: MergeStrategy,
+    ) -> Result<(), ForgeError> {
         let url = Self::api_url(&format!("/repos/{}/{}/pulls/{}/merge", owner, repo, number));
 
         let merge_method = match strategy {
@@ -118,7 +126,8 @@ impl Forge for GitHubForge {
             merge_method: merge_method.to_string(),
         };
 
-        let response = self.client
+        let response = self
+            .client
             .put(&url)
             .header("Authorization", self.auth_header())
             .header("Accept", "application/vnd.github+json")
@@ -142,7 +151,8 @@ impl Forge for GitHubForge {
     fn pr_is_merged(&self, owner: &str, repo: &str, number: u64) -> Result<bool, ForgeError> {
         let url = Self::api_url(&format!("/repos/{}/{}/pulls/{}/merge", owner, repo, number));
 
-        let response = self.client
+        let response = self
+            .client
             .get(&url)
             .header("Authorization", self.auth_header())
             .header("Accept", "application/vnd.github+json")
@@ -199,7 +209,11 @@ impl GitHubPr {
             number: self.number,
             url: self.html_url,
             title: self.title,
-            state: if self.state == "open" { PrState::Open } else { PrState::Closed },
+            state: if self.state == "open" {
+                PrState::Open
+            } else {
+                PrState::Closed
+            },
             merged: self.merged.unwrap_or(false),
             head: self.head.ref_name,
             base: self.base.ref_name,

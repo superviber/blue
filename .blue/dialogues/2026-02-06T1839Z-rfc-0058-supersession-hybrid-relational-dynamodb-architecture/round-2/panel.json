@@ -1,0 +1,97 @@
+{
+  "agents": [
+    {
+      "emoji": "🧁",
+      "focus": "Propose concrete trait governance gate. Resolve CROISSANT R1-T01.",
+      "name": "Croissant",
+      "relevance": 0.68,
+      "role": "Rust Systems Engineer (Trait Abstractions)",
+      "tier": "Adjacent"
+    },
+    {
+      "emoji": "🧁",
+      "focus": "Detail refs-table-only redesign. Resolve STRUDEL R1-T01 (trait shaping).",
+      "name": "Strudel",
+      "relevance": 0.3,
+      "role": "Contrarian (Challenge All Assumptions)",
+      "tier": "Wildcard"
+    },
+    {
+      "emoji": "🧁",
+      "focus": "Propose implementation sequencing. Resolve GALETTE R1-T01 (prerequisite inversion).",
+      "name": "Galette",
+      "relevance": 0.65,
+      "role": "Developer Experience Engineer",
+      "tier": "Adjacent"
+    },
+    {
+      "emoji": "🧁",
+      "focus": "Specify encryption envelope portability requirements. Resolve TARTLET R1-T01.",
+      "name": "Tartlet",
+      "relevance": 0.7,
+      "role": "Data Migration Specialist",
+      "tier": "Adjacent"
+    },
+    {
+      "emoji": "🧁",
+      "focus": "Address denormalization cluster with in-memory assembly pattern. Counter or resolve MUFFIN R1-T01, ECLAIR R1-T01, MACARON R1-T01.",
+      "name": "Cannoli",
+      "relevance": 0.42,
+      "role": "Serverless & Edge Deployment Advocate",
+      "tier": "Wildcard"
+    },
+    {
+      "emoji": "🧁",
+      "focus": "Verdict consistency mechanism. Resolve or accept resolution for MUFFIN R1-T01, ECLAIR R1-T01.",
+      "name": "Muffin",
+      "relevance": 0.95,
+      "role": "Relational Database Architect",
+      "tier": "Core"
+    }
+  ],
+  "history": {
+    "created_count": 0,
+    "experts": [
+      {
+        "focus": "Propose concrete trait governance gate. Resolve CROISSANT R1-T01.",
+        "name": "Croissant",
+        "role": "Rust Systems Engineer (Trait Abstractions)",
+        "source": "retained"
+      },
+      {
+        "focus": "Detail refs-table-only redesign. Resolve STRUDEL R1-T01 (trait shaping).",
+        "name": "Strudel",
+        "role": "Contrarian (Challenge All Assumptions)",
+        "source": "retained"
+      },
+      {
+        "focus": "Propose implementation sequencing. Resolve GALETTE R1-T01 (prerequisite inversion).",
+        "name": "Galette",
+        "role": "Developer Experience Engineer",
+        "source": "retained"
+      },
+      {
+        "focus": "Specify encryption envelope portability requirements. Resolve TARTLET R1-T01.",
+        "name": "Tartlet",
+        "role": "Data Migration Specialist",
+        "source": "retained"
+      },
+      {
+        "focus": "Address denormalization cluster with in-memory assembly pattern. Counter or resolve MUFFIN R1-T01, ECLAIR R1-T01, MACARON R1-T01.",
+        "name": "Cannoli",
+        "role": "Serverless & Edge Deployment Advocate",
+        "source": "retained"
+      },
+      {
+        "focus": "Verdict consistency mechanism. Resolve or accept resolution for MUFFIN R1-T01, ECLAIR R1-T01.",
+        "name": "Muffin",
+        "role": "Relational Database Architect",
+        "source": "retained"
+      }
+    ],
+    "from_pool_count": 0,
+    "panel_size": 6,
+    "retained_count": 6,
+    "round": 2
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "round": 0,
+  "panel": [
+    { "name": "Muffin", "role": "Filesystem Architect", "tier": "core", "source": "pool" },
+    { "name": "Cupcake", "role": "Knowledge Engineer", "tier": "core", "source": "pool" },
+    { "name": "Scone", "role": "AI Agent Specialist", "tier": "core", "source": "pool" },
+    { "name": "Eclair", "role": "Developer Experience Lead", "tier": "core", "source": "pool" },
+    { "name": "Donut", "role": "API Designer", "tier": "core", "source": "pool" },
+    { "name": "Brioche", "role": "Systems Architect", "tier": "core", "source": "pool" },
+    { "name": "Croissant", "role": "Database Architect", "tier": "adjacent", "source": "pool" },
+    { "name": "Macaron", "role": "Security Engineer", "tier": "adjacent", "source": "pool" },
+    { "name": "Cannoli", "role": "Graph Theorist", "tier": "adjacent", "source": "pool" },
+    { "name": "Strudel", "role": "Cognitive Scientist", "tier": "adjacent", "source": "pool" },
+    { "name": "Beignet", "role": "Library Scientist", "tier": "wildcard", "source": "pool" },
+    { "name": "Churro", "role": "Contrarian", "tier": "wildcard", "source": "pool" }
+  ]
+}

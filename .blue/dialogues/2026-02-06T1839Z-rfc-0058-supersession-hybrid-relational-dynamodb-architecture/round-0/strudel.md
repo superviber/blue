@@ -1,0 +1,10 @@
+[PERSPECTIVE P01: The entire debate assumes the wrong unit of optimization -- the schema is the problem, not the storage engine]
+Every expert is arguing about whether DynamoDB or PostgreSQL better serves the RFC 0051 schema, but nobody is asking whether 14 entity types with 8 edge types and recursive dependency chains are the right schema for a dialogue system that currently runs on flat markdown files. The refs table, the lifecycle state machines, the denormalized verdict fields -- these exist because the schema was designed as a relational model first (RFC 0051 defines SQLite tables) and then force-fitted into DynamoDB (RFC 0058). A system that genuinely started from DynamoDB's strengths would model dialogues as immutable event streams -- append-only round records with materialized views -- not as a mutable relational graph that requires cross-entity JOINs to answer basic questions. The storage engine debate is a symptom; the schema's relational DNA is the disease.
+
+[PERSPECTIVE P02: Neither DynamoDB Local nor embedded PostgreSQL is the real parity threat -- the encryption layer is]
+The parity arguments on both sides fixate on database engine fidelity, but RFC 0058's `LocalFileKeyProvider` uses file-based HKDF while production uses KMS API calls with different latency, error modes, and IAM boundaries. A subtle bug in `derive_kek` that only manifests under KMS throttling or eventual consistency of key grants will never surface locally regardless of whether the database is DynamoDB Local or PostgreSQL -- making the database parity debate a distraction from the harder parity problem sitting one layer above it.
+
+[TENSION T01: Event-sourced schema redesign vs. sunk-cost commitment to RFC 0051's relational model]
+If the RFC 0051 relational schema is the root cause of the storage engine mismatch, the honest architectural response is to redesign the schema around append-only events rather than choosing a database that patches over the mismatch -- but that would invalidate both RFC 0051 and RFC 0058 simultaneously.
+
+---

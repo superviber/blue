@@ -1,0 +1,76 @@
+{
+  "domain": "Data Architecture & Storage Strategy",
+  "question": "Should RFC 0058 be superseded by a hybrid architecture that pairs a scalable relational database (PostgreSQL, CockroachDB, Neon, Turso) with DynamoDB, given that the RFC 0051 schema implements a typed directed graph with M:N cross-references, lifecycle tracking, recursive dependency chains, and audit trails across 14 entity types?",
+  "experts": [
+    {
+      "role": "Relational Database Architect",
+      "tier": "core",
+      "relevance": 0.95
+    },
+    {
+      "role": "DynamoDB Single-Table Design Specialist",
+      "tier": "core",
+      "relevance": 0.93
+    },
+    {
+      "role": "Platform Engineer (Local-Prod Parity)",
+      "tier": "core",
+      "relevance": 0.9
+    },
+    {
+      "role": "Encryption & Key Management Architect",
+      "tier": "core",
+      "relevance": 0.88
+    },
+    {
+      "role": "Graph Query Pattern Analyst",
+      "tier": "adjacent",
+      "relevance": 0.78
+    },
+    {
+      "role": "Cloud Cost & Scaling Economist",
+      "tier": "adjacent",
+      "relevance": 0.72
+    },
+    {
+      "role": "SRE & Operational Complexity Lead",
+      "tier": "adjacent",
+      "relevance": 0.7
+    },
+    {
+      "role": "Rust Systems Engineer (Trait Abstractions)",
+      "tier": "adjacent",
+      "relevance": 0.68
+    },
+    {
+      "role": "Developer Experience Engineer",
+      "tier": "adjacent",
+      "relevance": 0.65
+    },
+    {
+      "role": "Data Migration & Zero-Downtime Specialist",
+      "tier": "adjacent",
+      "relevance": 0.6
+    },
+    {
+      "role": "Serverless & Edge Deployment Advocate",
+      "tier": "wildcard",
+      "relevance": 0.42
+    },
+    {
+      "role": "Startup CTO (Ship-Speed Pragmatist)",
+      "tier": "wildcard",
+      "relevance": 0.38
+    },
+    {
+      "role": "Data Compliance & Audit Officer",
+      "tier": "wildcard",
+      "relevance": 0.35
+    },
+    {
+      "role": "Contrarian (Challenge All Assumptions)",
+      "tier": "wildcard",
+      "relevance": 0.3
+    }
+  ]
+}

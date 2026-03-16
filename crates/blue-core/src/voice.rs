@@ -67,7 +67,10 @@ mod tests {
 
     #[test]
     fn success_is_concise() {
-        let msg = success("Marked 'implement auth' as done", Some("4 of 7 tasks complete now"));
+        let msg = success(
+            "Marked 'implement auth' as done",
+            Some("4 of 7 tasks complete now"),
+        );
         assert!(!msg.contains("Successfully"));
         assert!(!msg.contains('!'));
     }

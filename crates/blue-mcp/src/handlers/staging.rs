@@ -213,10 +213,7 @@ pub fn handle_create(args: &Value, repo_path: &std::path::Path) -> Result<Value,
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| repo_path.to_path_buf());
 
-    let ttl_hours = args
-        .get("ttl_hours")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(24);
+    let ttl_hours = args.get("ttl_hours").and_then(|v| v.as_u64()).unwrap_or(24);
 
     let stack = args.get("stack").and_then(|v| v.as_str());
 
@@ -230,7 +227,10 @@ pub fn handle_create(args: &Value, repo_path: &std::path::Path) -> Result<Value,
         ("cdk", cmd, detect_cdk_stacks(&path))
     } else if path.join("main.tf").exists() || path.join("terraform").is_dir() {
         let cmd = if let Some(s) = stack {
-            format!("terraform apply -var=\"environment=staging\" -target=module.{}", s)
+            format!(
+                "terraform apply -var=\"environment=staging\" -target=module.{}",
+                s
+            )
         } else {
             "terraform apply -var=\"environment=staging\"".to_string()
         };
@@ -280,7 +280,10 @@ pub fn handle_destroy(args: &Value, repo_path: &std::path::Path) -> Result<Value
     let (iac_type, destroy_command) = if path.join("cdk.json").exists() {
         ("cdk", "cdk destroy --all --context stage=staging --force")
     } else if path.join("main.tf").exists() || path.join("terraform").is_dir() {
-        ("terraform", "terraform destroy -var=\"environment=staging\" -auto-approve")
+        (
+            "terraform",
+            "terraform destroy -var=\"environment=staging\" -auto-approve",
+        )
     } else if path.join("Pulumi.yaml").exists() {
         ("pulumi", "pulumi destroy --stack staging --yes")
     } else {
@@ -322,19 +325,19 @@ pub fn handle_cost(args: &Value, repo_path: &std::path::Path) -> Result<Value, S
         (
             "cdk",
             "cdk synth && infracost breakdown --path cdk.out",
-            "Install infracost and run cdk synth first"
+            "Install infracost and run cdk synth first",
         )
     } else if path.join("main.tf").exists() || path.join("terraform").is_dir() {
         (
             "terraform",
             "infracost breakdown --path .",
-            "Install infracost: brew install infracost"
+            "Install infracost: brew install infracost",
         )
     } else if path.join("Pulumi.yaml").exists() {
         (
             "pulumi",
             "# Pulumi doesn't have built-in cost estimation",
-            "Use cloud provider cost calculators"
+            "Use cloud provider cost calculators",
         )
     } else {
         return Ok(json!({
@@ -445,9 +448,8 @@ fn detect_cdk_stacks(path: &std::path::Path) -> Vec<String> {
                     if let Ok(content) = std::fs::read_to_string(&file_path) {
                         for line in content.lines() {
                             if line.contains("extends") && line.contains("Stack") {
-                                if let Some(class_name) = line.split_whitespace()
-                                    .skip_while(|&w| w != "class")
-                                    .nth(1)
+                                if let Some(class_name) =
+                                    line.split_whitespace().skip_while(|&w| w != "class").nth(1)
                                 {
                                     let name = class_name.trim_end_matches('{').to_string();
                                     if !stacks.contains(&name) {

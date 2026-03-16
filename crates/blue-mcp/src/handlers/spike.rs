@@ -4,7 +4,7 @@
 
 use std::fs;
 
-use blue_core::{DocType, Document, ProjectState, Spike, SpikeOutcome, title_to_slug};
+use blue_core::{title_to_slug, DocType, Document, ProjectState, Spike, SpikeOutcome};
 use serde_json::{json, Value};
 
 use crate::error::ServerError;
@@ -145,8 +145,9 @@ pub fn handle_complete(state: &ProjectState, args: &Value) -> Result<Value, Serv
         .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
 
     // Rename file for new status (RFC 0031)
-    let final_path = blue_core::rename_for_status(&state.home.docs_path, &state.store, &doc, status_str)
-        .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+    let final_path =
+        blue_core::rename_for_status(&state.home.docs_path, &state.store, &doc, status_str)
+            .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
 
     // Update markdown at effective path
     let effective_path = final_path.as_deref().or(doc.file_path.as_deref());
@@ -172,4 +173,3 @@ pub fn handle_complete(state: &ProjectState, args: &Value) -> Result<Value, Serv
         )
     }))
 }
-

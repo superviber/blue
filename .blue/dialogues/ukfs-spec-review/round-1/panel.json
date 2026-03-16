@@ -1,0 +1,15 @@
+{
+  "round": 1,
+  "focus": "Resolve naming convention, relation modeling, and extensibility tensions",
+  "panel": [
+    { "name": "Brioche", "role": "Systems Architect", "tier": "core", "source": "retained" },
+    { "name": "Beignet", "role": "Library Scientist", "tier": "wildcard", "source": "retained" },
+    { "name": "Muffin", "role": "Filesystem Architect", "tier": "core", "source": "retained" },
+    { "name": "Cannoli", "role": "Graph Theorist", "tier": "adjacent", "source": "retained" },
+    { "name": "Eclair", "role": "Developer Experience Lead", "tier": "core", "source": "retained" },
+    { "name": "Strudel", "role": "Cognitive Scientist", "tier": "adjacent", "source": "retained" },
+    { "name": "Tartlet", "role": "Git/VCS Expert", "tier": "adjacent", "source": "pool", "focus": "Versioning, merge conflicts, collaborative editing" },
+    { "name": "Galette", "role": "Standards Expert", "tier": "adjacent", "source": "pool", "focus": "RFC conventions, spec completeness, interoperability" },
+    { "name": "Palmier", "role": "Implementation Pragmatist", "tier": "adjacent", "source": "created", "focus": "Real-world validation, proof-of-concept design, implementation trade-offs" }
+  ]
+}

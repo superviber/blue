@@ -9,7 +9,10 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use tracing::{debug, info};
 
-use blue_core::{detect_blue, BlueConfig, DocType, Document, ProjectState, Rfc, RfcStatus, title_to_slug, validate_rfc_transition};
+use blue_core::{
+    detect_blue, title_to_slug, validate_rfc_transition, BlueConfig, DocType, Document,
+    ProjectState, Rfc, RfcStatus,
+};
 
 use crate::error::ServerError;
 
@@ -27,7 +30,8 @@ fn parse_produces_rfcs(content: &str) -> Vec<String> {
         Some(re) => {
             if let Some(caps) = re.captures(content) {
                 if let Some(m) = caps.get(1) {
-                    return m.as_str()
+                    return m
+                        .as_str()
                         .split(',')
                         .map(|s| s.trim().to_string())
                         .filter(|s| !s.is_empty())
@@ -105,7 +109,9 @@ impl BlueServer {
     fn ensure_state(&mut self) -> Result<&ProjectState, ServerError> {
         if self.state.is_none() {
             // RFC 0020: explicit cwd → MCP roots → walk tree → fail with guidance
-            let cwd = self.cwd.clone()
+            let cwd = self
+                .cwd
+                .clone()
                 .or_else(|| self.mcp_root.clone())
                 .or_else(|| self.find_blue_root())
                 .ok_or_else(|| self.not_found_error())?;
@@ -127,7 +133,10 @@ impl BlueServer {
             }
 
             // Try to get project name from the current path
-            let project = home.project_name.clone().unwrap_or_else(|| "default".to_string());
+            let project = home
+                .project_name
+                .clone()
+                .unwrap_or_else(|| "default".to_string());
 
             let state = ProjectState::load(home, &project)
                 .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
@@ -141,7 +150,9 @@ impl BlueServer {
     fn ensure_state_mut(&mut self) -> Result<&mut ProjectState, ServerError> {
         if self.state.is_none() {
             // RFC 0020: explicit cwd → MCP roots → walk tree → fail with guidance
-            let cwd = self.cwd.clone()
+            let cwd = self
+                .cwd
+                .clone()
                 .or_else(|| self.mcp_root.clone())
                 .or_else(|| self.find_blue_root())
                 .ok_or_else(|| self.not_found_error())?;
@@ -163,7 +174,10 @@ impl BlueServer {
             }
 
             // Try to get project name from the current path
-            let project = home.project_name.clone().unwrap_or_else(|| "default".to_string());
+            let project = home
+                .project_name
+                .clone()
+                .unwrap_or_else(|| "default".to_string());
 
             let state = ProjectState::load(home, &project)
                 .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
@@ -239,7 +253,10 @@ impl BlueServer {
             "mcp_root": self.mcp_root.as_ref().map(|p| p.display().to_string()),
             "blue_found_via_walk": Self::find_blue_root_static().map(|p| p.display().to_string()),
         });
-        let _ = std::fs::write("/tmp/blue-mcp-diag.json", serde_json::to_string_pretty(&diag).unwrap_or_default());
+        let _ = std::fs::write(
+            "/tmp/blue-mcp-diag.json",
+            serde_json::to_string_pretty(&diag).unwrap_or_default(),
+        );
 
         // RFC 0020: Extract roots from client capabilities (MCP spec)
         if let Some(p) = params {
@@ -2779,13 +2796,17 @@ impl BlueServer {
             "blue_dialogue_round_context" => self.handle_dialogue_round_context(&call.arguments),
             "blue_dialogue_expert_create" => self.handle_dialogue_expert_create(&call.arguments),
             "blue_dialogue_round_register" => self.handle_dialogue_round_register(&call.arguments),
-            "blue_dialogue_verdict_register" => self.handle_dialogue_verdict_register(&call.arguments),
+            "blue_dialogue_verdict_register" => {
+                self.handle_dialogue_verdict_register(&call.arguments)
+            }
             "blue_dialogue_export" => self.handle_dialogue_export(&call.arguments),
             // Phase 8: Playwright handler
             "blue_playwright_verify" => self.handle_playwright_verify(&call.arguments),
             // Phase 9: Post-mortem handlers
             "blue_postmortem_create" => self.handle_postmortem_create(&call.arguments),
-            "blue_postmortem_action_to_rfc" => self.handle_postmortem_action_to_rfc(&call.arguments),
+            "blue_postmortem_action_to_rfc" => {
+                self.handle_postmortem_action_to_rfc(&call.arguments)
+            }
             // Phase 9: Runbook handlers
             "blue_runbook_create" => self.handle_runbook_create(&call.arguments),
             "blue_runbook_update" => self.handle_runbook_update(&call.arguments),
@@ -2803,14 +2824,22 @@ impl BlueServer {
             // RFC 0038: Realm RFC Validation
             "blue_rfc_validate_realm" => self.handle_validate_realm(&call.arguments),
             // RFC 0005: LLM tools
-            "blue_llm_start" => crate::handlers::llm::handle_start(&call.arguments.unwrap_or_default()),
+            "blue_llm_start" => {
+                crate::handlers::llm::handle_start(&call.arguments.unwrap_or_default())
+            }
             "blue_llm_stop" => crate::handlers::llm::handle_stop(),
             "blue_llm_status" => crate::handlers::llm::handle_status(),
             "blue_llm_providers" => crate::handlers::llm::handle_providers(),
             "blue_model_list" => crate::handlers::llm::handle_model_list(),
-            "blue_model_pull" => crate::handlers::llm::handle_model_pull(&call.arguments.unwrap_or_default()),
-            "blue_model_remove" => crate::handlers::llm::handle_model_remove(&call.arguments.unwrap_or_default()),
-            "blue_model_warmup" => crate::handlers::llm::handle_model_warmup(&call.arguments.unwrap_or_default()),
+            "blue_model_pull" => {
+                crate::handlers::llm::handle_model_pull(&call.arguments.unwrap_or_default())
+            }
+            "blue_model_remove" => {
+                crate::handlers::llm::handle_model_remove(&call.arguments.unwrap_or_default())
+            }
+            "blue_model_warmup" => {
+                crate::handlers::llm::handle_model_warmup(&call.arguments.unwrap_or_default())
+            }
             // RFC 0006: Delete tools
             "blue_delete" => self.handle_delete(&call.arguments),
             "blue_restore" => self.handle_restore(&call.arguments),
@@ -2845,8 +2874,17 @@ impl BlueServer {
                 let mut total_drift = 0;
                 let mut drift_details = serde_json::Map::new();
 
-                for doc_type in &[DocType::Rfc, DocType::Spike, DocType::Adr, DocType::Decision] {
-                    if let Ok(result) = state.store.reconcile(&state.home.docs_path, Some(*doc_type), true) {
+                for doc_type in &[
+                    DocType::Rfc,
+                    DocType::Spike,
+                    DocType::Adr,
+                    DocType::Decision,
+                ] {
+                    if let Ok(result) =
+                        state
+                            .store
+                            .reconcile(&state.home.docs_path, Some(*doc_type), true)
+                    {
                         if result.has_drift() {
                             total_drift += result.drift_count();
                             drift_details.insert(
@@ -2855,7 +2893,7 @@ impl BlueServer {
                                     "unindexed": result.unindexed.len(),
                                     "orphaned": result.orphaned.len(),
                                     "stale": result.stale.len()
-                                })
+                                }),
                             );
                         }
                     }
@@ -2929,14 +2967,12 @@ impl BlueServer {
                     "hint": summary.hint
                 }))
             }
-            Err(_) => {
-                Ok(json!({
-                    "recommendations": [
-                        "Run 'blue init' to set up this project first."
-                    ],
-                    "hint": "Can't find Blue here."
-                }))
-            }
+            Err(_) => Ok(json!({
+                "recommendations": [
+                    "Run 'blue init' to set up this project first."
+                ],
+                "hint": "Can't find Blue here."
+            })),
         }
     }
 
@@ -2954,7 +2990,9 @@ impl BlueServer {
         match self.ensure_state() {
             Ok(state) => {
                 // Get next RFC number
-                let number = state.store.next_number_with_fs(DocType::Rfc, &state.home.docs_path)
+                let number = state
+                    .store
+                    .next_number_with_fs(DocType::Rfc, &state.home.docs_path)
                     .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
 
                 // Generate markdown
@@ -2994,7 +3032,9 @@ impl BlueServer {
                 doc.number = Some(number);
                 doc.file_path = Some(filename.clone());
 
-                let id = state.store.add_document(&doc)
+                let id = state
+                    .store
+                    .add_document(&doc)
                     .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
 
                 Ok(json!({
@@ -3039,7 +3079,9 @@ impl BlueServer {
 
         let state = self.ensure_state()?;
 
-        let doc = state.store.find_document(DocType::Rfc, title)
+        let doc = state
+            .store
+            .find_document(DocType::Rfc, title)
             .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
 
         let doc_id = doc.id;
@@ -3051,7 +3093,9 @@ impl BlueServer {
 
         if let Some(id) = doc_id {
             if plan_path.exists() {
-                let cache_mtime = state.store.get_plan_cache_mtime(id)
+                let cache_mtime = state
+                    .store
+                    .get_plan_cache_mtime(id)
                     .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
 
                 if blue_core::is_cache_stale(&plan_path, cache_mtime.as_deref()) {
@@ -3059,12 +3103,16 @@ impl BlueServer {
                     let plan = blue_core::read_plan_file(&plan_path)
                         .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
 
-                    state.store.rebuild_tasks_from_plan(id, &plan.tasks)
+                    state
+                        .store
+                        .rebuild_tasks_from_plan(id, &plan.tasks)
                         .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
 
                     // Update cache mtime
                     let mtime = chrono::Utc::now().to_rfc3339();
-                    state.store.update_plan_cache_mtime(id, &mtime)
+                    state
+                        .store
+                        .update_plan_cache_mtime(id, &mtime)
                         .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
 
                     cache_rebuilt = true;
@@ -3150,14 +3198,16 @@ impl BlueServer {
         let state = self.ensure_state()?;
 
         // Find the document to get its file path and current status
-        let doc = state.store.find_document(DocType::Rfc, title)
+        let doc = state
+            .store
+            .find_document(DocType::Rfc, title)
             .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
 
         // Parse statuses and validate transition (RFC 0014)
-        let current_status = RfcStatus::parse(&doc.status)
-            .map_err(|e| ServerError::Workflow(e.to_string()))?;
-        let target_status = RfcStatus::parse(status_str)
-            .map_err(|e| ServerError::Workflow(e.to_string()))?;
+        let current_status =
+            RfcStatus::parse(&doc.status).map_err(|e| ServerError::Workflow(e.to_string()))?;
+        let target_status =
+            RfcStatus::parse(status_str).map_err(|e| ServerError::Workflow(e.to_string()))?;
 
         // Validate the transition
         validate_rfc_transition(current_status, target_status)
@@ -3172,12 +3222,15 @@ impl BlueServer {
         };
 
         // Update database
-        state.store.update_document_status(DocType::Rfc, title, status_str)
+        state
+            .store
+            .update_document_status(DocType::Rfc, title, status_str)
             .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
 
         // Rename file for new status (RFC 0031)
-        let final_path = blue_core::rename_for_status(&state.home.docs_path, &state.store, &doc, status_str)
-            .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+        let final_path =
+            blue_core::rename_for_status(&state.home.docs_path, &state.store, &doc, status_str)
+                .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
 
         // Update markdown file (RFC 0008) at effective path
         let effective_path = final_path.as_deref().or(doc.file_path.as_deref());
@@ -3206,18 +3259,16 @@ impl BlueServer {
         let hint = match target_status {
             RfcStatus::Accepted => Some(
                 "RFC accepted. Ask the user: 'Ready to begin implementation? \
-                 I'll create a worktree and set up the environment.'"
+                 I'll create a worktree and set up the environment.'",
             ),
             RfcStatus::InProgress => Some(
                 "Implementation started. Work in the worktree, mark plan tasks \
-                 as you complete them."
+                 as you complete them.",
             ),
-            RfcStatus::Implemented => Some(
-                "Implementation complete. Ask the user: 'Ready to create a PR?'"
-            ),
-            RfcStatus::Superseded => Some(
-                "RFC superseded. The newer RFC takes precedence."
-            ),
+            RfcStatus::Implemented => {
+                Some("Implementation complete. Ask the user: 'Ready to create a PR?'")
+            }
+            RfcStatus::Superseded => Some("RFC superseded. The newer RFC takes precedence."),
             RfcStatus::Draft => None,
         };
 
@@ -3275,7 +3326,10 @@ impl BlueServer {
         let source_spike = parse_source_spike(&content)?;
 
         // Find the spike document
-        let spike_doc = state.store.find_document(DocType::Spike, &source_spike).ok()?;
+        let spike_doc = state
+            .store
+            .find_document(DocType::Spike, &source_spike)
+            .ok()?;
 
         // Check if spike has produces_rfcs field - if so, verify all are resolved
         if let Some(spike_path) = &spike_doc.file_path {
@@ -3327,14 +3381,16 @@ impl BlueServer {
         }
 
         // All checks passed - close the spike
-        let _ = state.store.update_document_status(DocType::Spike, &source_spike, "complete");
+        let _ = state
+            .store
+            .update_document_status(DocType::Spike, &source_spike, "complete");
 
         // Rename spike file (.wip.md -> .done.md) via RFC 0031
         if let Ok(Some(new_path)) = blue_core::rename_for_status(
             &state.home.docs_path,
             &state.store,
             &spike_doc,
-            "complete"
+            "complete",
         ) {
             let full_new_path = state.home.docs_path.join(&new_path);
             let _ = blue_core::update_markdown_status(&full_new_path, "complete");
@@ -3367,7 +3423,8 @@ impl BlueServer {
             .filter(|adr| {
                 adr.get("confidence")
                     .and_then(|c| c.as_f64())
-                    .unwrap_or(0.0) > 0.7
+                    .unwrap_or(0.0)
+                    > 0.7
             })
             .collect();
 
@@ -3377,8 +3434,16 @@ impl BlueServer {
 
         // Check for architectural keywords that suggest a new ADR might be needed
         let title_lower = rfc_title.to_lowercase();
-        let architectural_keywords = ["breaking", "redesign", "architectural", "migration", "refactor"];
-        let suggests_new_adr = architectural_keywords.iter().any(|kw| title_lower.contains(kw));
+        let architectural_keywords = [
+            "breaking",
+            "redesign",
+            "architectural",
+            "migration",
+            "refactor",
+        ];
+        let suggests_new_adr = architectural_keywords
+            .iter()
+            .any(|kw| title_lower.contains(kw));
 
         Some(json!({
             "relevant_adrs": high_confidence,
@@ -3402,12 +3467,18 @@ impl BlueServer {
         let tasks: Vec<String> = args
             .get("tasks")
             .and_then(|v| v.as_array())
-            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
             .unwrap_or_default();
 
         let state = self.ensure_state()?;
 
-        let doc = state.store.find_document(DocType::Rfc, title)
+        let doc = state
+            .store
+            .find_document(DocType::Rfc, title)
             .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
 
         let doc_id = doc.id.ok_or(ServerError::InvalidParams)?;
@@ -3442,20 +3513,25 @@ impl BlueServer {
 
         // Ensure parent directory exists
         if let Some(parent) = plan_path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| ServerError::StateLoadFailed(format!("Failed to create directory: {}", e)))?;
+            std::fs::create_dir_all(parent).map_err(|e| {
+                ServerError::StateLoadFailed(format!("Failed to create directory: {}", e))
+            })?;
         }
 
         blue_core::write_plan_file(&plan_path, &plan)
             .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
 
         // Update SQLite cache
-        state.store.set_tasks(doc_id, &tasks)
+        state
+            .store
+            .set_tasks(doc_id, &tasks)
             .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
 
         // Update cache mtime
         let mtime = chrono::Utc::now().to_rfc3339();
-        state.store.update_plan_cache_mtime(doc_id, &mtime)
+        state
+            .store
+            .update_plan_cache_mtime(doc_id, &mtime)
             .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
 
         Ok(json!({
@@ -3485,7 +3561,9 @@ impl BlueServer {
 
         let state = self.ensure_state()?;
 
-        let doc = state.store.find_document(DocType::Rfc, title)
+        let doc = state
+            .store
+            .find_document(DocType::Rfc, title)
             .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
 
         let doc_id = doc.id.ok_or(ServerError::InvalidParams)?;
@@ -3510,10 +3588,13 @@ impl BlueServer {
                     .ok_or(ServerError::InvalidParams)?
             } else {
                 // Fall back to SQLite
-                let tasks = state.store.get_tasks(doc_id)
+                let tasks = state
+                    .store
+                    .get_tasks(doc_id)
                     .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
 
-                tasks.iter()
+                tasks
+                    .iter()
                     .find(|t| t.description.to_lowercase().contains(&task.to_lowercase()))
                     .map(|t| t.task_index)
                     .ok_or(ServerError::InvalidParams)?
@@ -3522,27 +3603,36 @@ impl BlueServer {
 
         // RFC 0017: Update .plan.md if it exists
         let plan_updated = if plan_path.exists() {
-            let updated_plan = blue_core::update_task_in_plan(&plan_path, task_index as usize, true)
-                .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+            let updated_plan =
+                blue_core::update_task_in_plan(&plan_path, task_index as usize, true)
+                    .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
 
             // Rebuild SQLite cache from plan
-            state.store.rebuild_tasks_from_plan(doc_id, &updated_plan.tasks)
+            state
+                .store
+                .rebuild_tasks_from_plan(doc_id, &updated_plan.tasks)
                 .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
 
             // Update cache mtime
             let mtime = chrono::Utc::now().to_rfc3339();
-            state.store.update_plan_cache_mtime(doc_id, &mtime)
+            state
+                .store
+                .update_plan_cache_mtime(doc_id, &mtime)
                 .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
 
             true
         } else {
             // No plan file - update SQLite directly (legacy behavior)
-            state.store.complete_task(doc_id, task_index)
+            state
+                .store
+                .complete_task(doc_id, task_index)
                 .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
             false
         };
 
-        let progress = state.store.get_task_progress(doc_id)
+        let progress = state
+            .store
+            .get_task_progress(doc_id)
             .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
 
         Ok(json!({
@@ -3573,22 +3663,35 @@ impl BlueServer {
 
         let state = self.ensure_state()?;
 
-        let doc = state.store.find_document(DocType::Rfc, title)
+        let doc = state
+            .store
+            .find_document(DocType::Rfc, title)
             .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
 
         let doc_id = doc.id.ok_or(ServerError::InvalidParams)?;
 
-        let progress = state.store.get_task_progress(doc_id)
+        let progress = state
+            .store
+            .get_task_progress(doc_id)
             .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
 
         let message = if progress.total == 0 {
             "No plan defined yet. Use blue_rfc_plan to add tasks.".to_string()
         } else if progress.percentage == 100 {
-            format!("All {} tasks complete. Ready to mark as implemented.", progress.total)
+            format!(
+                "All {} tasks complete. Ready to mark as implemented.",
+                progress.total
+            )
         } else if progress.percentage >= 70 {
-            format!("{}% done ({}/{}). Getting close.", progress.percentage, progress.completed, progress.total)
+            format!(
+                "{}% done ({}/{}). Getting close.",
+                progress.percentage, progress.completed, progress.total
+            )
         } else {
-            format!("{}% done ({}/{}). Keep going.", progress.percentage, progress.completed, progress.total)
+            format!(
+                "{}% done ({}/{}). Keep going.",
+                progress.percentage, progress.completed, progress.total
+            )
         };
 
         Ok(json!({
@@ -3611,7 +3714,10 @@ impl BlueServer {
             .and_then(|v| v.as_str())
             .ok_or(ServerError::InvalidParams)?;
 
-        let doc_type = args.get("doc_type").and_then(|v| v.as_str()).and_then(DocType::parse);
+        let doc_type = args
+            .get("doc_type")
+            .and_then(|v| v.as_str())
+            .and_then(DocType::parse);
         let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(10) as usize;
 
         let state = self.ensure_state()?;
@@ -3624,7 +3730,9 @@ impl BlueServer {
             }
         }
 
-        let results = state.store.search_documents(query, doc_type, limit)
+        let results = state
+            .store
+            .search_documents(query, doc_type, limit)
             .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
 
         Ok(json!({
@@ -3640,9 +3748,15 @@ impl BlueServer {
     }
 
     /// Search for documents citing a specific ADR (RFC 0004)
-    fn search_adr_citations(state: &ProjectState, adr_num: i32, limit: usize) -> Result<Value, ServerError> {
+    fn search_adr_citations(
+        state: &ProjectState,
+        adr_num: i32,
+        limit: usize,
+    ) -> Result<Value, ServerError> {
         // Find the ADR document first
-        let adrs = state.store.list_documents(DocType::Adr)
+        let adrs = state
+            .store
+            .list_documents(DocType::Adr)
             .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
 
         let adr_doc = adrs.into_iter().find(|d| d.number == Some(adr_num));
@@ -3672,16 +3786,19 @@ impl BlueServer {
                      LIMIT ?2";
 
         let conn = state.store.conn();
-        let mut stmt = conn.prepare(query)
+        let mut stmt = conn
+            .prepare(query)
             .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
 
-        let rows = stmt.query_map(rusqlite::params![adr_id, limit], |row| {
-            Ok((
-                row.get::<_, String>(1)?, // doc_type
-                row.get::<_, String>(2)?, // title
-                row.get::<_, String>(3)?, // status
-            ))
-        }).map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+        let rows = stmt
+            .query_map(rusqlite::params![adr_id, limit], |row| {
+                Ok((
+                    row.get::<_, String>(1)?, // doc_type
+                    row.get::<_, String>(2)?, // title
+                    row.get::<_, String>(3)?, // status
+                ))
+            })
+            .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
 
         let mut results = Vec::new();
         for row in rows.flatten() {
@@ -3969,17 +4086,21 @@ impl BlueServer {
         let empty = json!({});
         let args = args.as_ref().unwrap_or(&empty);
 
-        let doc_type = args.get("doc_type")
+        let doc_type = args
+            .get("doc_type")
             .and_then(|v| v.as_str())
             .and_then(DocType::parse);
 
-        let dry_run = args.get("dry_run")
+        let dry_run = args
+            .get("dry_run")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
 
         let state = self.ensure_state()?;
 
-        let result = state.store.reconcile(&state.home.docs_path, doc_type, dry_run)
+        let result = state
+            .store
+            .reconcile(&state.home.docs_path, doc_type, dry_run)
             .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
 
         let message = if dry_run {
@@ -3992,10 +4113,13 @@ impl BlueServer {
                         result.orphaned.len(),
                         result.stale.len()
                     ),
-                    Some("Run without --dry-run to fix.")
+                    Some("Run without --dry-run to fix."),
                 )
             } else {
-                blue_core::voice::success("No drift detected. Database and filesystem in sync.", None)
+                blue_core::voice::success(
+                    "No drift detected. Database and filesystem in sync.",
+                    None,
+                )
             }
         } else if result.added > 0 || result.updated > 0 || result.soft_deleted > 0 {
             blue_core::voice::success(
@@ -4003,7 +4127,7 @@ impl BlueServer {
                     "Synced: {} added, {} updated, {} soft-deleted",
                     result.added, result.updated, result.soft_deleted
                 ),
-                None
+                None,
             )
         } else {
             blue_core::voice::success("Already in sync.", None)
@@ -4125,25 +4249,37 @@ impl BlueServer {
 
     // RFC 0051: Global perspective & tension tracking handlers
 
-    fn handle_dialogue_round_context(&mut self, args: &Option<Value>) -> Result<Value, ServerError> {
+    fn handle_dialogue_round_context(
+        &mut self,
+        args: &Option<Value>,
+    ) -> Result<Value, ServerError> {
         let args = args.as_ref().ok_or(ServerError::InvalidParams)?;
         let state = self.ensure_state()?;
         crate::handlers::dialogue::handle_round_context(state, args)
     }
 
-    fn handle_dialogue_expert_create(&mut self, args: &Option<Value>) -> Result<Value, ServerError> {
+    fn handle_dialogue_expert_create(
+        &mut self,
+        args: &Option<Value>,
+    ) -> Result<Value, ServerError> {
         let args = args.as_ref().ok_or(ServerError::InvalidParams)?;
         let state = self.ensure_state()?;
         crate::handlers::dialogue::handle_expert_create(state, args)
     }
 
-    fn handle_dialogue_round_register(&mut self, args: &Option<Value>) -> Result<Value, ServerError> {
+    fn handle_dialogue_round_register(
+        &mut self,
+        args: &Option<Value>,
+    ) -> Result<Value, ServerError> {
         let args = args.as_ref().ok_or(ServerError::InvalidParams)?;
         let state = self.ensure_state()?;
         crate::handlers::dialogue::handle_round_register(state, args)
     }
 
-    fn handle_dialogue_verdict_register(&mut self, args: &Option<Value>) -> Result<Value, ServerError> {
+    fn handle_dialogue_verdict_register(
+        &mut self,
+        args: &Option<Value>,
+    ) -> Result<Value, ServerError> {
         let args = args.as_ref().ok_or(ServerError::InvalidParams)?;
         let state = self.ensure_state()?;
         crate::handlers::dialogue::handle_verdict_register(state, args)
@@ -4168,7 +4304,10 @@ impl BlueServer {
         crate::handlers::postmortem::handle_create(state, args)
     }
 
-    fn handle_postmortem_action_to_rfc(&mut self, args: &Option<Value>) -> Result<Value, ServerError> {
+    fn handle_postmortem_action_to_rfc(
+        &mut self,
+        args: &Option<Value>,
+    ) -> Result<Value, ServerError> {
         let args = args.as_ref().ok_or(ServerError::InvalidParams)?;
         let state = self.ensure_state_mut()?;
         crate::handlers::postmortem::handle_action_to_rfc(state, args)
@@ -4292,8 +4431,7 @@ impl BlueServer {
             .get("doc_type")
             .and_then(|v| v.as_str())
             .ok_or(ServerError::InvalidParams)?;
-        let doc_type = DocType::parse(doc_type_str)
-            .ok_or(ServerError::InvalidParams)?;
+        let doc_type = DocType::parse(doc_type_str).ok_or(ServerError::InvalidParams)?;
 
         let title = args
             .get("title")
@@ -4305,10 +4443,7 @@ impl BlueServer {
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
 
-        let force = args
-            .get("force")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
+        let force = args.get("force").and_then(|v| v.as_bool()).unwrap_or(false);
 
         let permanent = args
             .get("permanent")
@@ -4331,8 +4466,7 @@ impl BlueServer {
             .get("doc_type")
             .and_then(|v| v.as_str())
             .ok_or(ServerError::InvalidParams)?;
-        let doc_type = DocType::parse(doc_type_str)
-            .ok_or(ServerError::InvalidParams)?;
+        let doc_type = DocType::parse(doc_type_str).ok_or(ServerError::InvalidParams)?;
 
         let title = args
             .get("title")
@@ -4611,7 +4745,10 @@ mod tests {
         let server = BlueServer::new();
         let err = server.not_found_error();
         let msg = err.to_string();
-        assert!(msg.contains("Blue project not found"), "Missing lead: {msg}");
+        assert!(
+            msg.contains("Blue project not found"),
+            "Missing lead: {msg}"
+        );
         assert!(msg.contains("Process cwd:"), "Missing process cwd: {msg}");
         assert!(msg.contains("blue init"), "Missing fix suggestion: {msg}");
     }
@@ -4621,7 +4758,10 @@ mod tests {
         let mut server = BlueServer::new();
         server.mcp_root = Some(PathBuf::from("/some/mcp/root"));
         let msg = server.not_found_error().to_string();
-        assert!(msg.contains("/some/mcp/root"), "Missing mcp_root in error: {msg}");
+        assert!(
+            msg.contains("/some/mcp/root"),
+            "Missing mcp_root in error: {msg}"
+        );
     }
 
     #[test]
@@ -4632,7 +4772,10 @@ mod tests {
         let result = server.ensure_state();
         match result {
             Err(ServerError::BlueNotDetected(msg)) => {
-                assert!(msg.contains("/nonexistent/no-blue-here"), "Missing attempted path: {msg}");
+                assert!(
+                    msg.contains("/nonexistent/no-blue-here"),
+                    "Missing attempted path: {msg}"
+                );
                 assert!(msg.contains(".blue/"), "Missing expected dir: {msg}");
                 assert!(msg.contains("blue init"), "Missing fix suggestion: {msg}");
             }

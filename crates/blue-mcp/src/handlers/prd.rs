@@ -5,7 +5,7 @@
 
 use std::fs;
 
-use blue_core::{DocType, Document, ProjectState, title_to_slug};
+use blue_core::{title_to_slug, DocType, Document, ProjectState};
 use serde_json::{json, Value};
 
 use crate::error::ServerError;
@@ -19,18 +19,25 @@ pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, Server
 
     let problem = args.get("problem").and_then(|v| v.as_str());
     let users = args.get("users").and_then(|v| v.as_str());
-    let goals: Option<Vec<String>> = args
-        .get("goals")
-        .and_then(|v| v.as_array())
-        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect());
-    let non_goals: Option<Vec<String>> = args
-        .get("non_goals")
-        .and_then(|v| v.as_array())
-        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect());
+    let goals: Option<Vec<String>> = args.get("goals").and_then(|v| v.as_array()).map(|arr| {
+        arr.iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect()
+    });
+    let non_goals: Option<Vec<String>> =
+        args.get("non_goals").and_then(|v| v.as_array()).map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        });
     let stakeholders: Option<Vec<String>> = args
         .get("stakeholders")
         .and_then(|v| v.as_array())
-        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect());
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        });
 
     // Get next PRD number
     let prd_number = state
@@ -48,7 +55,15 @@ pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, Server
     }
 
     // Generate markdown
-    let markdown = generate_prd_markdown(title, prd_number as i64, problem, users, &goals, &non_goals, &stakeholders);
+    let markdown = generate_prd_markdown(
+        title,
+        prd_number as i64,
+        problem,
+        users,
+        &goals,
+        &non_goals,
+        &stakeholders,
+    );
 
     // Write file
     fs::write(&file_path, &markdown).map_err(|e| ServerError::CommandFailed(e.to_string()))?;
@@ -89,7 +104,9 @@ pub fn handle_get(state: &ProjectState, args: &Value) -> Result<Value, ServerErr
         .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
 
     // Read file content
-    let rel_path = doc.file_path.as_ref()
+    let rel_path = doc
+        .file_path
+        .as_ref()
         .ok_or_else(|| ServerError::CommandFailed("PRD file path not set".to_string()))?;
     let file_path = state.home.docs_path.join(rel_path);
     let content = fs::read_to_string(&file_path)
@@ -152,8 +169,9 @@ pub fn handle_approve(state: &ProjectState, args: &Value) -> Result<Value, Serve
         .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
 
     // Rename file for new status (RFC 0031)
-    let final_path = blue_core::rename_for_status(&state.home.docs_path, &state.store, &doc, "approved")
-        .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+    let final_path =
+        blue_core::rename_for_status(&state.home.docs_path, &state.store, &doc, "approved")
+            .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
 
     // Update markdown at effective path
     let effective_path = final_path.as_deref().or(doc.file_path.as_deref());
@@ -221,8 +239,9 @@ pub fn handle_complete(state: &ProjectState, args: &Value) -> Result<Value, Serv
         .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
 
     // Rename file for new status (RFC 0031)
-    let final_path = blue_core::rename_for_status(&state.home.docs_path, &state.store, &doc, "implemented")
-        .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+    let final_path =
+        blue_core::rename_for_status(&state.home.docs_path, &state.store, &doc, "implemented")
+            .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
 
     // Update markdown at effective path
     let effective_path = final_path.as_deref().or(doc.file_path.as_deref());
@@ -285,7 +304,6 @@ pub fn handle_list(state: &ProjectState, args: &Value) -> Result<Value, ServerEr
 
 // ===== Helper Functions =====
 
-
 fn generate_prd_markdown(
     title: &str,
     number: i64,
@@ -305,12 +323,22 @@ fn generate_prd_markdown(
 
     let goals_str = goals
         .as_ref()
-        .map(|g| g.iter().map(|x| format!("- {}", x)).collect::<Vec<_>>().join("\n"))
+        .map(|g| {
+            g.iter()
+                .map(|x| format!("- {}", x))
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
         .unwrap_or_else(|| "- [Business goal 1]\n- [Business goal 2]".to_string());
 
     let non_goals_str = non_goals
         .as_ref()
-        .map(|g| g.iter().map(|x| format!("- {}", x)).collect::<Vec<_>>().join("\n"))
+        .map(|g| {
+            g.iter()
+                .map(|x| format!("- {}", x))
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
         .unwrap_or_else(|| "- [What this feature won't do]".to_string());
 
     format!(
@@ -393,7 +421,10 @@ fn parse_acceptance_criteria(content: &str) -> Vec<(String, bool)> {
             in_section = false;
         }
         if in_section {
-            if let Some(text) = line.strip_prefix("- [x] ").or_else(|| line.strip_prefix("- [X] ")) {
+            if let Some(text) = line
+                .strip_prefix("- [x] ")
+                .or_else(|| line.strip_prefix("- [X] "))
+            {
                 criteria.push((text.trim().to_string(), true));
             } else if let Some(text) = line.strip_prefix("- [ ] ") {
                 criteria.push((text.trim().to_string(), false));

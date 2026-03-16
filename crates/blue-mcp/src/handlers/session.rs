@@ -54,7 +54,11 @@ pub fn handle_ping(state: &ProjectState, args: &Value) -> Result<Value, ServerEr
     }
 }
 
-fn handle_start(state: &ProjectState, title: &str, session_type: SessionType) -> Result<Value, ServerError> {
+fn handle_start(
+    state: &ProjectState,
+    title: &str,
+    session_type: SessionType,
+) -> Result<Value, ServerError> {
     // Check for existing session
     match state.store.get_active_session(title) {
         Ok(Some(existing)) => {
@@ -115,7 +119,11 @@ fn handle_start(state: &ProjectState, title: &str, session_type: SessionType) ->
     }
 }
 
-fn handle_heartbeat(state: &ProjectState, title: &str, session_type: SessionType) -> Result<Value, ServerError> {
+fn handle_heartbeat(
+    state: &ProjectState,
+    title: &str,
+    session_type: SessionType,
+) -> Result<Value, ServerError> {
     let session = Session {
         id: None,
         rfc_title: title.to_string(),

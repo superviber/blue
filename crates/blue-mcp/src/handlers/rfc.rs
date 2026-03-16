@@ -3,7 +3,9 @@
 //! Standalone functions for RFC lifecycle operations.
 //! Called by both MCP server and CLI.
 
-use blue_core::{DocType, Document, ProjectState, Rfc, RfcStatus, title_to_slug, validate_rfc_transition};
+use blue_core::{
+    title_to_slug, validate_rfc_transition, DocType, Document, ProjectState, Rfc, RfcStatus,
+};
 use serde_json::{json, Value};
 use std::fs;
 
@@ -22,7 +24,9 @@ pub fn handle_create(state: &mut ProjectState, args: &Value) -> Result<Value, Se
     let source_spike = args.get("source_spike").and_then(|v| v.as_str());
 
     // Get next RFC number
-    let number = state.store.next_number_with_fs(DocType::Rfc, &state.home.docs_path)
+    let number = state
+        .store
+        .next_number_with_fs(DocType::Rfc, &state.home.docs_path)
         .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
 
     // Generate markdown
@@ -51,18 +55,18 @@ pub fn handle_create(state: &mut ProjectState, args: &Value) -> Result<Value, Se
     let docs_path = state.home.docs_path.clone();
     let rfc_path = docs_path.join(&filename);
     if let Some(parent) = rfc_path.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+        fs::create_dir_all(parent).map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
     }
-    fs::write(&rfc_path, &markdown)
-        .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+    fs::write(&rfc_path, &markdown).map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
 
     // Create document in store with file path
     let mut doc = Document::new(DocType::Rfc, title, "draft");
     doc.number = Some(number);
     doc.file_path = Some(filename.clone());
 
-    let id = state.store.add_document(&doc)
+    let id = state
+        .store
+        .add_document(&doc)
         .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
 
     Ok(json!({
@@ -88,7 +92,9 @@ pub fn handle_get(state: &ProjectState, args: &Value) -> Result<Value, ServerErr
         .and_then(|v| v.as_str())
         .ok_or(ServerError::InvalidParams)?;
 
-    let doc = state.store.find_document(DocType::Rfc, title)
+    let doc = state
+        .store
+        .find_document(DocType::Rfc, title)
         .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
 
     let doc_id = doc.id;
@@ -100,7 +106,9 @@ pub fn handle_get(state: &ProjectState, args: &Value) -> Result<Value, ServerErr
 
     if let Some(id) = doc_id {
         if plan_path.exists() {
-            let cache_mtime = state.store.get_plan_cache_mtime(id)
+            let cache_mtime = state
+                .store
+                .get_plan_cache_mtime(id)
                 .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
 
             if blue_core::is_cache_stale(&plan_path, cache_mtime.as_deref()) {
@@ -108,12 +116,16 @@ pub fn handle_get(state: &ProjectState, args: &Value) -> Result<Value, ServerErr
                 let plan = blue_core::read_plan_file(&plan_path)
                     .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
 
-                state.store.rebuild_tasks_from_plan(id, &plan.tasks)
+                state
+                    .store
+                    .rebuild_tasks_from_plan(id, &plan.tasks)
                     .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
 
                 // Update cache mtime
                 let mtime = chrono::Utc::now().to_rfc3339();
-                state.store.update_plan_cache_mtime(id, &mtime)
+                state
+                    .store
+                    .update_plan_cache_mtime(id, &mtime)
                     .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
 
                 cache_rebuilt = true;
@@ -190,23 +202,30 @@ pub fn handle_list(state: &ProjectState, args: &Value) -> Result<Value, ServerEr
     let status_filter = args.get("status").and_then(|v| v.as_str());
 
     let docs = if let Some(status) = status_filter {
-        state.store.list_documents_by_status(DocType::Rfc, status)
+        state
+            .store
+            .list_documents_by_status(DocType::Rfc, status)
             .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?
     } else {
-        state.store.list_documents(DocType::Rfc)
+        state
+            .store
+            .list_documents(DocType::Rfc)
             .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?
     };
 
-    let rfcs: Vec<_> = docs.iter().map(|doc| {
-        json!({
-            "id": doc.id,
-            "number": doc.number,
-            "title": doc.title,
-            "status": doc.status,
-            "file_path": doc.file_path,
-            "created_at": doc.created_at
+    let rfcs: Vec<_> = docs
+        .iter()
+        .map(|doc| {
+            json!({
+                "id": doc.id,
+                "number": doc.number,
+                "title": doc.title,
+                "status": doc.status,
+                "file_path": doc.file_path,
+                "created_at": doc.created_at
+            })
         })
-    }).collect();
+        .collect();
 
     Ok(json!({
         "rfcs": rfcs,
@@ -229,14 +248,16 @@ pub fn handle_update_status(state: &ProjectState, args: &Value) -> Result<Value,
         .ok_or(ServerError::InvalidParams)?;
 
     // Find the document to get its file path and current status
-    let doc = state.store.find_document(DocType::Rfc, title)
+    let doc = state
+        .store
+        .find_document(DocType::Rfc, title)
         .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
 
     // Parse statuses and validate transition (RFC 0014)
-    let current_status = RfcStatus::parse(&doc.status)
-        .map_err(|e| ServerError::Workflow(e.to_string()))?;
-    let target_status = RfcStatus::parse(status_str)
-        .map_err(|e| ServerError::Workflow(e.to_string()))?;
+    let current_status =
+        RfcStatus::parse(&doc.status).map_err(|e| ServerError::Workflow(e.to_string()))?;
+    let target_status =
+        RfcStatus::parse(status_str).map_err(|e| ServerError::Workflow(e.to_string()))?;
 
     // Validate the transition
     validate_rfc_transition(current_status, target_status)
@@ -251,12 +272,15 @@ pub fn handle_update_status(state: &ProjectState, args: &Value) -> Result<Value,
     };
 
     // Update database
-    state.store.update_document_status(DocType::Rfc, title, status_str)
+    state
+        .store
+        .update_document_status(DocType::Rfc, title, status_str)
         .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
 
     // Rename file for new status (RFC 0031)
-    let final_path = blue_core::rename_for_status(&state.home.docs_path, &state.store, &doc, status_str)
-        .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+    let final_path =
+        blue_core::rename_for_status(&state.home.docs_path, &state.store, &doc, status_str)
+            .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
 
     // Update markdown file (RFC 0008) at effective path
     let effective_path = final_path.as_deref().or(doc.file_path.as_deref());
@@ -271,18 +295,16 @@ pub fn handle_update_status(state: &ProjectState, args: &Value) -> Result<Value,
     let hint = match target_status {
         RfcStatus::Accepted => Some(
             "RFC accepted. Ask the user: 'Ready to begin implementation? \
-             I'll create a worktree and set up the environment.'"
+             I'll create a worktree and set up the environment.'",
         ),
         RfcStatus::InProgress => Some(
             "Implementation started. Work in the worktree, mark plan tasks \
-             as you complete them."
+             as you complete them.",
         ),
-        RfcStatus::Implemented => Some(
-            "Implementation complete. Ask the user: 'Ready to create a PR?'"
-        ),
-        RfcStatus::Superseded => Some(
-            "RFC superseded. The newer RFC takes precedence."
-        ),
+        RfcStatus::Implemented => {
+            Some("Implementation complete. Ask the user: 'Ready to create a PR?'")
+        }
+        RfcStatus::Superseded => Some("RFC superseded. The newer RFC takes precedence."),
         RfcStatus::Draft => None,
     };
 
@@ -331,10 +353,16 @@ pub fn handle_plan(state: &ProjectState, args: &Value) -> Result<Value, ServerEr
     let tasks: Vec<String> = args
         .get("tasks")
         .and_then(|v| v.as_array())
-        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
         .unwrap_or_default();
 
-    let doc = state.store.find_document(DocType::Rfc, title)
+    let doc = state
+        .store
+        .find_document(DocType::Rfc, title)
         .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
 
     let doc_id = doc.id.ok_or(ServerError::InvalidParams)?;
@@ -369,20 +397,25 @@ pub fn handle_plan(state: &ProjectState, args: &Value) -> Result<Value, ServerEr
 
     // Ensure parent directory exists
     if let Some(parent) = plan_path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| ServerError::StateLoadFailed(format!("Failed to create directory: {}", e)))?;
+        std::fs::create_dir_all(parent).map_err(|e| {
+            ServerError::StateLoadFailed(format!("Failed to create directory: {}", e))
+        })?;
     }
 
     blue_core::write_plan_file(&plan_path, &plan)
         .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
 
     // Update SQLite cache
-    state.store.set_tasks(doc_id, &tasks)
+    state
+        .store
+        .set_tasks(doc_id, &tasks)
         .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
 
     // Update cache mtime
     let mtime = chrono::Utc::now().to_rfc3339();
-    state.store.update_plan_cache_mtime(doc_id, &mtime)
+    state
+        .store
+        .update_plan_cache_mtime(doc_id, &mtime)
         .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
 
     Ok(json!({
@@ -496,8 +529,9 @@ pub fn handle_complete(state: &ProjectState, args: &Value) -> Result<Value, Serv
         .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
 
     // Rename file for new status (RFC 0031)
-    let final_path = blue_core::rename_for_status(&state.home.docs_path, &state.store, &doc, "implemented")
-        .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+    let final_path =
+        blue_core::rename_for_status(&state.home.docs_path, &state.store, &doc, "implemented")
+            .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
 
     // Update markdown at effective path
     let effective_path = final_path.as_deref().or(doc.file_path.as_deref());

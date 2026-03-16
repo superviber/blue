@@ -139,7 +139,10 @@ pub fn detect_blue(from: &Path) -> Result<BlueHome, RepoError> {
         let old_data_path = blue_dir.join("data");
 
         if old_repos_path.exists() || old_data_path.exists() {
-            debug!("Found old Blue structure at {:?}, needs migration", blue_dir);
+            debug!(
+                "Found old Blue structure at {:?}, needs migration",
+                blue_dir
+            );
             return migrate_to_new_structure(&root);
         }
 
@@ -178,23 +181,26 @@ fn migrate_to_new_structure(root: &Path) -> Result<BlueHome, RepoError> {
     let new_db_path = blue_dir.join("blue.db");
 
     // Get project name to find the right subdirectory
-    let project_name = extract_project_name(root)
-        .unwrap_or_else(|| "default".to_string());
+    let project_name = extract_project_name(root).unwrap_or_else(|| "default".to_string());
 
     // Migrate docs: .blue/repos/<project>/docs -> .blue/docs
     let old_project_docs = old_repos_path.join(&project_name).join("docs");
     if old_project_docs.exists() && !new_docs_path.exists() {
-        debug!("Migrating docs from {:?} to {:?}", old_project_docs, new_docs_path);
-        std::fs::rename(&old_project_docs, &new_docs_path)
-            .map_err(RepoError::Io)?;
+        debug!(
+            "Migrating docs from {:?} to {:?}",
+            old_project_docs, new_docs_path
+        );
+        std::fs::rename(&old_project_docs, &new_docs_path).map_err(RepoError::Io)?;
     }
 
     // Migrate database: .blue/data/<project>/blue.db -> .blue/blue.db
     let old_project_db = old_data_path.join(&project_name).join("blue.db");
     if old_project_db.exists() && !new_db_path.exists() {
-        debug!("Migrating database from {:?} to {:?}", old_project_db, new_db_path);
-        std::fs::rename(&old_project_db, &new_db_path)
-            .map_err(RepoError::Io)?;
+        debug!(
+            "Migrating database from {:?} to {:?}",
+            old_project_db, new_db_path
+        );
+        std::fs::rename(&old_project_db, &new_db_path).map_err(RepoError::Io)?;
     }
 
     // Clean up empty old directories
@@ -218,14 +224,16 @@ fn migrate_from_legacy_structure(root: &Path) -> Result<BlueHome, RepoError> {
     // Create new .blue directory
     std::fs::create_dir_all(&blue_dir).map_err(RepoError::Io)?;
 
-    let project_name = extract_project_name(root)
-        .unwrap_or_else(|| "default".to_string());
+    let project_name = extract_project_name(root).unwrap_or_else(|| "default".to_string());
 
     // Migrate docs
     let old_docs = legacy_repos.join(&project_name).join("docs");
     let new_docs = blue_dir.join("docs");
     if old_docs.exists() && !new_docs.exists() {
-        debug!("Migrating legacy docs from {:?} to {:?}", old_docs, new_docs);
+        debug!(
+            "Migrating legacy docs from {:?} to {:?}",
+            old_docs, new_docs
+        );
         std::fs::rename(&old_docs, &new_docs).map_err(RepoError::Io)?;
     }
 
@@ -233,7 +241,10 @@ fn migrate_from_legacy_structure(root: &Path) -> Result<BlueHome, RepoError> {
     let old_db = legacy_data.join(&project_name).join("blue.db");
     let new_db = blue_dir.join("blue.db");
     if old_db.exists() && !new_db.exists() {
-        debug!("Migrating legacy database from {:?} to {:?}", old_db, new_db);
+        debug!(
+            "Migrating legacy database from {:?} to {:?}",
+            old_db, new_db
+        );
         std::fs::rename(&old_db, &new_db).map_err(RepoError::Io)?;
     }
 

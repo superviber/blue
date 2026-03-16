@@ -187,9 +187,7 @@ impl BlueUri {
                                 }
                                 // Check if the number portion matches
                                 if let Some(num_str) = name.split('-').next() {
-                                    if num_str == id
-                                        || num_str.trim_start_matches('0') == id
-                                    {
+                                    if num_str == id || num_str.trim_start_matches('0') == id {
                                         return Ok(vec![path]);
                                     }
                                 }

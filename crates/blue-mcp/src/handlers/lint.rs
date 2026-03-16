@@ -215,36 +215,26 @@ fn count_issues(output: &str, project_type: ProjectType, check_name: &str) -> us
         (ProjectType::Rust, "format") => {
             output.lines().filter(|l| l.starts_with("Diff in")).count()
         }
-        (ProjectType::Rust, "lint") => {
-            output
-                .lines()
-                .filter(|l| l.contains("warning:") && !l.contains("warnings emitted"))
-                .count()
-        }
-        (ProjectType::JavaScript, "format") => {
-            output
-                .lines()
-                .filter(|l| l.ends_with(".ts") || l.ends_with(".js") || l.ends_with(".tsx"))
-                .count()
-        }
-        (ProjectType::JavaScript, "lint") => {
-            output
-                .lines()
-                .filter(|l| l.contains("error") || l.contains("warning"))
-                .count()
-        }
-        (ProjectType::Python, "format") => {
-            output
-                .lines()
-                .filter(|l| l.contains("Would reformat"))
-                .count()
-        }
-        (ProjectType::Python, "lint") => {
-            output
-                .lines()
-                .filter(|l| l.contains(":") && !l.starts_with("Found"))
-                .count()
-        }
+        (ProjectType::Rust, "lint") => output
+            .lines()
+            .filter(|l| l.contains("warning:") && !l.contains("warnings emitted"))
+            .count(),
+        (ProjectType::JavaScript, "format") => output
+            .lines()
+            .filter(|l| l.ends_with(".ts") || l.ends_with(".js") || l.ends_with(".tsx"))
+            .count(),
+        (ProjectType::JavaScript, "lint") => output
+            .lines()
+            .filter(|l| l.contains("error") || l.contains("warning"))
+            .count(),
+        (ProjectType::Python, "format") => output
+            .lines()
+            .filter(|l| l.contains("Would reformat"))
+            .count(),
+        (ProjectType::Python, "lint") => output
+            .lines()
+            .filter(|l| l.contains(":") && !l.starts_with("Found"))
+            .count(),
         (ProjectType::Cdk, "synth") => {
             if output.contains("Error:") || output.contains("error:") {
                 1
@@ -372,23 +362,22 @@ fn run_python_checks(path: &Path, fix: bool, check_type: &str) -> Vec<LintResult
         }
     }
 
-    if (check_type == "all" || check_type == "lint")
-        && use_ruff {
-            let args: Vec<&str> = if fix {
-                vec!["check", "--fix", "."]
-            } else {
-                vec!["check", "."]
-            };
-            results.push(run_command(
-                path,
-                "ruff",
-                &args,
-                ProjectType::Python,
-                "lint",
-                "ruff check",
-                "ruff check --fix .",
-            ));
-        }
+    if (check_type == "all" || check_type == "lint") && use_ruff {
+        let args: Vec<&str> = if fix {
+            vec!["check", "--fix", "."]
+        } else {
+            vec!["check", "."]
+        };
+        results.push(run_command(
+            path,
+            "ruff",
+            &args,
+            ProjectType::Python,
+            "lint",
+            "ruff check",
+            "ruff check --fix .",
+        ));
+    }
 
     results
 }
@@ -413,7 +402,7 @@ fn run_cdk_checks(path: &Path, check_type: &str) -> Vec<LintResult> {
 
 /// RFC 0017: Run RFC header checks
 fn run_rfc_checks(path: &Path, fix: bool, check_type: &str) -> Vec<LintResult> {
-    use blue_core::{HeaderFormat, convert_inline_to_table_header, validate_rfc_header};
+    use blue_core::{convert_inline_to_table_header, validate_rfc_header, HeaderFormat};
     use std::fs;
 
     let mut results = Vec::new();
@@ -547,8 +536,14 @@ fn run_mermaid_checks(docs_path: &Path, fix: bool) -> LintResult {
         }
     });
 
-    let error_count = issues.iter().filter(|i| matches!(i.severity, MermaidSeverity::Error)).count();
-    let warning_count = issues.iter().filter(|i| matches!(i.severity, MermaidSeverity::Warning)).count();
+    let error_count = issues
+        .iter()
+        .filter(|i| matches!(i.severity, MermaidSeverity::Error))
+        .count();
+    let warning_count = issues
+        .iter()
+        .filter(|i| matches!(i.severity, MermaidSeverity::Warning))
+        .count();
 
     // Log details
     if !issues.is_empty() || fixed_count > 0 {
@@ -566,7 +561,10 @@ fn run_mermaid_checks(docs_path: &Path, fix: bool) -> LintResult {
             );
         }
         if fixed_count > 0 {
-            tracing::info!("Mermaid: auto-fixed {} file(s) with missing theme declaration", fixed_count);
+            tracing::info!(
+                "Mermaid: auto-fixed {} file(s) with missing theme declaration",
+                fixed_count
+            );
         }
     }
 
@@ -639,7 +637,9 @@ fn check_mermaid_blocks(content: &str, file_path: &Path) -> Vec<MermaidIssue> {
                 file: file_name.clone(),
                 line: line_num,
                 severity: MermaidSeverity::Error,
-                message: "Mermaid diagram must use neutral theme. Add: %%{init: {'theme': 'neutral'}}%%".into(),
+                message:
+                    "Mermaid diagram must use neutral theme. Add: %%{init: {'theme': 'neutral'}}%%"
+                        .into(),
                 auto_fixable: true,
             });
         }
@@ -737,10 +737,15 @@ fn apply_mermaid_fixes(content: &str) -> String {
             // If this is the first content line and no theme yet, insert it
             if !block_has_theme && !trimmed.is_empty() && !trimmed.starts_with("%%{init") {
                 // Check if it's a flowchart/graph declaration
-                if trimmed.starts_with("flowchart") || trimmed.starts_with("graph") ||
-                   trimmed.starts_with("sequenceDiagram") || trimmed.starts_with("classDiagram") ||
-                   trimmed.starts_with("stateDiagram") || trimmed.starts_with("erDiagram") ||
-                   trimmed.starts_with("gantt") || trimmed.starts_with("pie") {
+                if trimmed.starts_with("flowchart")
+                    || trimmed.starts_with("graph")
+                    || trimmed.starts_with("sequenceDiagram")
+                    || trimmed.starts_with("classDiagram")
+                    || trimmed.starts_with("stateDiagram")
+                    || trimmed.starts_with("erDiagram")
+                    || trimmed.starts_with("gantt")
+                    || trimmed.starts_with("pie")
+                {
                     result.push_str("%%{init: {'theme': 'neutral'}}%%\n");
                     block_has_theme = true;
                 }
@@ -889,9 +894,14 @@ flowchart TB
 ```
 "#;
         let issues = check_mermaid_blocks(content, &PathBuf::from("test.md"));
-        assert!(issues.iter().any(|i| i.message.contains("fill colors prohibited")));
+        assert!(issues
+            .iter()
+            .any(|i| i.message.contains("fill colors prohibited")));
         // fill color issues should NOT be auto-fixable
-        assert!(issues.iter().filter(|i| i.message.contains("fill")).all(|i| !i.auto_fixable));
+        assert!(issues
+            .iter()
+            .filter(|i| i.message.contains("fill"))
+            .all(|i| !i.auto_fixable));
     }
 
     #[test]
@@ -909,10 +919,10 @@ flowchart LR
 "#;
         let issues = check_mermaid_blocks(content, &PathBuf::from("test.md"));
         // Should warn about LR with >3 nodes
-        assert!(issues.iter().any(|i|
-            matches!(i.severity, MermaidSeverity::Warning) &&
-            i.message.contains("horizontal scrolling")
-        ));
+        assert!(issues
+            .iter()
+            .any(|i| matches!(i.severity, MermaidSeverity::Warning)
+                && i.message.contains("horizontal scrolling")));
     }
 
     #[test]
@@ -926,7 +936,9 @@ flowchart LR
 "#;
         let issues = check_mermaid_blocks(content, &PathBuf::from("test.md"));
         // Should NOT warn about LR with <=3 nodes
-        assert!(!issues.iter().any(|i| i.message.contains("horizontal scrolling")));
+        assert!(!issues
+            .iter()
+            .any(|i| i.message.contains("horizontal scrolling")));
     }
 
     #[test]

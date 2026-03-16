@@ -138,9 +138,14 @@ impl ValidationError {
     pub fn invalid_entity_type(value: &str) -> Self {
         Self::new(
             ValidationErrorCode::InvalidEntityType,
-            format!("Invalid entity type '{}'. Must be one of: P, R, T, E, C", value),
+            format!(
+                "Invalid entity type '{}'. Must be one of: P, R, T, E, C",
+                value
+            ),
         )
-        .with_suggestion("Use P (Perspective), R (Recommendation), T (Tension), E (Evidence), or C (Claim)")
+        .with_suggestion(
+            "Use P (Perspective), R (Recommendation), T (Tension), E (Evidence), or C (Claim)",
+        )
         .with_context(serde_json::json!({"valid_types": ["P", "R", "T", "E", "C"]}))
     }
 
@@ -158,16 +163,25 @@ impl ValidationError {
     pub fn type_id_mismatch(expected_type: &str, actual_id: &str) -> Self {
         Self::new(
             ValidationErrorCode::TypeIdMismatch,
-            format!("Entity type '{}' doesn't match ID '{}'. ID should start with '{}'", expected_type, actual_id, expected_type),
+            format!(
+                "Entity type '{}' doesn't match ID '{}'. ID should start with '{}'",
+                expected_type, actual_id, expected_type
+            ),
         )
-        .with_suggestion(format!("Use an ID starting with '{}' (e.g., {}0101)", expected_type, expected_type))
+        .with_suggestion(format!(
+            "Use an ID starting with '{}' (e.g., {}0101)",
+            expected_type, expected_type
+        ))
     }
 
     /// Create an invalid ref target error
     pub fn invalid_ref_target(ref_type: &str, target_type: &str, expected_type: &str) -> Self {
         Self::new(
             ValidationErrorCode::InvalidRefTarget,
-            format!("Reference type '{}' cannot target entity type '{}'. Expected: {}", ref_type, target_type, expected_type),
+            format!(
+                "Reference type '{}' cannot target entity type '{}'. Expected: {}",
+                ref_type, target_type, expected_type
+            ),
         )
         .with_suggestion(format!("Use a {} entity as the target", expected_type))
         .with_context(serde_json::json!({"ref_type": ref_type, "expected_target": expected_type}))
@@ -290,7 +304,10 @@ pub fn validate_display_id(id: &str) -> Result<(EntityType, i32, i32), Validatio
 pub fn validate_id_type_match(id: &str, expected_type: EntityType) -> Option<ValidationError> {
     if let Some((actual_type, _, _)) = parse_display_id(id) {
         if actual_type != expected_type {
-            return Some(ValidationError::type_id_mismatch(expected_type.as_str(), id));
+            return Some(ValidationError::type_id_mismatch(
+                expected_type.as_str(),
+                id,
+            ));
         }
     }
     None
@@ -924,7 +941,15 @@ pub fn create_dialogue(
         "INSERT INTO alignment_dialogues
          (dialogue_id, title, question, status, created_at, output_dir, background)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-        params![dialogue_id, title, question, "open", now, output_dir, background_json,],
+        params![
+            dialogue_id,
+            title,
+            question,
+            "open",
+            now,
+            output_dir,
+            background_json,
+        ],
     )?;
 
     Ok(dialogue_id)
@@ -1098,15 +1123,7 @@ pub fn create_round(
     title: Option<&str>,
     score: i32,
 ) -> Result<(), AlignmentDbError> {
-    create_round_with_metrics(
-        conn,
-        dialogue_id,
-        round,
-        title,
-        score,
-        None,
-        None,
-    )
+    create_round_with_metrics(conn, dialogue_id, round, title, score, None, None)
 }
 
 /// RFC 0057: Create a new round with full metrics
@@ -1174,7 +1191,7 @@ pub fn get_convergence_signals(
 ) -> Result<Vec<String>, AlignmentDbError> {
     let mut stmt = conn.prepare(
         "SELECT expert_name FROM alignment_convergence_signals
-         WHERE dialogue_id = ?1 AND round = ?2"
+         WHERE dialogue_id = ?1 AND round = ?2",
     )?;
 
     let signals = stmt
@@ -1193,7 +1210,7 @@ pub fn get_scoreboard(
         "SELECT round, W, C, T, R, total, open_tensions, new_perspectives, velocity,
                 converge_signals, panel_size, converge_percent,
                 cumulative_score, cumulative_W, cumulative_C, cumulative_T, cumulative_R
-         FROM alignment_scoreboard WHERE dialogue_id = ?1 ORDER BY round"
+         FROM alignment_scoreboard WHERE dialogue_id = ?1 ORDER BY round",
     )?;
 
     let rows = stmt
@@ -1389,7 +1406,15 @@ pub fn register_tension(
         "INSERT INTO alignment_tension_events
          (dialogue_id, tension_round, tension_seq, event_type, event_round, actors, created_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-        params![dialogue_id, round, seq, "created", round, contributors_json, now],
+        params![
+            dialogue_id,
+            round,
+            seq,
+            "created",
+            round,
+            contributors_json,
+            now
+        ],
     )?;
 
     Ok(display)
@@ -1437,7 +1462,15 @@ pub fn register_recommendation(
         "INSERT INTO alignment_recommendation_events
          (dialogue_id, rec_round, rec_seq, event_type, event_round, actors, created_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-        params![dialogue_id, round, seq, "created", round, contributors_json, now],
+        params![
+            dialogue_id,
+            round,
+            seq,
+            "created",
+            round,
+            contributors_json,
+            now
+        ],
     )?;
 
     Ok(display)
@@ -1939,10 +1972,14 @@ pub struct ExpandedCitation {
 }
 
 /// Expand a display ID into full entity context
-pub fn expand_citation(conn: &Connection, dialogue_id: &str, display_id: &str) -> Result<ExpandedCitation, rusqlite::Error> {
+pub fn expand_citation(
+    conn: &Connection,
+    dialogue_id: &str,
+    display_id: &str,
+) -> Result<ExpandedCitation, rusqlite::Error> {
     // Parse the display ID to get type, round, seq
-    let (entity_type, round, seq) = parse_display_id(display_id)
-        .ok_or(rusqlite::Error::InvalidQuery)?;
+    let (entity_type, round, seq) =
+        parse_display_id(display_id).ok_or(rusqlite::Error::InvalidQuery)?;
 
     match entity_type {
         EntityType::Perspective => {
@@ -1952,7 +1989,11 @@ pub fn expand_citation(conn: &Connection, dialogue_id: &str, display_id: &str) -
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))
             )?;
             let contributors: Vec<String> = serde_json::from_str(&row.2).unwrap_or_default();
-            let content_snippet = if row.1.len() > 200 { format!("{}...", &row.1[..200]) } else { row.1.clone() };
+            let content_snippet = if row.1.len() > 200 {
+                format!("{}...", &row.1[..200])
+            } else {
+                row.1.clone()
+            };
             Ok(ExpandedCitation {
                 display_id: display_id.to_string(),
                 entity_type,
@@ -1973,8 +2014,13 @@ pub fn expand_citation(conn: &Connection, dialogue_id: &str, display_id: &str) -
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
             )?;
             let contributors: Vec<String> = serde_json::from_str(&row.2).unwrap_or_default();
-            let parameters: Option<serde_json::Value> = row.3.and_then(|p| serde_json::from_str(&p).ok());
-            let content_snippet = if row.1.len() > 200 { format!("{}...", &row.1[..200]) } else { row.1.clone() };
+            let parameters: Option<serde_json::Value> =
+                row.3.and_then(|p| serde_json::from_str(&p).ok());
+            let content_snippet = if row.1.len() > 200 {
+                format!("{}...", &row.1[..200])
+            } else {
+                row.1.clone()
+            };
             Ok(ExpandedCitation {
                 display_id: display_id.to_string(),
                 entity_type,
@@ -1995,7 +2041,11 @@ pub fn expand_citation(conn: &Connection, dialogue_id: &str, display_id: &str) -
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
             )?;
             let contributors: Vec<String> = serde_json::from_str(&row.2).unwrap_or_default();
-            let content_snippet = if row.1.len() > 200 { format!("{}...", &row.1[..200]) } else { row.1.clone() };
+            let content_snippet = if row.1.len() > 200 {
+                format!("{}...", &row.1[..200])
+            } else {
+                row.1.clone()
+            };
             Ok(ExpandedCitation {
                 display_id: display_id.to_string(),
                 entity_type,
@@ -2016,7 +2066,11 @@ pub fn expand_citation(conn: &Connection, dialogue_id: &str, display_id: &str) -
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))
             )?;
             let contributors: Vec<String> = serde_json::from_str(&row.2).unwrap_or_default();
-            let content_snippet = if row.1.len() > 200 { format!("{}...", &row.1[..200]) } else { row.1.clone() };
+            let content_snippet = if row.1.len() > 200 {
+                format!("{}...", &row.1[..200])
+            } else {
+                row.1.clone()
+            };
             Ok(ExpandedCitation {
                 display_id: display_id.to_string(),
                 entity_type,
@@ -2037,7 +2091,11 @@ pub fn expand_citation(conn: &Connection, dialogue_id: &str, display_id: &str) -
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))
             )?;
             let contributors: Vec<String> = serde_json::from_str(&row.2).unwrap_or_default();
-            let content_snippet = if row.1.len() > 200 { format!("{}...", &row.1[..200]) } else { row.1.clone() };
+            let content_snippet = if row.1.len() > 200 {
+                format!("{}...", &row.1[..200])
+            } else {
+                row.1.clone()
+            };
             Ok(ExpandedCitation {
                 display_id: display_id.to_string(),
                 entity_type,
@@ -2055,10 +2113,14 @@ pub fn expand_citation(conn: &Connection, dialogue_id: &str, display_id: &str) -
 }
 
 /// Expand multiple citations at once
-pub fn expand_citations(conn: &Connection, dialogue_id: &str, display_ids: &[String]) -> Vec<Result<ExpandedCitation, String>> {
-    display_ids.iter()
-        .map(|id| expand_citation(conn, dialogue_id, id)
-            .map_err(|e| format!("{}: {}", id, e)))
+pub fn expand_citations(
+    conn: &Connection,
+    dialogue_id: &str,
+    display_ids: &[String],
+) -> Vec<Result<ExpandedCitation, String>> {
+    display_ids
+        .iter()
+        .map(|id| expand_citation(conn, dialogue_id, id).map_err(|e| format!("{}: {}", id, e)))
         .collect()
 }
 
@@ -2093,13 +2155,15 @@ pub struct CrossDialogueStats {
 
 /// Get aggregated statistics across all dialogues
 pub fn get_cross_dialogue_stats(conn: &Connection) -> Result<CrossDialogueStats, rusqlite::Error> {
-    let total_dialogues: i32 = conn.query_row(
-        "SELECT COUNT(*) FROM alignment_dialogues", [], |row| row.get(0)
-    )?;
+    let total_dialogues: i32 =
+        conn.query_row("SELECT COUNT(*) FROM alignment_dialogues", [], |row| {
+            row.get(0)
+        })?;
 
     // By status
     let mut by_status = std::collections::HashMap::new();
-    let mut stmt = conn.prepare("SELECT status, COUNT(*) FROM alignment_dialogues GROUP BY status")?;
+    let mut stmt =
+        conn.prepare("SELECT status, COUNT(*) FROM alignment_dialogues GROUP BY status")?;
     let rows = stmt.query_map([], |row| {
         let status: String = row.get(0)?;
         let count: i32 = row.get(1)?;
@@ -2111,47 +2175,68 @@ pub fn get_cross_dialogue_stats(conn: &Connection) -> Result<CrossDialogueStats,
     }
 
     // Entity counts
-    let total_perspectives: i32 = conn.query_row(
-        "SELECT COUNT(*) FROM alignment_perspectives", [], |row| row.get(0)
-    ).unwrap_or(0);
+    let total_perspectives: i32 = conn
+        .query_row("SELECT COUNT(*) FROM alignment_perspectives", [], |row| {
+            row.get(0)
+        })
+        .unwrap_or(0);
 
-    let total_tensions: i32 = conn.query_row(
-        "SELECT COUNT(*) FROM alignment_tensions", [], |row| row.get(0)
-    ).unwrap_or(0);
+    let total_tensions: i32 = conn
+        .query_row("SELECT COUNT(*) FROM alignment_tensions", [], |row| {
+            row.get(0)
+        })
+        .unwrap_or(0);
 
     let open_tensions: i32 = conn.query_row(
         "SELECT COUNT(*) FROM alignment_tensions WHERE status IN ('open', 'addressed', 'reopened')",
         [], |row| row.get(0)
     ).unwrap_or(0);
 
-    let resolved_tensions: i32 = conn.query_row(
-        "SELECT COUNT(*) FROM alignment_tensions WHERE status = 'resolved'",
-        [], |row| row.get(0)
-    ).unwrap_or(0);
+    let resolved_tensions: i32 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM alignment_tensions WHERE status = 'resolved'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
 
-    let total_recommendations: i32 = conn.query_row(
-        "SELECT COUNT(*) FROM alignment_recommendations", [], |row| row.get(0)
-    ).unwrap_or(0);
+    let total_recommendations: i32 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM alignment_recommendations",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
 
-    let total_evidence: i32 = conn.query_row(
-        "SELECT COUNT(*) FROM alignment_evidence", [], |row| row.get(0)
-    ).unwrap_or(0);
+    let total_evidence: i32 = conn
+        .query_row("SELECT COUNT(*) FROM alignment_evidence", [], |row| {
+            row.get(0)
+        })
+        .unwrap_or(0);
 
-    let total_claims: i32 = conn.query_row(
-        "SELECT COUNT(*) FROM alignment_claims", [], |row| row.get(0)
-    ).unwrap_or(0);
+    let total_claims: i32 = conn
+        .query_row("SELECT COUNT(*) FROM alignment_claims", [], |row| {
+            row.get(0)
+        })
+        .unwrap_or(0);
 
     // Average alignment
-    let avg_alignment: f64 = conn.query_row(
-        "SELECT COALESCE(AVG(total_alignment), 0.0) FROM alignment_dialogues",
-        [], |row| row.get(0)
-    ).unwrap_or(0.0);
+    let avg_alignment: f64 = conn
+        .query_row(
+            "SELECT COALESCE(AVG(total_alignment), 0.0) FROM alignment_dialogues",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(0.0);
 
     // Expert stats
-    let total_experts: i32 = conn.query_row(
-        "SELECT COUNT(DISTINCT expert_slug) FROM alignment_experts",
-        [], |row| row.get(0)
-    ).unwrap_or(0);
+    let total_experts: i32 = conn
+        .query_row(
+            "SELECT COUNT(DISTINCT expert_slug) FROM alignment_experts",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
 
     // Top experts by total score
     let mut top_experts = Vec::new();
@@ -2160,7 +2245,7 @@ pub fn get_cross_dialogue_stats(conn: &Connection) -> Result<CrossDialogueStats,
          FROM alignment_experts
          GROUP BY expert_slug
          ORDER BY total DESC
-         LIMIT 10"
+         LIMIT 10",
     )?;
     let rows = stmt.query_map([], |row| {
         let slug: String = row.get(0)?;
@@ -2219,14 +2304,17 @@ pub struct DialogueProgress {
 }
 
 /// Get real-time progress for a dialogue
-pub fn get_dialogue_progress(conn: &Connection, dialogue_id: &str) -> Result<DialogueProgress, AlignmentDbError> {
+pub fn get_dialogue_progress(
+    conn: &Connection,
+    dialogue_id: &str,
+) -> Result<DialogueProgress, AlignmentDbError> {
     // Get dialogue info
     let dialogue = get_dialogue(conn, dialogue_id)?;
 
     // Get round scores
     let mut round_scores = Vec::new();
     let mut stmt = conn.prepare(
-        "SELECT round, score FROM alignment_rounds WHERE dialogue_id = ?1 ORDER BY round"
+        "SELECT round, score FROM alignment_rounds WHERE dialogue_id = ?1 ORDER BY round",
     )?;
     let rows = stmt.query_map(params![dialogue_id], |row| {
         let _round: i32 = row.get(0)?;
@@ -2270,7 +2358,7 @@ pub fn get_dialogue_progress(conn: &Connection, dialogue_id: &str) -> Result<Dia
     let mut stmt = conn.prepare(
         "SELECT expert_slug FROM alignment_experts
          WHERE dialogue_id = ?1 AND first_round <= ?2
-         ORDER BY total_score DESC"
+         ORDER BY total_score DESC",
     )?;
     let rows = stmt.query_map(params![dialogue_id, current_round], |row| row.get(0))?;
     for row in rows {
@@ -2282,7 +2370,7 @@ pub fn get_dialogue_progress(conn: &Connection, dialogue_id: &str) -> Result<Dia
     let mut stmt = conn.prepare(
         "SELECT expert_slug, total_score FROM alignment_experts
          WHERE dialogue_id = ?1
-         ORDER BY total_score DESC"
+         ORDER BY total_score DESC",
     )?;
     let rows = stmt.query_map(params![dialogue_id], |row| {
         let slug: String = row.get(0)?;
@@ -2325,7 +2413,11 @@ pub fn get_dialogue_progress(conn: &Connection, dialogue_id: &str) -> Result<Dia
 }
 
 /// Find dialogues with similar tensions or perspectives (basic text similarity)
-pub fn find_similar_dialogues(conn: &Connection, query: &str, limit: i32) -> Result<Vec<(String, String, i32)>, rusqlite::Error> {
+pub fn find_similar_dialogues(
+    conn: &Connection,
+    query: &str,
+    limit: i32,
+) -> Result<Vec<(String, String, i32)>, rusqlite::Error> {
     // Simple LIKE-based search across dialogue titles and tension labels
     let pattern = format!("%{}%", query.to_lowercase());
 
@@ -2336,7 +2428,7 @@ pub fn find_similar_dialogues(conn: &Connection, query: &str, limit: i32) -> Res
         "SELECT dialogue_id, title, total_alignment FROM alignment_dialogues
          WHERE LOWER(title) LIKE ?1 OR LOWER(question) LIKE ?1
          ORDER BY total_alignment DESC
-         LIMIT ?2"
+         LIMIT ?2",
     )?;
     let rows = stmt.query_map(params![pattern, limit], |row| {
         let id: String = row.get(0)?;
@@ -2355,7 +2447,7 @@ pub fn find_similar_dialogues(conn: &Connection, query: &str, limit: i32) -> Res
          JOIN alignment_tensions t ON d.dialogue_id = t.dialogue_id
          WHERE LOWER(t.label) LIKE ?1 OR LOWER(t.description) LIKE ?1
          ORDER BY d.total_alignment DESC
-         LIMIT ?2"
+         LIMIT ?2",
     )?;
     let rows = stmt.query_map(params![pattern, limit], |row| {
         let id: String = row.get(0)?;
@@ -3112,51 +3204,103 @@ mod tests {
     #[test]
     fn test_validate_ref_semantics_resolve_must_target_tension() {
         // resolve must target Tension
-        let err = validate_ref_semantics(RefType::Resolve, EntityType::Perspective, EntityType::Perspective);
+        let err = validate_ref_semantics(
+            RefType::Resolve,
+            EntityType::Perspective,
+            EntityType::Perspective,
+        );
         assert!(err.is_some());
-        assert_eq!(err.as_ref().unwrap().code, ValidationErrorCode::InvalidRefTarget);
+        assert_eq!(
+            err.as_ref().unwrap().code,
+            ValidationErrorCode::InvalidRefTarget
+        );
 
         // resolve targeting Tension is valid
-        let err = validate_ref_semantics(RefType::Resolve, EntityType::Perspective, EntityType::Tension);
+        let err = validate_ref_semantics(
+            RefType::Resolve,
+            EntityType::Perspective,
+            EntityType::Tension,
+        );
         assert!(err.is_none());
 
         // address must target Tension
-        let err = validate_ref_semantics(RefType::Address, EntityType::Recommendation, EntityType::Claim);
+        let err = validate_ref_semantics(
+            RefType::Address,
+            EntityType::Recommendation,
+            EntityType::Claim,
+        );
         assert!(err.is_some());
 
         // reopen must target Tension
-        let err = validate_ref_semantics(RefType::Reopen, EntityType::Evidence, EntityType::Evidence);
+        let err =
+            validate_ref_semantics(RefType::Reopen, EntityType::Evidence, EntityType::Evidence);
         assert!(err.is_some());
     }
 
     #[test]
     fn test_validate_ref_semantics_refine_must_be_same_type() {
         // refine P→P is valid
-        let err = validate_ref_semantics(RefType::Refine, EntityType::Perspective, EntityType::Perspective);
+        let err = validate_ref_semantics(
+            RefType::Refine,
+            EntityType::Perspective,
+            EntityType::Perspective,
+        );
         assert!(err.is_none());
 
         // refine R→R is valid
-        let err = validate_ref_semantics(RefType::Refine, EntityType::Recommendation, EntityType::Recommendation);
+        let err = validate_ref_semantics(
+            RefType::Refine,
+            EntityType::Recommendation,
+            EntityType::Recommendation,
+        );
         assert!(err.is_none());
 
         // refine P→R is invalid (different types)
-        let err = validate_ref_semantics(RefType::Refine, EntityType::Perspective, EntityType::Recommendation);
+        let err = validate_ref_semantics(
+            RefType::Refine,
+            EntityType::Perspective,
+            EntityType::Recommendation,
+        );
         assert!(err.is_some());
-        assert_eq!(err.as_ref().unwrap().code, ValidationErrorCode::InvalidRefTarget);
+        assert_eq!(
+            err.as_ref().unwrap().code,
+            ValidationErrorCode::InvalidRefTarget
+        );
     }
 
     #[test]
     fn test_validate_ref_semantics_support_can_target_any() {
         // support can target any entity type
-        assert!(validate_ref_semantics(RefType::Support, EntityType::Perspective, EntityType::Tension).is_none());
-        assert!(validate_ref_semantics(RefType::Support, EntityType::Evidence, EntityType::Claim).is_none());
-        assert!(validate_ref_semantics(RefType::Support, EntityType::Claim, EntityType::Recommendation).is_none());
+        assert!(validate_ref_semantics(
+            RefType::Support,
+            EntityType::Perspective,
+            EntityType::Tension
+        )
+        .is_none());
+        assert!(
+            validate_ref_semantics(RefType::Support, EntityType::Evidence, EntityType::Claim)
+                .is_none()
+        );
+        assert!(validate_ref_semantics(
+            RefType::Support,
+            EntityType::Claim,
+            EntityType::Recommendation
+        )
+        .is_none());
 
         // oppose can target any
-        assert!(validate_ref_semantics(RefType::Oppose, EntityType::Perspective, EntityType::Perspective).is_none());
+        assert!(validate_ref_semantics(
+            RefType::Oppose,
+            EntityType::Perspective,
+            EntityType::Perspective
+        )
+        .is_none());
 
         // question can target any
-        assert!(validate_ref_semantics(RefType::Question, EntityType::Evidence, EntityType::Claim).is_none());
+        assert!(
+            validate_ref_semantics(RefType::Question, EntityType::Evidence, EntityType::Claim)
+                .is_none()
+        );
     }
 
     #[test]
@@ -3170,9 +3314,9 @@ mod tests {
 
         // Invalid IDs
         assert!(validate_display_id("X0101").is_err()); // Invalid prefix
-        assert!(validate_display_id("P01").is_err());    // Too short
+        assert!(validate_display_id("P01").is_err()); // Too short
         assert!(validate_display_id("P010101").is_err()); // Too long
-        assert!(validate_display_id("").is_err());        // Empty
+        assert!(validate_display_id("").is_err()); // Empty
         assert!(validate_display_id("PERSPECTIVE").is_err()); // Not a display ID
     }
 
@@ -3213,45 +3357,132 @@ mod tests {
                 })),
                 situation: Some("Market volatility increasing".to_string()),
             }),
-        ).unwrap();
+        )
+        .unwrap();
 
         // Register panel for round 0
-        register_expert(&conn, &dialogue_id, "muffin", "Value Analyst", ExpertTier::Core, ExpertSource::Pool,
-            Some("Analyzes intrinsic value"), Some("Margin of safety"), Some(0.95), None, None, Some(0)).unwrap();
-        register_expert(&conn, &dialogue_id, "donut", "Risk Manager", ExpertTier::Core, ExpertSource::Pool,
-            Some("Manages downside risk"), Some("Tail events"), Some(0.90), None, None, Some(0)).unwrap();
-        register_expert(&conn, &dialogue_id, "cupcake", "Income Analyst", ExpertTier::Adjacent, ExpertSource::Pool,
-            Some("Focuses on yield"), Some("Dividend sustainability"), Some(0.75), None, None, Some(0)).unwrap();
+        register_expert(
+            &conn,
+            &dialogue_id,
+            "muffin",
+            "Value Analyst",
+            ExpertTier::Core,
+            ExpertSource::Pool,
+            Some("Analyzes intrinsic value"),
+            Some("Margin of safety"),
+            Some(0.95),
+            None,
+            None,
+            Some(0),
+        )
+        .unwrap();
+        register_expert(
+            &conn,
+            &dialogue_id,
+            "donut",
+            "Risk Manager",
+            ExpertTier::Core,
+            ExpertSource::Pool,
+            Some("Manages downside risk"),
+            Some("Tail events"),
+            Some(0.90),
+            None,
+            None,
+            Some(0),
+        )
+        .unwrap();
+        register_expert(
+            &conn,
+            &dialogue_id,
+            "cupcake",
+            "Income Analyst",
+            ExpertTier::Adjacent,
+            ExpertSource::Pool,
+            Some("Focuses on yield"),
+            Some("Dividend sustainability"),
+            Some(0.75),
+            None,
+            None,
+            Some(0),
+        )
+        .unwrap();
 
         // Create round 0
         create_round(&conn, &dialogue_id, 0, Some("Opening arguments"), 35).unwrap();
 
         // Register perspectives from round 0
-        let p1 = register_perspective(&conn, &dialogue_id, 0, "Valuation stretched",
-            "Current position is 40% above fair value estimates", &["muffin".to_string()], None).unwrap();
+        let p1 = register_perspective(
+            &conn,
+            &dialogue_id,
+            0,
+            "Valuation stretched",
+            "Current position is 40% above fair value estimates",
+            &["muffin".to_string()],
+            None,
+        )
+        .unwrap();
         assert_eq!(p1, "P0001");
 
-        let p2 = register_perspective(&conn, &dialogue_id, 0, "Income gap identified",
-            "Zero dividend creates 4% shortfall vs trust mandate", &["cupcake".to_string()], None).unwrap();
+        let p2 = register_perspective(
+            &conn,
+            &dialogue_id,
+            0,
+            "Income gap identified",
+            "Zero dividend creates 4% shortfall vs trust mandate",
+            &["cupcake".to_string()],
+            None,
+        )
+        .unwrap();
         assert_eq!(p2, "P0002");
 
         // Register tension
-        let t1 = register_tension(&conn, &dialogue_id, 0, "Growth vs income conflict",
+        let t1 = register_tension(
+            &conn,
+            &dialogue_id,
+            0,
+            "Growth vs income conflict",
             "Position's growth profile incompatible with income mandate",
-            &["cupcake".to_string(), "muffin".to_string()], None).unwrap();
+            &["cupcake".to_string(), "muffin".to_string()],
+            None,
+        )
+        .unwrap();
         assert_eq!(t1, "T0001");
 
         // Register recommendation
-        let r1 = register_recommendation(&conn, &dialogue_id, 0, "Options overlay",
+        let r1 = register_recommendation(
+            &conn,
+            &dialogue_id,
+            0,
+            "Options overlay",
             "Implement covered call strategy to generate income",
             &["donut".to_string()],
             Some(&serde_json::json!({"delta": "0.30", "dte": "30-45"})),
-            None).unwrap();
+            None,
+        )
+        .unwrap();
         assert_eq!(r1, "R0001");
 
         // Register cross-references
-        register_ref(&conn, &dialogue_id, EntityType::Recommendation, &r1, RefType::Address, EntityType::Tension, &t1).unwrap();
-        register_ref(&conn, &dialogue_id, EntityType::Perspective, &p2, RefType::Support, EntityType::Tension, &t1).unwrap();
+        register_ref(
+            &conn,
+            &dialogue_id,
+            EntityType::Recommendation,
+            &r1,
+            RefType::Address,
+            EntityType::Tension,
+            &t1,
+        )
+        .unwrap();
+        register_ref(
+            &conn,
+            &dialogue_id,
+            EntityType::Perspective,
+            &p2,
+            RefType::Support,
+            EntityType::Tension,
+            &t1,
+        )
+        .unwrap();
 
         // Update scores
         update_expert_score(&conn, &dialogue_id, "muffin", 0, 12).unwrap();
@@ -3261,41 +3492,117 @@ mod tests {
         // === Round 1: Continue with created expert ===
 
         // Judge creates new expert to address supply chain concern
-        register_expert(&conn, &dialogue_id, "palmier", "Supply Chain Analyst", ExpertTier::Adjacent, ExpertSource::Created,
-            Some("Analyzes supply chain risks"), Some("Geographic concentration"),
-            None, Some("Emerging tension around manufacturing concentration"), None, Some(1)).unwrap();
+        register_expert(
+            &conn,
+            &dialogue_id,
+            "palmier",
+            "Supply Chain Analyst",
+            ExpertTier::Adjacent,
+            ExpertSource::Created,
+            Some("Analyzes supply chain risks"),
+            Some("Geographic concentration"),
+            None,
+            Some("Emerging tension around manufacturing concentration"),
+            None,
+            Some(1),
+        )
+        .unwrap();
 
         create_round(&conn, &dialogue_id, 1, Some("Deepening analysis"), 28).unwrap();
 
         // New perspective from created expert
-        let p3 = register_perspective(&conn, &dialogue_id, 1, "Concentration risk",
-            "Single-source manufacturing creates tail risk", &["palmier".to_string()], None).unwrap();
+        let p3 = register_perspective(
+            &conn,
+            &dialogue_id,
+            1,
+            "Concentration risk",
+            "Single-source manufacturing creates tail risk",
+            &["palmier".to_string()],
+            None,
+        )
+        .unwrap();
         assert_eq!(p3, "P0101");
 
         // Refinement of earlier perspective
-        let p4 = register_perspective(&conn, &dialogue_id, 1, "Valuation context",
+        let p4 = register_perspective(
+            &conn,
+            &dialogue_id,
+            1,
+            "Valuation context",
             "Stretched valuation justified by growth trajectory if supply chain stable",
-            &["muffin".to_string()], None).unwrap();
+            &["muffin".to_string()],
+            None,
+        )
+        .unwrap();
         assert_eq!(p4, "P0102");
-        register_ref(&conn, &dialogue_id, EntityType::Perspective, &p4, RefType::Refine, EntityType::Perspective, &p1).unwrap();
+        register_ref(
+            &conn,
+            &dialogue_id,
+            EntityType::Perspective,
+            &p4,
+            RefType::Refine,
+            EntityType::Perspective,
+            &p1,
+        )
+        .unwrap();
 
         // Evidence supporting the recommendation
-        let e1 = register_evidence(&conn, &dialogue_id, 1, "Historical premium data",
+        let e1 = register_evidence(
+            &conn,
+            &dialogue_id,
+            1,
+            "Historical premium data",
             "30-delta calls yielded 2.1-2.8% monthly over 24 months",
-            &["donut".to_string()], None).unwrap();
+            &["donut".to_string()],
+            None,
+        )
+        .unwrap();
         assert_eq!(e1, "E0101");
 
         // Claim based on evidence
-        let c1 = register_claim(&conn, &dialogue_id, 1, "Income mandate achievable",
+        let c1 = register_claim(
+            &conn,
+            &dialogue_id,
+            1,
+            "Income mandate achievable",
             "Options overlay can satisfy 4% requirement based on historical premiums",
-            &["donut".to_string(), "cupcake".to_string()], None).unwrap();
+            &["donut".to_string(), "cupcake".to_string()],
+            None,
+        )
+        .unwrap();
         assert_eq!(c1, "C0101");
-        register_ref(&conn, &dialogue_id, EntityType::Claim, &c1, RefType::Depend, EntityType::Evidence, &e1).unwrap();
-        register_ref(&conn, &dialogue_id, EntityType::Claim, &c1, RefType::Resolve, EntityType::Tension, &t1).unwrap();
+        register_ref(
+            &conn,
+            &dialogue_id,
+            EntityType::Claim,
+            &c1,
+            RefType::Depend,
+            EntityType::Evidence,
+            &e1,
+        )
+        .unwrap();
+        register_ref(
+            &conn,
+            &dialogue_id,
+            EntityType::Claim,
+            &c1,
+            RefType::Resolve,
+            EntityType::Tension,
+            &t1,
+        )
+        .unwrap();
 
         // Update tension status
-        update_tension_status(&conn, &dialogue_id, &t1, TensionStatus::Addressed,
-            &["donut".to_string()], Some(&c1), 1).unwrap();
+        update_tension_status(
+            &conn,
+            &dialogue_id,
+            &t1,
+            TensionStatus::Addressed,
+            &["donut".to_string()],
+            Some(&c1),
+            1,
+        )
+        .unwrap();
 
         update_expert_score(&conn, &dialogue_id, "muffin", 1, 10).unwrap();
         update_expert_score(&conn, &dialogue_id, "donut", 1, 18).unwrap();
@@ -3306,8 +3613,20 @@ mod tests {
         create_round(&conn, &dialogue_id, 2, Some("Convergence"), 15).unwrap();
 
         // Final tension resolution
-        update_tension_status(&conn, &dialogue_id, &t1, TensionStatus::Resolved,
-            &["muffin".to_string(), "cupcake".to_string(), "donut".to_string()], Some(&r1), 2).unwrap();
+        update_tension_status(
+            &conn,
+            &dialogue_id,
+            &t1,
+            TensionStatus::Resolved,
+            &[
+                "muffin".to_string(),
+                "cupcake".to_string(),
+                "donut".to_string(),
+            ],
+            Some(&r1),
+            2,
+        )
+        .unwrap();
 
         // Register interim verdict
         let interim_verdict = Verdict {
@@ -3390,8 +3709,12 @@ mod tests {
 
         let verdicts = get_verdicts(&conn, &dialogue_id).unwrap();
         assert_eq!(verdicts.len(), 2);
-        assert!(verdicts.iter().any(|v| v.verdict_type == VerdictType::Interim));
-        assert!(verdicts.iter().any(|v| v.verdict_type == VerdictType::Final));
+        assert!(verdicts
+            .iter()
+            .any(|v| v.verdict_type == VerdictType::Interim));
+        assert!(verdicts
+            .iter()
+            .any(|v| v.verdict_type == VerdictType::Final));
 
         // Verify total scores
         let muffin = experts.iter().find(|e| e.expert_slug == "muffin").unwrap();
@@ -3404,18 +3727,59 @@ mod tests {
     fn test_integration_minority_verdict() {
         let conn = setup_test_db();
 
-        let dialogue_id = create_dialogue(&conn, "Contested Decision", Some("A divisive topic"), None, None).unwrap();
+        let dialogue_id = create_dialogue(
+            &conn,
+            "Contested Decision",
+            Some("A divisive topic"),
+            None,
+            None,
+        )
+        .unwrap();
 
-        register_expert(&conn, &dialogue_id, "muffin", "Advocate", ExpertTier::Core, ExpertSource::Pool,
-            None, None, None, None, None, Some(0)).unwrap();
-        register_expert(&conn, &dialogue_id, "donut", "Skeptic", ExpertTier::Core, ExpertSource::Pool,
-            None, None, None, None, None, Some(0)).unwrap();
+        register_expert(
+            &conn,
+            &dialogue_id,
+            "muffin",
+            "Advocate",
+            ExpertTier::Core,
+            ExpertSource::Pool,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(0),
+        )
+        .unwrap();
+        register_expert(
+            &conn,
+            &dialogue_id,
+            "donut",
+            "Skeptic",
+            ExpertTier::Core,
+            ExpertSource::Pool,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(0),
+        )
+        .unwrap();
 
         create_round(&conn, &dialogue_id, 0, None, 20).unwrap();
 
         // Register a tension that won't be resolved
-        let t1 = register_tension(&conn, &dialogue_id, 0, "Fundamental disagreement",
-            "Core values conflict", &["muffin".to_string(), "donut".to_string()], None).unwrap();
+        let t1 = register_tension(
+            &conn,
+            &dialogue_id,
+            0,
+            "Fundamental disagreement",
+            "Core values conflict",
+            &["muffin".to_string(), "donut".to_string()],
+            None,
+        )
+        .unwrap();
 
         // Majority verdict
         let majority = Verdict {
@@ -3466,7 +3830,10 @@ mod tests {
         let verdicts = get_verdicts(&conn, &dialogue_id).unwrap();
         assert_eq!(verdicts.len(), 2);
 
-        let dissent = verdicts.iter().find(|v| v.verdict_type == VerdictType::Dissent).unwrap();
+        let dissent = verdicts
+            .iter()
+            .find(|v| v.verdict_type == VerdictType::Dissent)
+            .unwrap();
         assert_eq!(dissent.author_expert, Some("donut".to_string()));
         assert_eq!(dissent.recommendation, "REJECT");
     }
@@ -3477,36 +3844,92 @@ mod tests {
 
         let dialogue_id = create_dialogue(&conn, "Evolving Discussion", None, None, None).unwrap();
 
-        register_expert(&conn, &dialogue_id, "muffin", "Analyst", ExpertTier::Core, ExpertSource::Pool,
-            None, None, None, None, None, Some(0)).unwrap();
+        register_expert(
+            &conn,
+            &dialogue_id,
+            "muffin",
+            "Analyst",
+            ExpertTier::Core,
+            ExpertSource::Pool,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(0),
+        )
+        .unwrap();
 
         create_round(&conn, &dialogue_id, 0, None, 10).unwrap();
 
         // Create and resolve a tension
-        let t1 = register_tension(&conn, &dialogue_id, 0, "Initial concern",
-            "Something needs attention", &["muffin".to_string()], None).unwrap();
+        let t1 = register_tension(
+            &conn,
+            &dialogue_id,
+            0,
+            "Initial concern",
+            "Something needs attention",
+            &["muffin".to_string()],
+            None,
+        )
+        .unwrap();
 
-        update_tension_status(&conn, &dialogue_id, &t1, TensionStatus::Addressed,
-            &["muffin".to_string()], None, 0).unwrap();
-        update_tension_status(&conn, &dialogue_id, &t1, TensionStatus::Resolved,
-            &["muffin".to_string()], None, 0).unwrap();
+        update_tension_status(
+            &conn,
+            &dialogue_id,
+            &t1,
+            TensionStatus::Addressed,
+            &["muffin".to_string()],
+            None,
+            0,
+        )
+        .unwrap();
+        update_tension_status(
+            &conn,
+            &dialogue_id,
+            &t1,
+            TensionStatus::Resolved,
+            &["muffin".to_string()],
+            None,
+            0,
+        )
+        .unwrap();
 
         // Create round 1 and reopen the tension
         create_round(&conn, &dialogue_id, 1, None, 12).unwrap();
 
         // New evidence causes reopening
-        let e1 = register_evidence(&conn, &dialogue_id, 1, "New data",
-            "Previously unknown information surfaces", &["muffin".to_string()], None).unwrap();
+        let e1 = register_evidence(
+            &conn,
+            &dialogue_id,
+            1,
+            "New data",
+            "Previously unknown information surfaces",
+            &["muffin".to_string()],
+            None,
+        )
+        .unwrap();
 
-        update_tension_status(&conn, &dialogue_id, &t1, TensionStatus::Reopened,
-            &["muffin".to_string()], Some(&e1), 1).unwrap();
+        update_tension_status(
+            &conn,
+            &dialogue_id,
+            &t1,
+            TensionStatus::Reopened,
+            &["muffin".to_string()],
+            Some(&e1),
+            1,
+        )
+        .unwrap();
 
         let tensions = get_tensions(&conn, &dialogue_id).unwrap();
         assert_eq!(tensions.len(), 1);
         assert_eq!(tensions[0].status, TensionStatus::Reopened);
 
         // The tension still has its original ID
-        assert_eq!(display_id(EntityType::Tension, tensions[0].round, tensions[0].seq), "T0001");
+        assert_eq!(
+            display_id(EntityType::Tension, tensions[0].round, tensions[0].seq),
+            "T0001"
+        );
     }
 
     #[test]
@@ -3515,38 +3938,137 @@ mod tests {
 
         let dialogue_id = create_dialogue(&conn, "Complex References", None, None, None).unwrap();
 
-        register_expert(&conn, &dialogue_id, "muffin", "Analyst", ExpertTier::Core, ExpertSource::Pool,
-            None, None, None, None, None, Some(0)).unwrap();
+        register_expert(
+            &conn,
+            &dialogue_id,
+            "muffin",
+            "Analyst",
+            ExpertTier::Core,
+            ExpertSource::Pool,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(0),
+        )
+        .unwrap();
 
         create_round(&conn, &dialogue_id, 0, None, 20).unwrap();
 
         // Create a web of related entities
-        let p1 = register_perspective(&conn, &dialogue_id, 0, "Base perspective",
-            "Foundation viewpoint", &["muffin".to_string()], None).unwrap();
+        let p1 = register_perspective(
+            &conn,
+            &dialogue_id,
+            0,
+            "Base perspective",
+            "Foundation viewpoint",
+            &["muffin".to_string()],
+            None,
+        )
+        .unwrap();
 
-        let t1 = register_tension(&conn, &dialogue_id, 0, "Core tension",
-            "Central issue", &["muffin".to_string()], None).unwrap();
+        let t1 = register_tension(
+            &conn,
+            &dialogue_id,
+            0,
+            "Core tension",
+            "Central issue",
+            &["muffin".to_string()],
+            None,
+        )
+        .unwrap();
 
-        let e1 = register_evidence(&conn, &dialogue_id, 0, "Supporting data",
-            "Facts backing the perspective", &["muffin".to_string()], None).unwrap();
+        let e1 = register_evidence(
+            &conn,
+            &dialogue_id,
+            0,
+            "Supporting data",
+            "Facts backing the perspective",
+            &["muffin".to_string()],
+            None,
+        )
+        .unwrap();
 
-        let r1 = register_recommendation(&conn, &dialogue_id, 0, "Proposed solution",
-            "How to address the tension", &["muffin".to_string()], None, None).unwrap();
+        let r1 = register_recommendation(
+            &conn,
+            &dialogue_id,
+            0,
+            "Proposed solution",
+            "How to address the tension",
+            &["muffin".to_string()],
+            None,
+            None,
+        )
+        .unwrap();
 
-        let c1 = register_claim(&conn, &dialogue_id, 0, "Synthesis",
-            "Bringing it together", &["muffin".to_string()], None).unwrap();
+        let c1 = register_claim(
+            &conn,
+            &dialogue_id,
+            0,
+            "Synthesis",
+            "Bringing it together",
+            &["muffin".to_string()],
+            None,
+        )
+        .unwrap();
 
         // Build the reference graph
         // E0001 supports P0001
-        register_ref(&conn, &dialogue_id, EntityType::Evidence, &e1, RefType::Support, EntityType::Perspective, &p1).unwrap();
+        register_ref(
+            &conn,
+            &dialogue_id,
+            EntityType::Evidence,
+            &e1,
+            RefType::Support,
+            EntityType::Perspective,
+            &p1,
+        )
+        .unwrap();
         // P0001 supports T0001 (highlights the tension)
-        register_ref(&conn, &dialogue_id, EntityType::Perspective, &p1, RefType::Support, EntityType::Tension, &t1).unwrap();
+        register_ref(
+            &conn,
+            &dialogue_id,
+            EntityType::Perspective,
+            &p1,
+            RefType::Support,
+            EntityType::Tension,
+            &t1,
+        )
+        .unwrap();
         // R0001 addresses T0001
-        register_ref(&conn, &dialogue_id, EntityType::Recommendation, &r1, RefType::Address, EntityType::Tension, &t1).unwrap();
+        register_ref(
+            &conn,
+            &dialogue_id,
+            EntityType::Recommendation,
+            &r1,
+            RefType::Address,
+            EntityType::Tension,
+            &t1,
+        )
+        .unwrap();
         // C0001 depends on E0001
-        register_ref(&conn, &dialogue_id, EntityType::Claim, &c1, RefType::Depend, EntityType::Evidence, &e1).unwrap();
+        register_ref(
+            &conn,
+            &dialogue_id,
+            EntityType::Claim,
+            &c1,
+            RefType::Depend,
+            EntityType::Evidence,
+            &e1,
+        )
+        .unwrap();
         // C0001 resolves T0001
-        register_ref(&conn, &dialogue_id, EntityType::Claim, &c1, RefType::Resolve, EntityType::Tension, &t1).unwrap();
+        register_ref(
+            &conn,
+            &dialogue_id,
+            EntityType::Claim,
+            &c1,
+            RefType::Resolve,
+            EntityType::Tension,
+            &t1,
+        )
+        .unwrap();
 
         // Verify all entities created
         assert_eq!(get_perspectives(&conn, &dialogue_id).unwrap().len(), 1);
@@ -3566,13 +4088,33 @@ mod tests {
         let conn = setup_test_db();
 
         let dialogue_id = create_dialogue(&conn, "Citation Test", None, None, None).unwrap();
-        register_expert(&conn, &dialogue_id, "muffin", "Analyst", ExpertTier::Core, ExpertSource::Pool,
-            None, None, None, None, None, Some(0)).unwrap();
+        register_expert(
+            &conn,
+            &dialogue_id,
+            "muffin",
+            "Analyst",
+            ExpertTier::Core,
+            ExpertSource::Pool,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(0),
+        )
+        .unwrap();
         create_round(&conn, &dialogue_id, 0, None, 10).unwrap();
 
-        let p1 = register_perspective(&conn, &dialogue_id, 0, "Test perspective",
+        let p1 = register_perspective(
+            &conn,
+            &dialogue_id,
+            0,
+            "Test perspective",
             "This is the full content of the perspective for testing expansion",
-            &["muffin".to_string()], None).unwrap();
+            &["muffin".to_string()],
+            None,
+        )
+        .unwrap();
 
         let expanded = expand_citation(&conn, &dialogue_id, &p1).unwrap();
 
@@ -3591,12 +4133,33 @@ mod tests {
         let conn = setup_test_db();
 
         let dialogue_id = create_dialogue(&conn, "Tension Expansion", None, None, None).unwrap();
-        register_expert(&conn, &dialogue_id, "muffin", "Analyst", ExpertTier::Core, ExpertSource::Pool,
-            None, None, None, None, None, Some(0)).unwrap();
+        register_expert(
+            &conn,
+            &dialogue_id,
+            "muffin",
+            "Analyst",
+            ExpertTier::Core,
+            ExpertSource::Pool,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(0),
+        )
+        .unwrap();
         create_round(&conn, &dialogue_id, 0, None, 10).unwrap();
 
-        let t1 = register_tension(&conn, &dialogue_id, 0, "Core conflict",
-            "Two competing priorities", &["muffin".to_string()], None).unwrap();
+        let t1 = register_tension(
+            &conn,
+            &dialogue_id,
+            0,
+            "Core conflict",
+            "Two competing priorities",
+            &["muffin".to_string()],
+            None,
+        )
+        .unwrap();
 
         let expanded = expand_citation(&conn, &dialogue_id, &t1).unwrap();
 
@@ -3611,15 +4174,34 @@ mod tests {
         let conn = setup_test_db();
 
         let dialogue_id = create_dialogue(&conn, "Rec Expansion", None, None, None).unwrap();
-        register_expert(&conn, &dialogue_id, "donut", "Strategist", ExpertTier::Core, ExpertSource::Pool,
-            None, None, None, None, None, Some(0)).unwrap();
+        register_expert(
+            &conn,
+            &dialogue_id,
+            "donut",
+            "Strategist",
+            ExpertTier::Core,
+            ExpertSource::Pool,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(0),
+        )
+        .unwrap();
         create_round(&conn, &dialogue_id, 0, None, 10).unwrap();
 
-        let r1 = register_recommendation(&conn, &dialogue_id, 0, "Options strategy",
+        let r1 = register_recommendation(
+            &conn,
+            &dialogue_id,
+            0,
+            "Options strategy",
             "Implement covered calls",
             &["donut".to_string()],
             Some(&serde_json::json!({"delta": 0.30, "dte": 45})),
-            None).unwrap();
+            None,
+        )
+        .unwrap();
 
         let expanded = expand_citation(&conn, &dialogue_id, &r1).unwrap();
 
@@ -3635,13 +4217,53 @@ mod tests {
         let conn = setup_test_db();
 
         let dialogue_id = create_dialogue(&conn, "Multi Citation", None, None, None).unwrap();
-        register_expert(&conn, &dialogue_id, "muffin", "Analyst", ExpertTier::Core, ExpertSource::Pool,
-            None, None, None, None, None, Some(0)).unwrap();
+        register_expert(
+            &conn,
+            &dialogue_id,
+            "muffin",
+            "Analyst",
+            ExpertTier::Core,
+            ExpertSource::Pool,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(0),
+        )
+        .unwrap();
         create_round(&conn, &dialogue_id, 0, None, 10).unwrap();
 
-        let p1 = register_perspective(&conn, &dialogue_id, 0, "First", "Content 1", &["muffin".to_string()], None).unwrap();
-        let p2 = register_perspective(&conn, &dialogue_id, 0, "Second", "Content 2", &["muffin".to_string()], None).unwrap();
-        let t1 = register_tension(&conn, &dialogue_id, 0, "Conflict", "Issue", &["muffin".to_string()], None).unwrap();
+        let p1 = register_perspective(
+            &conn,
+            &dialogue_id,
+            0,
+            "First",
+            "Content 1",
+            &["muffin".to_string()],
+            None,
+        )
+        .unwrap();
+        let p2 = register_perspective(
+            &conn,
+            &dialogue_id,
+            0,
+            "Second",
+            "Content 2",
+            &["muffin".to_string()],
+            None,
+        )
+        .unwrap();
+        let t1 = register_tension(
+            &conn,
+            &dialogue_id,
+            0,
+            "Conflict",
+            "Issue",
+            &["muffin".to_string()],
+            None,
+        )
+        .unwrap();
 
         let results = expand_citations(&conn, &dialogue_id, &[p1, p2, t1, "X9999".to_string()]);
 
@@ -3660,20 +4282,82 @@ mod tests {
         let d1 = create_dialogue(&conn, "Dialogue One", None, None, None).unwrap();
         let d2 = create_dialogue(&conn, "Dialogue Two", None, None, None).unwrap();
 
-        register_expert(&conn, &d1, "muffin", "Analyst", ExpertTier::Core, ExpertSource::Pool,
-            None, None, None, None, None, Some(0)).unwrap();
-        register_expert(&conn, &d2, "muffin", "Analyst", ExpertTier::Core, ExpertSource::Pool,
-            None, None, None, None, None, Some(0)).unwrap();
+        register_expert(
+            &conn,
+            &d1,
+            "muffin",
+            "Analyst",
+            ExpertTier::Core,
+            ExpertSource::Pool,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(0),
+        )
+        .unwrap();
+        register_expert(
+            &conn,
+            &d2,
+            "muffin",
+            "Analyst",
+            ExpertTier::Core,
+            ExpertSource::Pool,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(0),
+        )
+        .unwrap();
 
         create_round(&conn, &d1, 0, None, 30).unwrap();
         create_round(&conn, &d2, 0, None, 20).unwrap();
 
-        register_perspective(&conn, &d1, 0, "P1", "Content", &["muffin".to_string()], None).unwrap();
-        register_perspective(&conn, &d1, 0, "P2", "Content", &["muffin".to_string()], None).unwrap();
-        register_perspective(&conn, &d2, 0, "P3", "Content", &["muffin".to_string()], None).unwrap();
+        register_perspective(
+            &conn,
+            &d1,
+            0,
+            "P1",
+            "Content",
+            &["muffin".to_string()],
+            None,
+        )
+        .unwrap();
+        register_perspective(
+            &conn,
+            &d1,
+            0,
+            "P2",
+            "Content",
+            &["muffin".to_string()],
+            None,
+        )
+        .unwrap();
+        register_perspective(
+            &conn,
+            &d2,
+            0,
+            "P3",
+            "Content",
+            &["muffin".to_string()],
+            None,
+        )
+        .unwrap();
 
         register_tension(&conn, &d1, 0, "T1", "Issue", &["muffin".to_string()], None).unwrap();
-        update_tension_status(&conn, &d1, "T0001", TensionStatus::Resolved, &["muffin".to_string()], None, 0).unwrap();
+        update_tension_status(
+            &conn,
+            &d1,
+            "T0001",
+            TensionStatus::Resolved,
+            &["muffin".to_string()],
+            None,
+            0,
+        )
+        .unwrap();
 
         register_tension(&conn, &d2, 0, "T2", "Issue", &["muffin".to_string()], None).unwrap();
 
@@ -3698,21 +4382,71 @@ mod tests {
         let conn = setup_test_db();
 
         let dialogue_id = create_dialogue(&conn, "Progress Test", None, None, None).unwrap();
-        register_expert(&conn, &dialogue_id, "muffin", "Analyst", ExpertTier::Core, ExpertSource::Pool,
-            None, None, None, None, None, Some(0)).unwrap();
-        register_expert(&conn, &dialogue_id, "donut", "Skeptic", ExpertTier::Core, ExpertSource::Pool,
-            None, None, None, None, None, Some(0)).unwrap();
+        register_expert(
+            &conn,
+            &dialogue_id,
+            "muffin",
+            "Analyst",
+            ExpertTier::Core,
+            ExpertSource::Pool,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(0),
+        )
+        .unwrap();
+        register_expert(
+            &conn,
+            &dialogue_id,
+            "donut",
+            "Skeptic",
+            ExpertTier::Core,
+            ExpertSource::Pool,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(0),
+        )
+        .unwrap();
 
         create_round(&conn, &dialogue_id, 0, None, 30).unwrap();
         create_round(&conn, &dialogue_id, 1, None, 25).unwrap();
         create_round(&conn, &dialogue_id, 2, None, 20).unwrap();
 
-        register_tension(&conn, &dialogue_id, 0, "Open tension", "Still unresolved",
-            &["muffin".to_string()], None).unwrap();
-        let t2 = register_tension(&conn, &dialogue_id, 0, "Resolved tension", "This was resolved",
-            &["donut".to_string()], None).unwrap();
-        update_tension_status(&conn, &dialogue_id, &t2, TensionStatus::Resolved,
-            &["muffin".to_string(), "donut".to_string()], None, 1).unwrap();
+        register_tension(
+            &conn,
+            &dialogue_id,
+            0,
+            "Open tension",
+            "Still unresolved",
+            &["muffin".to_string()],
+            None,
+        )
+        .unwrap();
+        let t2 = register_tension(
+            &conn,
+            &dialogue_id,
+            0,
+            "Resolved tension",
+            "This was resolved",
+            &["donut".to_string()],
+            None,
+        )
+        .unwrap();
+        update_tension_status(
+            &conn,
+            &dialogue_id,
+            &t2,
+            TensionStatus::Resolved,
+            &["muffin".to_string(), "donut".to_string()],
+            None,
+            1,
+        )
+        .unwrap();
 
         update_expert_score(&conn, &dialogue_id, "muffin", 0, 12).unwrap();
         update_expert_score(&conn, &dialogue_id, "muffin", 1, 8).unwrap();
@@ -3740,8 +4474,21 @@ mod tests {
         let conn = setup_test_db();
 
         let dialogue_id = create_dialogue(&conn, "Converging Test", None, None, None).unwrap();
-        register_expert(&conn, &dialogue_id, "muffin", "Analyst", ExpertTier::Core, ExpertSource::Pool,
-            None, None, None, None, None, Some(0)).unwrap();
+        register_expert(
+            &conn,
+            &dialogue_id,
+            "muffin",
+            "Analyst",
+            ExpertTier::Core,
+            ExpertSource::Pool,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(0),
+        )
+        .unwrap();
 
         // Create rounds with diminishing velocity
         create_round(&conn, &dialogue_id, 0, None, 30).unwrap();
@@ -3760,14 +4507,37 @@ mod tests {
     fn test_find_similar_dialogues() {
         let conn = setup_test_db();
 
-        create_dialogue(&conn, "Investment Portfolio Review", Some("Should we rebalance?"), None, None).unwrap();
-        create_dialogue(&conn, "Marketing Strategy", Some("How to increase reach"), None, None).unwrap();
-        create_dialogue(&conn, "Investment Risk Assessment", Some("What are the risks?"), None, None).unwrap();
+        create_dialogue(
+            &conn,
+            "Investment Portfolio Review",
+            Some("Should we rebalance?"),
+            None,
+            None,
+        )
+        .unwrap();
+        create_dialogue(
+            &conn,
+            "Marketing Strategy",
+            Some("How to increase reach"),
+            None,
+            None,
+        )
+        .unwrap();
+        create_dialogue(
+            &conn,
+            "Investment Risk Assessment",
+            Some("What are the risks?"),
+            None,
+            None,
+        )
+        .unwrap();
 
         let results = find_similar_dialogues(&conn, "investment", 10).unwrap();
 
         assert_eq!(results.len(), 2); // Two dialogues match "investment"
-        assert!(results.iter().any(|(_, title, _)| title.contains("Portfolio")));
+        assert!(results
+            .iter()
+            .any(|(_, title, _)| title.contains("Portfolio")));
         assert!(results.iter().any(|(_, title, _)| title.contains("Risk")));
     }
 
@@ -3778,12 +4548,30 @@ mod tests {
         let conn = setup_test_db();
 
         // Create dialogues with similar titles - each gets unique output dir via unique ID
-        let d1 = create_dialogue(&conn, "Investment Analysis",
-            Some("First analysis"), Some("/tmp/blue-dialogue/investment-analysis"), None).unwrap();
-        let d2 = create_dialogue(&conn, "Investment Analysis",
-            Some("Second analysis"), Some("/tmp/blue-dialogue/investment-analysis-2"), None).unwrap();
-        let d3 = create_dialogue(&conn, "Investment Analysis",
-            Some("Third analysis"), Some("/tmp/blue-dialogue/investment-analysis-3"), None).unwrap();
+        let d1 = create_dialogue(
+            &conn,
+            "Investment Analysis",
+            Some("First analysis"),
+            Some("/tmp/blue-dialogue/investment-analysis"),
+            None,
+        )
+        .unwrap();
+        let d2 = create_dialogue(
+            &conn,
+            "Investment Analysis",
+            Some("Second analysis"),
+            Some("/tmp/blue-dialogue/investment-analysis-2"),
+            None,
+        )
+        .unwrap();
+        let d3 = create_dialogue(
+            &conn,
+            "Investment Analysis",
+            Some("Third analysis"),
+            Some("/tmp/blue-dialogue/investment-analysis-3"),
+            None,
+        )
+        .unwrap();
 
         // Verify unique IDs
         assert_eq!(d1, "investment-analysis");
@@ -3795,15 +4583,50 @@ mod tests {
         let dialogue2 = get_dialogue(&conn, &d2).unwrap();
         let dialogue3 = get_dialogue(&conn, &d3).unwrap();
 
-        assert_eq!(dialogue1.output_dir, Some("/tmp/blue-dialogue/investment-analysis".to_string()));
-        assert_eq!(dialogue2.output_dir, Some("/tmp/blue-dialogue/investment-analysis-2".to_string()));
-        assert_eq!(dialogue3.output_dir, Some("/tmp/blue-dialogue/investment-analysis-3".to_string()));
+        assert_eq!(
+            dialogue1.output_dir,
+            Some("/tmp/blue-dialogue/investment-analysis".to_string())
+        );
+        assert_eq!(
+            dialogue2.output_dir,
+            Some("/tmp/blue-dialogue/investment-analysis-2".to_string())
+        );
+        assert_eq!(
+            dialogue3.output_dir,
+            Some("/tmp/blue-dialogue/investment-analysis-3".to_string())
+        );
 
         // Add experts to different dialogues - they remain isolated
-        register_expert(&conn, &d1, "muffin", "Analyst A", ExpertTier::Core, ExpertSource::Pool,
-            None, None, None, None, None, Some(0)).unwrap();
-        register_expert(&conn, &d2, "muffin", "Analyst B", ExpertTier::Core, ExpertSource::Pool,
-            None, None, None, None, None, Some(0)).unwrap();
+        register_expert(
+            &conn,
+            &d1,
+            "muffin",
+            "Analyst A",
+            ExpertTier::Core,
+            ExpertSource::Pool,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(0),
+        )
+        .unwrap();
+        register_expert(
+            &conn,
+            &d2,
+            "muffin",
+            "Analyst B",
+            ExpertTier::Core,
+            ExpertSource::Pool,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(0),
+        )
+        .unwrap();
 
         let experts1 = get_experts(&conn, &d1).unwrap();
         let experts2 = get_experts(&conn, &d2).unwrap();
@@ -3819,15 +4642,36 @@ mod tests {
         let conn = setup_test_db();
 
         let dialogue_id = create_dialogue(&conn, "Large Dialogue", None, None, None).unwrap();
-        register_expert(&conn, &dialogue_id, "muffin", "Analyst", ExpertTier::Core, ExpertSource::Pool,
-            None, None, None, None, None, Some(0)).unwrap();
+        register_expert(
+            &conn,
+            &dialogue_id,
+            "muffin",
+            "Analyst",
+            ExpertTier::Core,
+            ExpertSource::Pool,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(0),
+        )
+        .unwrap();
 
         // Create 10 rounds with 10 perspectives each = 100 perspectives
         for round in 0..10 {
             create_round(&conn, &dialogue_id, round, None, 10).unwrap();
             for _seq in 0..10 {
-                register_perspective(&conn, &dialogue_id, round, "Test perspective",
-                    "Content for testing performance", &["muffin".to_string()], None).unwrap();
+                register_perspective(
+                    &conn,
+                    &dialogue_id,
+                    round,
+                    "Test perspective",
+                    "Content for testing performance",
+                    &["muffin".to_string()],
+                    None,
+                )
+                .unwrap();
             }
         }
 
@@ -3838,7 +4682,11 @@ mod tests {
 
         assert_eq!(perspectives.len(), 100);
         // Should complete in under 100ms with proper indices
-        assert!(duration.as_millis() < 100, "Query took too long: {:?}", duration);
+        assert!(
+            duration.as_millis() < 100,
+            "Query took too long: {:?}",
+            duration
+        );
     }
 
     #[test]
@@ -3846,11 +4694,12 @@ mod tests {
         let conn = setup_test_db();
 
         // Query SQLite for index info
-        let mut stmt = conn.prepare(
-            "SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'idx_%'"
-        ).unwrap();
+        let mut stmt = conn
+            .prepare("SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'idx_%'")
+            .unwrap();
 
-        let indices: Vec<String> = stmt.query_map([], |row| row.get(0))
+        let indices: Vec<String> = stmt
+            .query_map([], |row| row.get(0))
             .unwrap()
             .filter_map(|r| r.ok())
             .collect();
@@ -3869,19 +4718,56 @@ mod tests {
         let conn = setup_test_db();
 
         let dialogue_id = create_dialogue(&conn, "Orphan Test", None, None, None).unwrap();
-        register_expert(&conn, &dialogue_id, "muffin", "Analyst", ExpertTier::Core, ExpertSource::Pool,
-            None, None, None, None, None, Some(0)).unwrap();
+        register_expert(
+            &conn,
+            &dialogue_id,
+            "muffin",
+            "Analyst",
+            ExpertTier::Core,
+            ExpertSource::Pool,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(0),
+        )
+        .unwrap();
         create_round(&conn, &dialogue_id, 0, None, 10).unwrap();
 
         // Register entities
-        let p1 = register_perspective(&conn, &dialogue_id, 0, "P1", "Content",
-            &["muffin".to_string()], None).unwrap();
-        let t1 = register_tension(&conn, &dialogue_id, 0, "T1", "Issue",
-            &["muffin".to_string()], None).unwrap();
+        let p1 = register_perspective(
+            &conn,
+            &dialogue_id,
+            0,
+            "P1",
+            "Content",
+            &["muffin".to_string()],
+            None,
+        )
+        .unwrap();
+        let t1 = register_tension(
+            &conn,
+            &dialogue_id,
+            0,
+            "T1",
+            "Issue",
+            &["muffin".to_string()],
+            None,
+        )
+        .unwrap();
 
         // Register a ref between entities
-        register_ref(&conn, &dialogue_id, EntityType::Perspective, &p1,
-            RefType::Address, EntityType::Tension, &t1).unwrap();
+        register_ref(
+            &conn,
+            &dialogue_id,
+            EntityType::Perspective,
+            &p1,
+            RefType::Address,
+            EntityType::Tension,
+            &t1,
+        )
+        .unwrap();
 
         // All entities should be queryable and connected
         let perspectives = get_perspectives(&conn, &dialogue_id).unwrap();
@@ -3891,17 +4777,23 @@ mod tests {
         assert_eq!(tensions.len(), 1);
 
         // Refs should exist
-        let ref_count: i32 = conn.query_row(
-            "SELECT COUNT(*) FROM alignment_refs WHERE dialogue_id = ?1",
-            params![dialogue_id], |row| row.get(0)
-        ).unwrap();
+        let ref_count: i32 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM alignment_refs WHERE dialogue_id = ?1",
+                params![dialogue_id],
+                |row| row.get(0),
+            )
+            .unwrap();
         assert_eq!(ref_count, 1);
 
         // Verify ref connects to valid entities
-        let ref_row: (String, String) = conn.query_row(
-            "SELECT source_id, target_id FROM alignment_refs WHERE dialogue_id = ?1",
-            params![dialogue_id], |row| Ok((row.get(0)?, row.get(1)?))
-        ).unwrap();
+        let ref_row: (String, String) = conn
+            .query_row(
+                "SELECT source_id, target_id FROM alignment_refs WHERE dialogue_id = ?1",
+                params![dialogue_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
         assert_eq!(ref_row.0, p1);
         assert_eq!(ref_row.1, t1);
     }
@@ -3993,25 +4885,38 @@ mod tests {
             14, // 5+3+4+2
             Some(&sc),
             Some(&cm),
-        ).unwrap();
+        )
+        .unwrap();
 
         // Verify the round was created with correct metrics
-        let row: (i32, i32, i32, i32, i32, i32, i32, i32) = conn.query_row(
-            "SELECT score_wisdom, score_consistency, score_truth, score_relationships,
+        let row: (i32, i32, i32, i32, i32, i32, i32, i32) = conn
+            .query_row(
+                "SELECT score_wisdom, score_consistency, score_truth, score_relationships,
                     open_tensions, new_perspectives, converge_signals, panel_size
              FROM alignment_rounds WHERE dialogue_id = ?1 AND round = 0",
-            params![dialogue_id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?,
-                      row.get(4)?, row.get(5)?, row.get(6)?, row.get(7)?))
-        ).unwrap();
+                params![dialogue_id],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                        row.get(6)?,
+                        row.get(7)?,
+                    ))
+                },
+            )
+            .unwrap();
 
-        assert_eq!(row.0, 5);  // wisdom
-        assert_eq!(row.1, 3);  // consistency
-        assert_eq!(row.2, 4);  // truth
-        assert_eq!(row.3, 2);  // relationships
-        assert_eq!(row.4, 3);  // open_tensions
-        assert_eq!(row.5, 2);  // new_perspectives
-        assert_eq!(row.6, 8);  // converge_signals
+        assert_eq!(row.0, 5); // wisdom
+        assert_eq!(row.1, 3); // consistency
+        assert_eq!(row.2, 4); // truth
+        assert_eq!(row.3, 2); // relationships
+        assert_eq!(row.4, 3); // open_tensions
+        assert_eq!(row.5, 2); // new_perspectives
+        assert_eq!(row.6, 8); // converge_signals
         assert_eq!(row.7, 12); // panel_size
     }
 
@@ -4045,24 +4950,52 @@ mod tests {
         let dialogue_id = create_dialogue(&conn, "Scoreboard Test", None, None, None).unwrap();
 
         // Create round 0
-        let sc0 = ScoreComponents { wisdom: 10, consistency: 5, truth: 8, relationships: 3 };
+        let sc0 = ScoreComponents {
+            wisdom: 10,
+            consistency: 5,
+            truth: 8,
+            relationships: 3,
+        };
         let cm0 = ConvergenceMetrics {
             open_tensions: 5,
             new_perspectives: 3,
             converge_signals: 4,
             panel_size: 12,
         };
-        create_round_with_metrics(&conn, &dialogue_id, 0, Some("Round 0"), 26, Some(&sc0), Some(&cm0)).unwrap();
+        create_round_with_metrics(
+            &conn,
+            &dialogue_id,
+            0,
+            Some("Round 0"),
+            26,
+            Some(&sc0),
+            Some(&cm0),
+        )
+        .unwrap();
 
         // Create round 1
-        let sc1 = ScoreComponents { wisdom: 8, consistency: 6, truth: 4, relationships: 2 };
+        let sc1 = ScoreComponents {
+            wisdom: 8,
+            consistency: 6,
+            truth: 4,
+            relationships: 2,
+        };
         let cm1 = ConvergenceMetrics {
             open_tensions: 2,
             new_perspectives: 1,
             converge_signals: 10,
             panel_size: 12,
         };
-        create_round_with_metrics(&conn, &dialogue_id, 1, Some("Round 1"), 20, Some(&sc1), Some(&cm1)).unwrap();
+        create_round_with_metrics(
+            &conn,
+            &dialogue_id,
+            1,
+            Some("Round 1"),
+            20,
+            Some(&sc1),
+            Some(&cm1),
+        )
+        .unwrap();
 
         // Get scoreboard
         let scoreboard = get_scoreboard(&conn, &dialogue_id).unwrap();
@@ -4076,16 +5009,16 @@ mod tests {
         assert_eq!(r0.t, 8);
         assert_eq!(r0.r, 3);
         assert_eq!(r0.total, 26);
-        assert_eq!(r0.velocity, 8);  // 5 + 3
+        assert_eq!(r0.velocity, 8); // 5 + 3
         assert_eq!(r0.cumulative_score, 26);
 
         // Round 1
         let r1 = &scoreboard[1];
         assert_eq!(r1.round, 1);
         assert_eq!(r1.w, 8);
-        assert_eq!(r1.velocity, 3);  // 2 + 1
-        assert_eq!(r1.cumulative_score, 46);  // 26 + 20
-        assert_eq!(r1.cumulative_w, 18);  // 10 + 8
+        assert_eq!(r1.velocity, 3); // 2 + 1
+        assert_eq!(r1.cumulative_score, 46); // 26 + 20
+        assert_eq!(r1.cumulative_w, 18); // 10 + 8
     }
 
     #[test]
@@ -4099,7 +5032,12 @@ mod tests {
         assert!(blockers.iter().any(|b| b.contains("no rounds")));
 
         // Round with velocity > 0 and incomplete signals
-        let sc = ScoreComponents { wisdom: 5, consistency: 3, truth: 4, relationships: 2 };
+        let sc = ScoreComponents {
+            wisdom: 5,
+            consistency: 3,
+            truth: 4,
+            relationships: 2,
+        };
         let cm = ConvergenceMetrics {
             open_tensions: 2,
             new_perspectives: 1,
@@ -4114,7 +5052,12 @@ mod tests {
         assert!(blockers.iter().any(|b| b.contains("converge_percent=")));
 
         // Round where convergence is possible
-        let sc2 = ScoreComponents { wisdom: 2, consistency: 1, truth: 1, relationships: 1 };
+        let sc2 = ScoreComponents {
+            wisdom: 2,
+            consistency: 1,
+            truth: 1,
+            relationships: 1,
+        };
         let cm2 = ConvergenceMetrics {
             open_tensions: 0,
             new_perspectives: 0,

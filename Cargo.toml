@@ -67,8 +67,14 @@ http-body-util = "0.1"
 # Crypto
 sha2 = "0.10"
 
+# Keychain
+keyring = { version = "3", features = ["apple-native", "windows-native"] }
+
 # Random
 rand = "0.8"
+
+# UUID
+uuid = { version = "1", features = ["v4"] }
 
 # Testing
 tempfile = "3.15"

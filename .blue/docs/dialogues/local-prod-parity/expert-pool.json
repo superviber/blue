@@ -1,0 +1,27 @@
+{
+  "domain": "DevOps & Security Infrastructure",
+  "question": "How should Blue implement a local development environment that achieves full production parity—including DynamoDB with E2E encryption, Infisical secrets management, and the visualization dashboard—while maintaining developer ergonomics and ensuring encryption code paths are exercised identically to production?",
+  "supersedes": ["RFC 0056", "RFC 0057"],
+  "panel_size": 8,
+  "max_rounds": 5,
+  "experts": [
+    { "role": "Platform Engineer", "tier": "core", "relevance": 0.95, "focus": "Docker orchestration, service composition, local stack architecture" },
+    { "role": "Security Architect", "tier": "core", "relevance": 0.95, "focus": "Encryption mode boundaries, key management tiers, zero-knowledge preservation" },
+    { "role": "DevEx Engineer", "tier": "core", "relevance": 0.90, "focus": "Developer onboarding, friction reduction, npm-start simplicity" },
+    { "role": "Cloud Architect", "tier": "core", "relevance": 0.90, "focus": "AWS service parity, DynamoDB Local, LocalStack, API Gateway mocking" },
+    { "role": "Frontend Architect", "tier": "core", "relevance": 0.88, "focus": "Dashboard decryption UI, encrypted/plaintext toggle, real-time updates" },
+    { "role": "Database Architect", "tier": "core", "relevance": 0.85, "focus": "DynamoDB Local configuration, schema parity, encryption at rest" },
+    { "role": "Secrets Engineer", "tier": "adjacent", "relevance": 0.75, "focus": "Infisical local mode, dotenv fallback, secret rotation simulation" },
+    { "role": "Cryptography Engineer", "tier": "adjacent", "relevance": 0.72, "focus": "Key derivation parity, algorithm consistency, mode detection" },
+    { "role": "SRE Lead", "tier": "adjacent", "relevance": 0.70, "focus": "Observability, debugging encrypted systems, metrics collection" },
+    { "role": "Infrastructure Engineer", "tier": "adjacent", "relevance": 0.68, "focus": "Docker networking, volume mounts, port mapping" },
+    { "role": "QA Engineer", "tier": "adjacent", "relevance": 0.65, "focus": "Integration tests, encryption path validation, parity verification" },
+    { "role": "Technical Writer", "tier": "adjacent", "relevance": 0.60, "focus": "Setup documentation, troubleshooting guides, architecture diagrams" },
+    { "role": "Backend Engineer", "tier": "adjacent", "relevance": 0.55, "focus": "API routes, storage abstraction layer, middleware" },
+    { "role": "Privacy Advocate", "tier": "wildcard", "relevance": 0.45, "focus": "Zero-knowledge principles, what must never be visible even locally" },
+    { "role": "Compliance Officer", "tier": "wildcard", "relevance": 0.40, "focus": "Audit trail requirements, logging in dev environments" },
+    { "role": "Startup CTO", "tier": "wildcard", "relevance": 0.35, "focus": "Pragmatic simplicity, time-to-first-run, 80/20 decisions" },
+    { "role": "Security Researcher", "tier": "wildcard", "relevance": 0.30, "focus": "Attack surface in dev environments, credential exposure" },
+    { "role": "Chaos Engineer", "tier": "wildcard", "relevance": 0.25, "focus": "Failure modes, key unavailability, graceful degradation" }
+  ]
+}

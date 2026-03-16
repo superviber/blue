@@ -1,0 +1,13 @@
+{
+  "round": 2,
+  "evolution": "pivot",
+  "constraint_change": "User rejected tiered architecture. Docker required. True parity mandatory.",
+  "panel": [
+    { "name": "Cupcake", "emoji": "🧁", "role": "Security Architect", "tier": "core", "source": "retained", "focus": "Encryption architecture for true parity" },
+    { "name": "Muffin", "emoji": "🧁", "role": "Platform Engineer", "tier": "core", "source": "retained", "focus": "Docker-required local stack design" },
+    { "name": "Palmier", "emoji": "🧁", "role": "QA Engineer", "tier": "core", "source": "retained", "focus": "Test strategy for true parity" },
+    { "name": "Cannoli", "emoji": "🧁", "role": "SRE Lead", "tier": "core", "source": "retained", "focus": "Observability in parity architecture" },
+    { "name": "Eclair", "emoji": "🧁", "role": "Database Architect", "tier": "core", "source": "pool", "focus": "DynamoDB Local schema and configuration" },
+    { "name": "Strudel", "emoji": "🧁", "role": "Infrastructure Engineer", "tier": "adjacent", "source": "pool", "focus": "Docker Compose for required services" }
+  ]
+}

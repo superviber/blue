@@ -56,10 +56,7 @@ pub enum LlmError {
         available: u64,
     },
     /// Binary verification failed
-    BinaryTampered {
-        expected: String,
-        actual: String,
-    },
+    BinaryTampered { expected: String, actual: String },
     /// Other error
     Other(String),
 }
@@ -70,11 +67,23 @@ impl fmt::Display for LlmError {
             LlmError::NotAvailable(msg) => write!(f, "LLM not available: {}", msg),
             LlmError::RequestFailed(msg) => write!(f, "LLM request failed: {}", msg),
             LlmError::ModelNotFound(model) => write!(f, "Model not found: {}", model),
-            LlmError::InsufficientMemory { model, required, available } => {
-                write!(f, "Insufficient memory for {}: need {} bytes, have {}", model, required, available)
+            LlmError::InsufficientMemory {
+                model,
+                required,
+                available,
+            } => {
+                write!(
+                    f,
+                    "Insufficient memory for {}: need {} bytes, have {}",
+                    model, required, available
+                )
             }
             LlmError::BinaryTampered { expected, actual } => {
-                write!(f, "Binary verification failed: expected {}, got {}", expected, actual)
+                write!(
+                    f,
+                    "Binary verification failed: expected {}, got {}",
+                    expected, actual
+                )
             }
             LlmError::Other(msg) => write!(f, "LLM error: {}", msg),
         }
@@ -105,8 +114,7 @@ pub trait LlmProvider: Send + Sync {
 }
 
 /// LLM backend selection
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum LlmBackendChoice {
     /// Auto-detect best backend (CUDA > MPS > CPU)
     #[default]
@@ -118,7 +126,6 @@ pub enum LlmBackendChoice {
     /// Force CPU only
     Cpu,
 }
-
 
 /// LLM configuration
 #[derive(Debug, Clone)]
@@ -228,9 +235,17 @@ impl MockLlm {
 }
 
 impl LlmProvider for MockLlm {
-    fn complete(&self, _prompt: &str, _options: &CompletionOptions) -> Result<CompletionResult, LlmError> {
-        let idx = self.current.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        let response = self.responses.get(idx % self.responses.len())
+    fn complete(
+        &self,
+        _prompt: &str,
+        _options: &CompletionOptions,
+    ) -> Result<CompletionResult, LlmError> {
+        let idx = self
+            .current
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let response = self
+            .responses
+            .get(idx % self.responses.len())
             .cloned()
             .unwrap_or_default();
 
@@ -273,8 +288,10 @@ impl KeywordLlm {
 
     /// Calculate keyword overlap score between two texts
     pub fn keyword_score(text1: &str, text2: &str) -> f64 {
-        let words1: std::collections::HashSet<_> = Self::extract_keywords(text1).into_iter().collect();
-        let words2: std::collections::HashSet<_> = Self::extract_keywords(text2).into_iter().collect();
+        let words1: std::collections::HashSet<_> =
+            Self::extract_keywords(text1).into_iter().collect();
+        let words2: std::collections::HashSet<_> =
+            Self::extract_keywords(text2).into_iter().collect();
 
         if words1.is_empty() || words2.is_empty() {
             return 0.0;
@@ -294,7 +311,11 @@ impl Default for KeywordLlm {
 }
 
 impl LlmProvider for KeywordLlm {
-    fn complete(&self, prompt: &str, _options: &CompletionOptions) -> Result<CompletionResult, LlmError> {
+    fn complete(
+        &self,
+        prompt: &str,
+        _options: &CompletionOptions,
+    ) -> Result<CompletionResult, LlmError> {
         // KeywordLlm doesn't generate text - it's for scoring/matching only
         // Return the prompt keywords as a simple response
         let keywords = Self::extract_keywords(prompt);
@@ -346,16 +367,15 @@ impl LlmManager {
 
     /// Get the first ready provider
     pub fn active_provider(&self) -> Option<&dyn LlmProvider> {
-        self.providers.iter()
+        self.providers
+            .iter()
             .find(|p| p.is_ready())
             .map(|p| p.as_ref())
     }
 
     /// Get the active provider name
     pub fn active_provider_name(&self) -> &str {
-        self.active_provider()
-            .map(|p| p.name())
-            .unwrap_or("none")
+        self.active_provider().map(|p| p.name()).unwrap_or("none")
     }
 
     /// Check if any provider is available
@@ -364,11 +384,17 @@ impl LlmManager {
     }
 
     /// Complete a prompt using the first available provider
-    pub fn complete(&self, prompt: &str, options: &CompletionOptions) -> Result<CompletionResult, LlmError> {
+    pub fn complete(
+        &self,
+        prompt: &str,
+        options: &CompletionOptions,
+    ) -> Result<CompletionResult, LlmError> {
         // Respect provider preference
         match self.config.provider {
             LlmProviderChoice::None => {
-                return Err(LlmError::NotAvailable("LLM disabled by configuration".to_string()));
+                return Err(LlmError::NotAvailable(
+                    "LLM disabled by configuration".to_string(),
+                ));
             }
             LlmProviderChoice::Local => {
                 // Only try local providers
@@ -377,12 +403,16 @@ impl LlmManager {
                         return provider.complete(prompt, options);
                     }
                 }
-                return Err(LlmError::NotAvailable("Local LLM not available".to_string()));
+                return Err(LlmError::NotAvailable(
+                    "Local LLM not available".to_string(),
+                ));
             }
             LlmProviderChoice::Api => {
                 // Only try API providers
                 for provider in &self.providers {
-                    if (provider.name() == "anthropic" || provider.name() == "openai") && provider.is_ready() {
+                    if (provider.name() == "anthropic" || provider.name() == "openai")
+                        && provider.is_ready()
+                    {
                         return provider.complete(prompt, options);
                     }
                 }
@@ -407,12 +437,14 @@ impl LlmManager {
             }
         }
 
-        Err(last_error.unwrap_or_else(|| LlmError::NotAvailable("No LLM providers available".to_string())))
+        Err(last_error
+            .unwrap_or_else(|| LlmError::NotAvailable("No LLM providers available".to_string())))
     }
 
     /// Get status of all providers
     pub fn status(&self) -> Vec<ProviderStatus> {
-        self.providers.iter()
+        self.providers
+            .iter()
             .map(|p| ProviderStatus {
                 name: p.name().to_string(),
                 ready: p.is_ready(),
@@ -519,7 +551,9 @@ mod tests {
         // Mock should be used first since it's ready
         assert_eq!(manager.active_provider_name(), "mock");
 
-        let result = manager.complete("test", &CompletionOptions::default()).unwrap();
+        let result = manager
+            .complete("test", &CompletionOptions::default())
+            .unwrap();
         assert_eq!(result.provider, "mock");
         assert_eq!(result.text, "mock response");
     }

@@ -46,18 +46,30 @@ fn main() {
         ),
         ("linux", "x86_64") => (
             "ollama",
-            format!("{}/{}/ollama-linux-amd64", OLLAMA_RELEASE_URL, OLLAMA_VERSION),
+            format!(
+                "{}/{}/ollama-linux-amd64",
+                OLLAMA_RELEASE_URL, OLLAMA_VERSION
+            ),
         ),
         ("linux", "aarch64") => (
             "ollama",
-            format!("{}/{}/ollama-linux-arm64", OLLAMA_RELEASE_URL, OLLAMA_VERSION),
+            format!(
+                "{}/{}/ollama-linux-arm64",
+                OLLAMA_RELEASE_URL, OLLAMA_VERSION
+            ),
         ),
         ("windows", "x86_64") => (
             "ollama.exe",
-            format!("{}/{}/ollama-windows-amd64.exe", OLLAMA_RELEASE_URL, OLLAMA_VERSION),
+            format!(
+                "{}/{}/ollama-windows-amd64.exe",
+                OLLAMA_RELEASE_URL, OLLAMA_VERSION
+            ),
         ),
         _ => {
-            println!("cargo:warning=Unsupported platform: {}-{}", target_os, target_arch);
+            println!(
+                "cargo:warning=Unsupported platform: {}-{}",
+                target_os, target_arch
+            );
             println!("cargo:warning=Ollama will need to be installed manually");
             return;
         }
@@ -67,13 +79,19 @@ fn main() {
 
     // Check if already downloaded
     if binary_path.exists() {
-        println!("cargo:warning=Ollama binary already exists at {:?}", binary_path);
+        println!(
+            "cargo:warning=Ollama binary already exists at {:?}",
+            binary_path
+        );
         write_binary_path(&out_path, &binary_path);
         return;
     }
 
     // Download the binary
-    println!("cargo:warning=Downloading Ollama {} for {}-{}", OLLAMA_VERSION, target_os, target_arch);
+    println!(
+        "cargo:warning=Downloading Ollama {} for {}-{}",
+        OLLAMA_VERSION, target_os, target_arch
+    );
     println!("cargo:warning=URL: {}", download_url);
 
     match download_binary(&download_url, &binary_path) {
@@ -96,7 +114,9 @@ fn main() {
         Err(e) => {
             println!("cargo:warning=Failed to download Ollama: {}", e);
             println!("cargo:warning=Ollama will need to be installed manually");
-            println!("cargo:warning=Install with: brew install ollama (macOS) or see https://ollama.ai");
+            println!(
+                "cargo:warning=Install with: brew install ollama (macOS) or see https://ollama.ai"
+            );
         }
     }
 }

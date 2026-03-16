@@ -12,8 +12,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::{json, Value};
 
-use blue_core::BlueConfig;
 use crate::error::ServerError;
+use blue_core::BlueConfig;
 
 /// Detected external dependency
 #[derive(Debug)]
@@ -97,7 +97,13 @@ pub fn handle_mock(args: &Value, repo_path: &Path) -> Result<Value, ServerError>
     let config = BlueConfig::load(&blue_dir).ok();
 
     // Generate .env.isolated content
-    let env_content = generate_env_isolated(&agent_id, &worktree_path, &dependencies, &mock_config, config.as_ref());
+    let env_content = generate_env_isolated(
+        &agent_id,
+        &worktree_path,
+        &dependencies,
+        &mock_config,
+        config.as_ref(),
+    );
 
     // Write file
     let env_file_path = worktree_path.join(".env.isolated");
@@ -203,7 +209,13 @@ fn detect_dependencies(path: &Path) -> DependencyDetection {
     // Set default mock configs
     set_default_mock_config(&dependencies, &mut mock_config);
 
-    (dependencies, env_files, iac_detected, docker_detected, mock_config)
+    (
+        dependencies,
+        env_files,
+        iac_detected,
+        docker_detected,
+        mock_config,
+    )
 }
 
 fn parse_env_file(
@@ -220,7 +232,8 @@ fn parse_env_file(
         if let Some((key, _)) = line.split_once('=') {
             let key = key.trim();
 
-            if (key.contains("AWS") || key.contains("S3")) && !deps.iter().any(|d| d.dep_type == "s3")
+            if (key.contains("AWS") || key.contains("S3"))
+                && !deps.iter().any(|d| d.dep_type == "s3")
             {
                 deps.push(Dependency {
                     dep_type: "s3".to_string(),
@@ -260,22 +273,38 @@ fn set_default_mock_config(deps: &[Dependency], mock_config: &mut HashMap<String
     for dep in deps {
         match dep.dep_type.as_str() {
             "s3" => {
-                mock_config.entry("STORAGE_BACKEND".to_string()).or_insert("file".to_string());
-                mock_config.entry("LOCAL_STORAGE_PATH".to_string()).or_insert(".blue/storage".to_string());
-                mock_config.entry("MOCK_S3".to_string()).or_insert("true".to_string());
+                mock_config
+                    .entry("STORAGE_BACKEND".to_string())
+                    .or_insert("file".to_string());
+                mock_config
+                    .entry("LOCAL_STORAGE_PATH".to_string())
+                    .or_insert(".blue/storage".to_string());
+                mock_config
+                    .entry("MOCK_S3".to_string())
+                    .or_insert("true".to_string());
             }
             "database" => {
-                mock_config.entry("DB_PATH".to_string()).or_insert(".blue/test.db".to_string());
-                mock_config.entry("MOCK_DATABASE".to_string()).or_insert("true".to_string());
+                mock_config
+                    .entry("DB_PATH".to_string())
+                    .or_insert(".blue/test.db".to_string());
+                mock_config
+                    .entry("MOCK_DATABASE".to_string())
+                    .or_insert("true".to_string());
             }
             "redis" => {
-                mock_config.entry("REDIS_URL".to_string()).or_insert("memory://".to_string());
-                mock_config.entry("MOCK_REDIS".to_string()).or_insert("true".to_string());
+                mock_config
+                    .entry("REDIS_URL".to_string())
+                    .or_insert("memory://".to_string());
+                mock_config
+                    .entry("MOCK_REDIS".to_string())
+                    .or_insert("true".to_string());
             }
             _ => {}
         }
     }
-    mock_config.entry("BLUE_ISOLATION_MODE".to_string()).or_insert("mock".to_string());
+    mock_config
+        .entry("BLUE_ISOLATION_MODE".to_string())
+        .or_insert("mock".to_string());
 }
 
 /// Generate .env.isolated content
@@ -316,7 +345,8 @@ fn generate_env_isolated(
         // RFC 0034: Custom worktree env vars
         if let Some(worktree_cfg) = &cfg.worktree {
             if !worktree_cfg.env.is_empty() {
-                lines.push("# Custom Environment (from .blue/config.yaml worktree.env)".to_string());
+                lines
+                    .push("# Custom Environment (from .blue/config.yaml worktree.env)".to_string());
                 for (key, value) in &worktree_cfg.env {
                     lines.push(format!("{}={}", key, value));
                 }
@@ -343,7 +373,10 @@ fn generate_env_isolated(
         lines.push("".to_string());
         lines.push("# Detected Dependencies".to_string());
         for dep in dependencies {
-            lines.push(format!("# - {}: {} (mock: {})", dep.dep_type, dep.name, dep.mock_strategy));
+            lines.push(format!(
+                "# - {}: {} (mock: {})",
+                dep.dep_type, dep.name, dep.mock_strategy
+            ));
         }
     }
 

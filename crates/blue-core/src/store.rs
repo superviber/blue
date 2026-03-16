@@ -7,7 +7,7 @@ use std::thread;
 use std::time::Duration;
 
 use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
-use sha2::{Sha256, Digest};
+use sha2::{Digest, Sha256};
 use tracing::{debug, info, warn};
 
 /// Compute a SHA-256 hash of content for staleness detection (RFC 0018)
@@ -406,8 +406,8 @@ pub fn title_to_slug(title: &str) -> String {
 
 /// Known status suffixes that can appear in filenames (RFC 0031)
 const KNOWN_SUFFIXES: &[&str] = &[
-    "done", "impl", "super", "accepted", "approved", "wip", "resolved",
-    "closed", "pub", "archived", "draft", "open", "recorded", "active",
+    "done", "impl", "super", "accepted", "approved", "wip", "resolved", "closed", "pub",
+    "archived", "draft", "open", "recorded", "active",
 ];
 
 /// Map (DocType, status) → optional filename suffix (RFC 0031)
@@ -473,7 +473,9 @@ pub fn rebuild_filename(old_path: &str, doc_type: DocType, new_status: &str) -> 
 
     // Detect dialogue double extension
     let is_dialogue = old_path.ends_with(".dialogue.md")
-        || KNOWN_SUFFIXES.iter().any(|s| old_path.ends_with(&format!(".dialogue.{}.md", s)));
+        || KNOWN_SUFFIXES
+            .iter()
+            .any(|s| old_path.ends_with(&format!(".dialogue.{}.md", s)));
 
     if is_dialogue {
         // Strip old suffix: foo.dialogue.done.md → foo.dialogue.md
@@ -703,8 +705,7 @@ pub struct ParsedDocument {
 pub fn parse_document_from_file(file_path: &Path) -> Result<ParsedDocument, StoreError> {
     use std::fs;
 
-    let content = fs::read_to_string(file_path)
-        .map_err(|e| StoreError::IoError(e.to_string()))?;
+    let content = fs::read_to_string(file_path).map_err(|e| StoreError::IoError(e.to_string()))?;
 
     // Determine doc type from path
     let path_str = file_path.to_string_lossy();
@@ -727,32 +728,40 @@ pub fn parse_document_from_file(file_path: &Path) -> Result<ParsedDocument, Stor
     } else if path_str.contains("/prds/") {
         DocType::Prd
     } else {
-        return Err(StoreError::InvalidOperation(
-            format!("Unknown document type for path: {}", path_str)
-        ));
+        return Err(StoreError::InvalidOperation(format!(
+            "Unknown document type for path: {}",
+            path_str
+        )));
     };
 
     // Extract title from first line: # Type NNNN: Title or # Type: Title
     let title_re = regex::Regex::new(r"^#\s+(?:\w+)\s*(?:(\d+):?)?\s*:?\s*(.+)$").unwrap();
-    let title_line = content.lines().next()
+    let title_line = content
+        .lines()
+        .next()
         .ok_or_else(|| StoreError::InvalidOperation("Empty file".to_string()))?;
 
     let (number, title) = if let Some(caps) = title_re.captures(title_line) {
         let num = caps.get(1).and_then(|m| m.as_str().parse().ok());
-        let title = caps.get(2)
+        let title = caps
+            .get(2)
             .map(|m| m.as_str().trim().to_string())
             .unwrap_or_else(|| "untitled".to_string());
         (num, title)
     } else {
         // Fallback: use filename as title
-        let stem = file_path.file_stem()
+        let stem = file_path
+            .file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or("untitled");
         // Try to extract number from filename like "0042-my-feature.md"
         let num_re = regex::Regex::new(r"^(\d+)-(.+)$").unwrap();
         if let Some(caps) = num_re.captures(stem) {
             let num = caps.get(1).and_then(|m| m.as_str().parse().ok());
-            let title = caps.get(2).map(|m| m.as_str().to_string()).unwrap_or_else(|| stem.to_string());
+            let title = caps
+                .get(2)
+                .map(|m| m.as_str().to_string())
+                .unwrap_or_else(|| stem.to_string());
             (num, title)
         } else {
             (None, stem.to_string())
@@ -761,9 +770,11 @@ pub fn parse_document_from_file(file_path: &Path) -> Result<ParsedDocument, Stor
 
     // Extract status from table format: | **Status** | Draft |
     let status_re = regex::Regex::new(r"\|\s*\*\*Status\*\*\s*\|\s*([^|]+)\s*\|").unwrap();
-    let status = content.lines()
+    let status = content
+        .lines()
         .find_map(|line| {
-            status_re.captures(line)
+            status_re
+                .captures(line)
                 .map(|c| c.get(1).unwrap().as_str().trim().to_lowercase())
         })
         .unwrap_or_else(|| "draft".to_string());
@@ -1044,7 +1055,13 @@ pub struct ContextInjection {
 }
 
 impl ContextInjection {
-    pub fn new(session_id: &str, tier: &str, source_uri: &str, content_hash: &str, token_count: Option<i32>) -> Self {
+    pub fn new(
+        session_id: &str,
+        tier: &str,
+        source_uri: &str,
+        content_hash: &str,
+        token_count: Option<i32>,
+    ) -> Self {
         Self {
             id: None,
             session_id: session_id.to_string(),
@@ -1369,7 +1386,10 @@ impl DocumentStore {
                 debug!("Database is up to date (version {})", v);
             }
             Some(v) if v < SCHEMA_VERSION => {
-                info!("Migrating database from version {} to {}", v, SCHEMA_VERSION);
+                info!(
+                    "Migrating database from version {} to {}",
+                    v, SCHEMA_VERSION
+                );
                 self.run_migrations(v)?;
             }
             Some(v) => {
@@ -1396,10 +1416,8 @@ impl DocumentStore {
             )?;
 
             if !has_column {
-                self.conn.execute(
-                    "ALTER TABLE documents ADD COLUMN deleted_at TEXT",
-                    [],
-                )?;
+                self.conn
+                    .execute("ALTER TABLE documents ADD COLUMN deleted_at TEXT", [])?;
                 self.conn.execute(
                     "CREATE INDEX IF NOT EXISTS idx_documents_deleted ON documents(deleted_at) WHERE deleted_at IS NOT NULL",
                     [],
@@ -1563,10 +1581,8 @@ impl DocumentStore {
             )?;
 
             if !has_content_hash {
-                self.conn.execute(
-                    "ALTER TABLE documents ADD COLUMN content_hash TEXT",
-                    [],
-                )?;
+                self.conn
+                    .execute("ALTER TABLE documents ADD COLUMN content_hash TEXT", [])?;
             }
 
             let has_indexed_at: bool = self.conn.query_row(
@@ -1576,10 +1592,8 @@ impl DocumentStore {
             )?;
 
             if !has_indexed_at {
-                self.conn.execute(
-                    "ALTER TABLE documents ADD COLUMN indexed_at TEXT",
-                    [],
-                )?;
+                self.conn
+                    .execute("ALTER TABLE documents ADD COLUMN indexed_at TEXT", [])?;
             }
 
             // Add index for staleness checking
@@ -2222,14 +2236,16 @@ impl DocumentStore {
         let query_lower = query.to_lowercase();
 
         // Try to parse query as a number
-        let query_num: Option<i32> = query.trim_start_matches('0')
-            .parse()
-            .ok()
-            .or_else(|| if query == "0" { Some(0) } else { None });
+        let query_num: Option<i32> = query.trim_start_matches('0').parse().ok().or_else(|| {
+            if query == "0" {
+                Some(0)
+            } else {
+                None
+            }
+        });
 
         // Scan directory for matching files
-        let entries = fs::read_dir(&search_dir)
-            .map_err(|e| StoreError::IoError(e.to_string()))?;
+        let entries = fs::read_dir(&search_dir).map_err(|e| StoreError::IoError(e.to_string()))?;
 
         for entry in entries.flatten() {
             let path = entry.path();
@@ -2253,7 +2269,8 @@ impl DocumentStore {
 
                     if matches {
                         // Register this document in the database
-                        let relative_path = path.strip_prefix(docs_path)
+                        let relative_path = path
+                            .strip_prefix(docs_path)
                             .map(|p| p.to_string_lossy().to_string())
                             .unwrap_or_else(|_| path.to_string_lossy().to_string());
 
@@ -2286,10 +2303,15 @@ impl DocumentStore {
     }
 
     /// Register a document from a file path (RFC 0018)
-    pub fn register_from_file(&self, file_path: &Path, docs_path: &Path) -> Result<Document, StoreError> {
+    pub fn register_from_file(
+        &self,
+        file_path: &Path,
+        docs_path: &Path,
+    ) -> Result<Document, StoreError> {
         let parsed = parse_document_from_file(file_path)?;
 
-        let relative_path = file_path.strip_prefix(docs_path)
+        let relative_path = file_path
+            .strip_prefix(docs_path)
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_else(|_| file_path.to_string_lossy().to_string());
 
@@ -2364,7 +2386,8 @@ impl DocumentStore {
                             }
                         }
 
-                        let relative_path = path.strip_prefix(docs_path)
+                        let relative_path = path
+                            .strip_prefix(docs_path)
                             .map(|p| p.to_string_lossy().to_string())
                             .unwrap_or_else(|_| path.to_string_lossy().to_string());
 
@@ -2377,7 +2400,8 @@ impl DocumentStore {
                             }
 
                             // Try to find existing document
-                            let existing = self.list_documents(dt)
+                            let existing = self
+                                .list_documents(dt)
                                 .unwrap_or_default()
                                 .into_iter()
                                 .find(|d| d.file_path.as_ref() == Some(&relative_path));
@@ -2387,7 +2411,8 @@ impl DocumentStore {
                                     // File exists but no DB record
                                     result.unindexed.push(relative_path.clone());
                                     if !dry_run {
-                                        if let Ok(_doc) = self.register_from_file(&path, docs_path) {
+                                        if let Ok(_doc) = self.register_from_file(&path, docs_path)
+                                        {
                                             result.added += 1;
                                         }
                                     }
@@ -2398,10 +2423,19 @@ impl DocumentStore {
                                         result.stale.push(relative_path.clone());
                                         if !dry_run {
                                             if let Some(id) = doc.id {
-                                                let _ = self.update_document_index(id, &parsed.content_hash);
+                                                let _ = self.update_document_index(
+                                                    id,
+                                                    &parsed.content_hash,
+                                                );
                                                 // Also update status if it changed
-                                                if doc.status.to_lowercase() != parsed.status.to_lowercase() {
-                                                    let _ = self.update_document_status(dt, &doc.title, &parsed.status);
+                                                if doc.status.to_lowercase()
+                                                    != parsed.status.to_lowercase()
+                                                {
+                                                    let _ = self.update_document_status(
+                                                        dt,
+                                                        &doc.title,
+                                                        &parsed.status,
+                                                    );
                                                 }
                                                 result.updated += 1;
                                             }
@@ -2505,11 +2539,7 @@ impl DocumentStore {
     }
 
     /// Update a document's content hash and indexed_at timestamp (RFC 0018)
-    pub fn update_document_index(
-        &self,
-        id: i64,
-        content_hash: &str,
-    ) -> Result<(), StoreError> {
+    pub fn update_document_index(&self, id: i64, content_hash: &str) -> Result<(), StoreError> {
         self.with_retry(|| {
             let now = chrono::Utc::now().to_rfc3339();
             let updated = self.conn.execute(
@@ -2632,7 +2662,11 @@ impl DocumentStore {
     }
 
     /// Get a soft-deleted document by type and title
-    pub fn get_deleted_document(&self, doc_type: DocType, title: &str) -> Result<Document, StoreError> {
+    pub fn get_deleted_document(
+        &self,
+        doc_type: DocType,
+        title: &str,
+    ) -> Result<Document, StoreError> {
         self.conn
             .query_row(
                 "SELECT id, doc_type, number, title, status, file_path, created_at, updated_at, deleted_at, content_hash, indexed_at
@@ -2665,7 +2699,10 @@ impl DocumentStore {
     }
 
     /// List soft-deleted documents
-    pub fn list_deleted_documents(&self, doc_type: Option<DocType>) -> Result<Vec<Document>, StoreError> {
+    pub fn list_deleted_documents(
+        &self,
+        doc_type: Option<DocType>,
+    ) -> Result<Vec<Document>, StoreError> {
         let query = match doc_type {
             Some(dt) => format!(
                 "SELECT id, doc_type, number, title, status, file_path, created_at, updated_at, deleted_at, content_hash, indexed_at
@@ -2760,7 +2797,11 @@ impl DocumentStore {
     /// Get the next document number, scanning filesystem too (RFC 0022)
     ///
     /// Use this instead of `next_number()` when you have access to the docs path.
-    pub fn next_number_with_fs(&self, doc_type: DocType, docs_path: &Path) -> Result<i32, StoreError> {
+    pub fn next_number_with_fs(
+        &self,
+        doc_type: DocType,
+        docs_path: &Path,
+    ) -> Result<i32, StoreError> {
         // Database max (fast, possibly stale)
         let db_max: Option<i32> = self.conn.query_row(
             "SELECT MAX(number) FROM documents WHERE doc_type = ?1",
@@ -2785,12 +2826,11 @@ impl DocumentStore {
             return Ok(0);
         }
 
-        let pattern = Regex::new(r"^(\d{4})-.*\.md$")
-            .map_err(|e| StoreError::IoError(e.to_string()))?;
+        let pattern =
+            Regex::new(r"^(\d{4})-.*\.md$").map_err(|e| StoreError::IoError(e.to_string()))?;
         let mut max = 0;
 
-        let entries = fs::read_dir(&dir)
-            .map_err(|e| StoreError::IoError(e.to_string()))?;
+        let entries = fs::read_dir(&dir).map_err(|e| StoreError::IoError(e.to_string()))?;
 
         for entry in entries.flatten() {
             if let Some(name) = entry.file_name().to_str() {
@@ -2875,8 +2915,10 @@ impl DocumentStore {
     /// Set tasks for a document (replaces existing)
     pub fn set_tasks(&self, document_id: i64, tasks: &[String]) -> Result<(), StoreError> {
         self.with_retry(|| {
-            self.conn
-                .execute("DELETE FROM tasks WHERE document_id = ?1", params![document_id])?;
+            self.conn.execute(
+                "DELETE FROM tasks WHERE document_id = ?1",
+                params![document_id],
+            )?;
 
             for (idx, desc) in tasks.iter().enumerate() {
                 self.conn.execute(
@@ -3154,7 +3196,8 @@ impl DocumentStore {
             let now = chrono::Utc::now().to_rfc3339();
 
             // Try to get existing session
-            let existing: Option<i64> = self.conn
+            let existing: Option<i64> = self
+                .conn
                 .query_row(
                     "SELECT id FROM sessions WHERE rfc_title = ?1 AND ended_at IS NULL",
                     params![session.rfc_title],
@@ -3176,12 +3219,7 @@ impl DocumentStore {
                     self.conn.execute(
                         "INSERT INTO sessions (rfc_title, session_type, started_at, last_heartbeat)
                          VALUES (?1, ?2, ?3, ?4)",
-                        params![
-                            session.rfc_title,
-                            session.session_type.as_str(),
-                            now,
-                            now
-                        ],
+                        params![session.rfc_title, session.session_type.as_str(), now, now],
                     )?;
                     Ok(self.conn.last_insert_rowid())
                 }
@@ -3198,7 +3236,10 @@ impl DocumentStore {
                 params![now, rfc_title],
             )?;
             if updated == 0 {
-                return Err(StoreError::NotFound(format!("active session for '{}'", rfc_title)));
+                return Err(StoreError::NotFound(format!(
+                    "active session for '{}'",
+                    rfc_title
+                )));
             }
             Ok(())
         })
@@ -3215,7 +3256,8 @@ impl DocumentStore {
                     Ok(Session {
                         id: Some(row.get(0)?),
                         rfc_title: row.get(1)?,
-                        session_type: SessionType::parse(&row.get::<_, String>(2)?).unwrap_or(SessionType::Implementation),
+                        session_type: SessionType::parse(&row.get::<_, String>(2)?)
+                            .unwrap_or(SessionType::Implementation),
                         started_at: row.get(3)?,
                         last_heartbeat: row.get(4)?,
                         ended_at: row.get(5)?,
@@ -3237,7 +3279,8 @@ impl DocumentStore {
             Ok(Session {
                 id: Some(row.get(0)?),
                 rfc_title: row.get(1)?,
-                session_type: SessionType::parse(&row.get::<_, String>(2)?).unwrap_or(SessionType::Implementation),
+                session_type: SessionType::parse(&row.get::<_, String>(2)?)
+                    .unwrap_or(SessionType::Implementation),
                 started_at: row.get(3)?,
                 last_heartbeat: row.get(4)?,
                 ended_at: row.get(5)?,
@@ -3374,7 +3417,11 @@ impl DocumentStore {
     }
 
     /// List reminders by status
-    pub fn list_reminders(&self, status: Option<ReminderStatus>, include_future: bool) -> Result<Vec<Reminder>, StoreError> {
+    pub fn list_reminders(
+        &self,
+        status: Option<ReminderStatus>,
+        include_future: bool,
+    ) -> Result<Vec<Reminder>, StoreError> {
         let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
 
         let query = match (status, include_future) {
@@ -3408,7 +3455,8 @@ impl DocumentStore {
                 gate: row.get(3)?,
                 due_date: row.get(4)?,
                 snooze_until: row.get(5)?,
-                status: ReminderStatus::parse(&row.get::<_, String>(6)?).unwrap_or(ReminderStatus::Pending),
+                status: ReminderStatus::parse(&row.get::<_, String>(6)?)
+                    .unwrap_or(ReminderStatus::Pending),
                 linked_doc_id: row.get(7)?,
                 created_at: row.get(8)?,
                 cleared_at: row.get(9)?,
@@ -3519,7 +3567,11 @@ impl DocumentStore {
     }
 
     /// Release a staging lock
-    pub fn release_staging_lock(&self, resource: &str, locked_by: &str) -> Result<Option<String>, StoreError> {
+    pub fn release_staging_lock(
+        &self,
+        resource: &str,
+        locked_by: &str,
+    ) -> Result<Option<String>, StoreError> {
         self.with_retry(|| {
             // Verify the lock is held by the requester
             let holder: Option<String> = self.conn
@@ -3588,7 +3640,10 @@ impl DocumentStore {
     }
 
     /// Get queue for a staging lock
-    pub fn get_staging_lock_queue(&self, resource: &str) -> Result<Vec<StagingLockQueueEntry>, StoreError> {
+    pub fn get_staging_lock_queue(
+        &self,
+        resource: &str,
+    ) -> Result<Vec<StagingLockQueueEntry>, StoreError> {
         let mut stmt = self.conn.prepare(
             "SELECT id, resource, requester, agent_id, requested_at
              FROM staging_lock_queue WHERE resource = ?1 ORDER BY requested_at ASC",
@@ -3912,7 +3967,12 @@ impl DocumentStore {
     }
 
     /// Get a file index entry
-    pub fn get_file_index(&self, realm: &str, repo: &str, file_path: &str) -> Result<Option<FileIndexEntry>, StoreError> {
+    pub fn get_file_index(
+        &self,
+        realm: &str,
+        repo: &str,
+        file_path: &str,
+    ) -> Result<Option<FileIndexEntry>, StoreError> {
         self.conn
             .query_row(
                 "SELECT id, realm, repo, file_path, file_hash, summary, relationships, indexed_at, prompt_version
@@ -3937,7 +3997,12 @@ impl DocumentStore {
     }
 
     /// Delete a file index entry and its symbols
-    pub fn delete_file_index(&self, realm: &str, repo: &str, file_path: &str) -> Result<(), StoreError> {
+    pub fn delete_file_index(
+        &self,
+        realm: &str,
+        repo: &str,
+        file_path: &str,
+    ) -> Result<(), StoreError> {
         self.with_retry(|| {
             self.conn.execute(
                 "DELETE FROM file_index WHERE realm = ?1 AND repo = ?2 AND file_path = ?3",
@@ -3948,7 +4013,11 @@ impl DocumentStore {
     }
 
     /// Add symbols for a file (replaces existing)
-    pub fn set_file_symbols(&self, file_id: i64, symbols: &[SymbolIndexEntry]) -> Result<(), StoreError> {
+    pub fn set_file_symbols(
+        &self,
+        file_id: i64,
+        symbols: &[SymbolIndexEntry],
+    ) -> Result<(), StoreError> {
         self.with_retry(|| {
             // Delete existing symbols
             self.conn.execute(
@@ -4000,7 +4069,11 @@ impl DocumentStore {
     }
 
     /// List all indexed files in a realm/repo
-    pub fn list_file_index(&self, realm: &str, repo: Option<&str>) -> Result<Vec<FileIndexEntry>, StoreError> {
+    pub fn list_file_index(
+        &self,
+        realm: &str,
+        repo: Option<&str>,
+    ) -> Result<Vec<FileIndexEntry>, StoreError> {
         let query = match repo {
             Some(_) => "SELECT id, realm, repo, file_path, file_hash, summary, relationships, indexed_at, prompt_version
                         FROM file_index WHERE realm = ?1 AND repo = ?2 ORDER BY file_path",
@@ -4147,8 +4220,15 @@ impl DocumentStore {
     }
 
     /// Check if a file needs re-indexing (hash mismatch or prompt version outdated)
-    pub fn is_file_stale(&self, realm: &str, repo: &str, file_path: &str, current_hash: &str) -> Result<bool, StoreError> {
-        let result: Option<(String, i32)> = self.conn
+    pub fn is_file_stale(
+        &self,
+        realm: &str,
+        repo: &str,
+        file_path: &str,
+        current_hash: &str,
+    ) -> Result<bool, StoreError> {
+        let result: Option<(String, i32)> = self
+            .conn
             .query_row(
                 "SELECT file_hash, prompt_version FROM file_index
                  WHERE realm = ?1 AND repo = ?2 AND file_path = ?3",
@@ -4186,7 +4266,10 @@ impl DocumentStore {
     }
 
     /// Get injection history for a session
-    pub fn get_injection_history(&self, session_id: &str) -> Result<Vec<ContextInjection>, StoreError> {
+    pub fn get_injection_history(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<ContextInjection>, StoreError> {
         let mut stmt = self.conn.prepare(
             "SELECT id, session_id, timestamp, tier, source_uri, content_hash, token_count
              FROM context_injections
@@ -4254,7 +4337,11 @@ impl DocumentStore {
     }
 
     /// Get the last injection for a URI in a session
-    pub fn get_last_injection(&self, session_id: &str, uri: &str) -> Result<Option<ContextInjection>, StoreError> {
+    pub fn get_last_injection(
+        &self,
+        session_id: &str,
+        uri: &str,
+    ) -> Result<Option<ContextInjection>, StoreError> {
         self.conn
             .query_row(
                 "SELECT id, session_id, timestamp, tier, source_uri, content_hash, token_count
@@ -4293,28 +4380,38 @@ impl DocumentStore {
     }
 
     /// Get recent injections for a session
-    pub fn get_session_injections(&self, session_id: &str, limit: usize) -> Result<Vec<ContextInjection>, StoreError> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, session_id, timestamp, tier, source_uri, content_hash, token_count
+    pub fn get_session_injections(
+        &self,
+        session_id: &str,
+        limit: usize,
+    ) -> Result<Vec<ContextInjection>, StoreError> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT id, session_id, timestamp, tier, source_uri, content_hash, token_count
              FROM context_injections
              WHERE session_id = ?1
              ORDER BY timestamp DESC
-             LIMIT ?2"
-        ).map_err(StoreError::Database)?;
+             LIMIT ?2",
+            )
+            .map_err(StoreError::Database)?;
 
-        let rows = stmt.query_map(params![session_id, limit as i64], |row| {
-            Ok(ContextInjection {
-                id: Some(row.get(0)?),
-                session_id: row.get(1)?,
-                timestamp: row.get(2)?,
-                tier: row.get(3)?,
-                source_uri: row.get(4)?,
-                content_hash: row.get(5)?,
-                token_count: row.get(6)?,
+        let rows = stmt
+            .query_map(params![session_id, limit as i64], |row| {
+                Ok(ContextInjection {
+                    id: Some(row.get(0)?),
+                    session_id: row.get(1)?,
+                    timestamp: row.get(2)?,
+                    tier: row.get(3)?,
+                    source_uri: row.get(4)?,
+                    content_hash: row.get(5)?,
+                    token_count: row.get(6)?,
+                })
             })
-        }).map_err(StoreError::Database)?;
+            .map_err(StoreError::Database)?;
 
-        rows.collect::<Result<Vec<_>, _>>().map_err(StoreError::Database)
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(StoreError::Database)
     }
 
     // ==================== Relevance Graph Methods (RFC 0017) ====================
@@ -4393,7 +4490,12 @@ impl DocumentStore {
     }
 
     /// Remove a relevance edge
-    pub fn remove_relevance_edge(&self, source_uri: &str, target_uri: &str, edge_type: EdgeType) -> Result<bool, StoreError> {
+    pub fn remove_relevance_edge(
+        &self,
+        source_uri: &str,
+        target_uri: &str,
+        edge_type: EdgeType,
+    ) -> Result<bool, StoreError> {
         let rows = self.conn.execute(
             "DELETE FROM relevance_edges WHERE source_uri = ?1 AND target_uri = ?2 AND edge_type = ?3",
             params![source_uri, target_uri, edge_type.as_str()],
@@ -4412,11 +4514,9 @@ impl DocumentStore {
 
     /// Count relevance edges
     pub fn count_relevance_edges(&self) -> Result<usize, StoreError> {
-        let count: i64 = self.conn.query_row(
-            "SELECT COUNT(*) FROM relevance_edges",
-            [],
-            |row| row.get(0),
-        )?;
+        let count: i64 =
+            self.conn
+                .query_row("SELECT COUNT(*) FROM relevance_edges", [], |row| row.get(0))?;
         Ok(count as usize)
     }
 }
@@ -4464,7 +4564,10 @@ mod tests {
 
     #[test]
     fn test_title_to_slug() {
-        assert_eq!(title_to_slug("Filesystem Authority"), "filesystem-authority");
+        assert_eq!(
+            title_to_slug("Filesystem Authority"),
+            "filesystem-authority"
+        );
         assert_eq!(title_to_slug("Plan File Authority"), "plan-file-authority");
         assert_eq!(title_to_slug("already-slug"), "already-slug");
         assert_eq!(title_to_slug("UPPER CASE"), "upper-case");
@@ -4480,11 +4583,15 @@ mod tests {
         let id = store.add_document(&doc).unwrap();
 
         // Exact title match
-        let found = store.find_document(DocType::Rfc, "Filesystem Authority").unwrap();
+        let found = store
+            .find_document(DocType::Rfc, "Filesystem Authority")
+            .unwrap();
         assert_eq!(found.id, Some(id));
 
         // Slug match (RFC 0022)
-        let found = store.find_document(DocType::Rfc, "filesystem-authority").unwrap();
+        let found = store
+            .find_document(DocType::Rfc, "filesystem-authority")
+            .unwrap();
         assert_eq!(found.id, Some(id));
         assert_eq!(found.title, "Filesystem Authority");
     }
@@ -4496,7 +4603,9 @@ mod tests {
         let doc = Document::new(DocType::Rfc, "Plan File Authority", "accepted");
         let id = store.add_document(&doc).unwrap();
 
-        let found = store.find_document(DocType::Rfc, "plan-file-authority").unwrap();
+        let found = store
+            .find_document(DocType::Rfc, "plan-file-authority")
+            .unwrap();
         assert_eq!(found.id, Some(id));
     }
 
@@ -4611,7 +4720,8 @@ mod tests {
             std::fs::write(
                 rfcs_dir.join(format!("{:04}-rfc-{}.md", i, i)),
                 format!("# RFC {:04}\n", i),
-            ).unwrap();
+            )
+            .unwrap();
         }
 
         // Old behavior: next_number() returns 18 (collision!)
@@ -4629,7 +4739,11 @@ mod tests {
     fn test_utc_timestamp_format() {
         let ts = crate::documents::utc_timestamp();
         let re = regex::Regex::new(r"^\d{4}-\d{2}-\d{2}T\d{4}Z$").unwrap();
-        assert!(re.is_match(&ts), "timestamp '{}' doesn't match expected format", ts);
+        assert!(
+            re.is_match(&ts),
+            "timestamp '{}' doesn't match expected format",
+            ts
+        );
     }
 
     #[test]
@@ -4651,7 +4765,10 @@ mod tests {
         assert_eq!(status_suffix(DocType::Adr, "superseded"), Some("super"));
 
         // Decision
-        assert_eq!(status_suffix(DocType::Decision, "recorded"), Some("recorded"));
+        assert_eq!(
+            status_suffix(DocType::Decision, "recorded"),
+            Some("recorded")
+        );
 
         // PRD
         assert_eq!(status_suffix(DocType::Prd, "draft"), Some("draft"));
@@ -4665,10 +4782,16 @@ mod tests {
         // Runbook
         assert_eq!(status_suffix(DocType::Runbook, "active"), Some("active"));
         assert_eq!(status_suffix(DocType::Runbook, "published"), Some("pub"));
-        assert_eq!(status_suffix(DocType::Runbook, "archived"), Some("archived"));
+        assert_eq!(
+            status_suffix(DocType::Runbook, "archived"),
+            Some("archived")
+        );
 
         // Dialogue
-        assert_eq!(status_suffix(DocType::Dialogue, "recorded"), Some("recorded"));
+        assert_eq!(
+            status_suffix(DocType::Dialogue, "recorded"),
+            Some("recorded")
+        );
         assert_eq!(status_suffix(DocType::Dialogue, "published"), Some("pub"));
 
         // Audit
@@ -4696,17 +4819,16 @@ mod tests {
             DocType::Dialogue,
             "published",
         );
-        assert_eq!(result, "dialogues/2026-01-26T0856Z-my-dialogue.dialogue.pub.md");
+        assert_eq!(
+            result,
+            "dialogues/2026-01-26T0856Z-my-dialogue.dialogue.pub.md"
+        );
     }
 
     #[test]
     fn test_rebuild_filename_strip_old() {
         // Already has a suffix — strip it and add the new one
-        let result = rebuild_filename(
-            "rfcs/0001-my-rfc.accepted.md",
-            DocType::Rfc,
-            "implemented",
-        );
+        let result = rebuild_filename("rfcs/0001-my-rfc.accepted.md", DocType::Rfc, "implemented");
         assert_eq!(result, "rfcs/0001-my-rfc.impl.md");
     }
 
@@ -4718,17 +4840,16 @@ mod tests {
             "recorded",
         );
         // recorded now gets .recorded suffix
-        assert_eq!(result, "dialogues/2026-01-26T0856Z-slug.dialogue.recorded.md");
+        assert_eq!(
+            result,
+            "dialogues/2026-01-26T0856Z-slug.dialogue.recorded.md"
+        );
     }
 
     #[test]
     fn test_rebuild_filename_noop() {
         // draft now gets .draft suffix
-        let result = rebuild_filename(
-            "rfcs/0001-my-rfc.draft.md",
-            DocType::Rfc,
-            "draft",
-        );
+        let result = rebuild_filename("rfcs/0001-my-rfc.draft.md", DocType::Rfc, "draft");
         assert_eq!(result, "rfcs/0001-my-rfc.draft.md");
     }
 
@@ -4750,11 +4871,13 @@ mod tests {
         doc.file_path = Some("spikes/2026-01-26T0856Z-test-spike.wip.md".to_string());
         store.add_document(&doc).unwrap();
 
-        store.update_document_file_path(
-            DocType::Spike,
-            "test-spike",
-            "spikes/2026-01-26T0856Z-test-spike.done.md",
-        ).unwrap();
+        store
+            .update_document_file_path(
+                DocType::Spike,
+                "test-spike",
+                "spikes/2026-01-26T0856Z-test-spike.done.md",
+            )
+            .unwrap();
 
         let updated = store.find_document(DocType::Spike, "test-spike").unwrap();
         assert_eq!(

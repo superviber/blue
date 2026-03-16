@@ -1,0 +1,109 @@
+{
+  "agents": [
+    {
+      "emoji": "🧁",
+      "name": "Croissant",
+      "relevance": 0.68,
+      "role": "Rust Systems Engineer (Trait Abstractions)",
+      "tier": "Adjacent"
+    },
+    {
+      "emoji": "🧁",
+      "name": "Strudel",
+      "relevance": 0.3,
+      "role": "Contrarian (Challenge All Assumptions)",
+      "tier": "Wildcard"
+    },
+    {
+      "emoji": "🧁",
+      "name": "Muffin",
+      "relevance": 0.95,
+      "role": "Relational Database Architect",
+      "tier": "Core"
+    },
+    {
+      "emoji": "🧁",
+      "name": "Cannoli",
+      "relevance": 0.42,
+      "role": "Serverless & Edge Deployment Advocate",
+      "tier": "Wildcard"
+    },
+    {
+      "emoji": "🧁",
+      "name": "Eclair",
+      "relevance": 0.78,
+      "role": "Graph Query Pattern Analyst",
+      "tier": "Adjacent"
+    },
+    {
+      "emoji": "🧁",
+      "name": "Macaron",
+      "relevance": 0.38,
+      "role": "Startup CTO (Ship-Speed Pragmatist)",
+      "tier": "Wildcard"
+    },
+    {
+      "emoji": "🧁",
+      "name": "Tartlet",
+      "relevance": 0.6,
+      "role": "Data Migration & Zero-Downtime Specialist",
+      "tier": "Adjacent"
+    },
+    {
+      "emoji": "🧁",
+      "name": "Galette",
+      "relevance": 0.65,
+      "role": "Developer Experience Engineer",
+      "tier": "Adjacent"
+    }
+  ],
+  "history": {
+    "created_count": 0,
+    "experts": [
+      {
+        "name": "Croissant",
+        "role": "Rust Systems Engineer (Trait Abstractions)",
+        "source": "retained"
+      },
+      {
+        "name": "Strudel",
+        "role": "Contrarian (Challenge All Assumptions)",
+        "source": "retained"
+      },
+      {
+        "name": "Muffin",
+        "role": "Relational Database Architect",
+        "source": "retained"
+      },
+      {
+        "name": "Cannoli",
+        "role": "Serverless & Edge Deployment Advocate",
+        "source": "retained"
+      },
+      {
+        "name": "Eclair",
+        "role": "Graph Query Pattern Analyst",
+        "source": "retained"
+      },
+      {
+        "name": "Macaron",
+        "role": "Startup CTO (Ship-Speed Pragmatist)",
+        "source": "retained"
+      },
+      {
+        "name": "Tartlet",
+        "role": "Data Migration & Zero-Downtime Specialist",
+        "source": "pool"
+      },
+      {
+        "name": "Galette",
+        "role": "Developer Experience Engineer",
+        "source": "pool"
+      }
+    ],
+    "from_pool_count": 2,
+    "panel_size": 8,
+    "retained_count": 6,
+    "round": 1
+  }
+}

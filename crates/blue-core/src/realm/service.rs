@@ -10,8 +10,8 @@ use std::time::{Duration, Instant};
 use tracing::info;
 
 use super::{
-    Binding, BindingRole, Contract, Domain, ImportStatus, LocalRepoConfig, RealmConfig,
-    RealmError, RepoConfig,
+    Binding, BindingRole, Contract, Domain, ImportStatus, LocalRepoConfig, RealmConfig, RealmError,
+    RepoConfig,
 };
 use crate::daemon::{Realm, RealmStatus};
 
@@ -148,9 +148,8 @@ impl RealmService {
         config.save(&config_path)?;
 
         // Initialize git repo
-        let repo = Repository::init(&realm_path).map_err(|e| {
-            RealmError::ValidationFailed(format!("Failed to init git repo: {}", e))
-        })?;
+        let repo = Repository::init(&realm_path)
+            .map_err(|e| RealmError::ValidationFailed(format!("Failed to init git repo: {}", e)))?;
 
         // Create initial commit
         self.create_initial_commit(&repo, name)?;
@@ -186,8 +185,11 @@ impl RealmService {
             )));
         }
 
-        // Create repo registration in realm
-        let repo_config = RepoConfig::local(repo_name, repo_path.display().to_string());
+        // Create repo registration in realm (with org detection per RFC 0067)
+        let mut repo_config = RepoConfig::local(repo_name, repo_path.display().to_string());
+        if let Some((org_name, _, _)) = crate::org::detect_org_from_repo(repo_path) {
+            repo_config = repo_config.with_org(&org_name);
+        }
         let repo_config_path = realm_path.join("repos").join(format!("{}.yaml", repo_name));
         repo_config.save(&repo_config_path)?;
 
@@ -249,13 +251,17 @@ impl RealmService {
         })?;
 
         // Create contracts and bindings directories
-        std::fs::create_dir_all(domain_path.join("contracts")).map_err(|e| RealmError::WriteFile {
-            path: domain_path.join("contracts").display().to_string(),
-            source: e,
+        std::fs::create_dir_all(domain_path.join("contracts")).map_err(|e| {
+            RealmError::WriteFile {
+                path: domain_path.join("contracts").display().to_string(),
+                source: e,
+            }
         })?;
-        std::fs::create_dir_all(domain_path.join("bindings")).map_err(|e| RealmError::WriteFile {
-            path: domain_path.join("bindings").display().to_string(),
-            source: e,
+        std::fs::create_dir_all(domain_path.join("bindings")).map_err(|e| {
+            RealmError::WriteFile {
+                path: domain_path.join("bindings").display().to_string(),
+                source: e,
+            }
         })?;
 
         // Create domain.yaml
@@ -413,7 +419,9 @@ impl RealmService {
 
         // Update cache
         if let Ok(mut cache) = self.cache.write() {
-            cache.configs.insert(name.to_string(), CacheEntry::new(config.clone()));
+            cache
+                .configs
+                .insert(name.to_string(), CacheEntry::new(config.clone()));
         }
 
         Ok(RealmInfo {
@@ -508,7 +516,9 @@ impl RealmService {
 
         // Update cache
         if let Ok(mut cache) = self.cache.write() {
-            cache.repos.insert(realm_name.to_string(), CacheEntry::new(repos.clone()));
+            cache
+                .repos
+                .insert(realm_name.to_string(), CacheEntry::new(repos.clone()));
         }
 
         Ok(repos)
@@ -560,7 +570,9 @@ impl RealmService {
 
         // Update cache
         if let Ok(mut cache) = self.cache.write() {
-            cache.domains.insert(realm_name.to_string(), CacheEntry::new(domains.clone()));
+            cache
+                .domains
+                .insert(realm_name.to_string(), CacheEntry::new(domains.clone()));
         }
 
         Ok(domains)
@@ -841,6 +853,32 @@ impl RealmService {
         })
     }
 
+    // ─── Repo Path Resolution (RFC 0067) ──────────────────────────────────
+
+    /// Resolve a repo's local path using RFC 0067 fallback chain:
+    /// 1. RepoConfig.path (absolute, existing behavior)
+    /// 2. Global config org resolution: {home}/{org}/{repo}
+    /// 3. Global config flat fallback: {home}/{repo}
+    pub fn resolve_repo_path(&self, repo: &RepoConfig) -> Option<std::path::PathBuf> {
+        // Tier 1: explicit absolute path from RepoConfig
+        if let Some(path_str) = &repo.path {
+            let path = std::path::PathBuf::from(path_str);
+            if path.exists() {
+                return Some(path);
+            }
+        }
+
+        // Tier 2+3: org-relative via global config
+        if let Some(org) = &repo.org {
+            let config = crate::org::BlueGlobalConfig::load();
+            if let Some(path) = config.resolve_repo_path(org, &repo.name) {
+                return Some(path);
+            }
+        }
+
+        None
+    }
+
     // ─── Worktree Management ────────────────────────────────────────────────
 
     /// Create a worktree for a repo at a given RFC branch
@@ -889,42 +927,37 @@ impl RealmService {
         })?;
 
         // Get HEAD commit to base the branch on
-        let head = repo.head().map_err(|e| {
-            RealmError::ValidationFailed(format!("Failed to get HEAD: {}", e))
-        })?;
-        let commit = head.peel_to_commit().map_err(|e| {
-            RealmError::ValidationFailed(format!("Failed to get commit: {}", e))
-        })?;
+        let head = repo
+            .head()
+            .map_err(|e| RealmError::ValidationFailed(format!("Failed to get HEAD: {}", e)))?;
+        let commit = head
+            .peel_to_commit()
+            .map_err(|e| RealmError::ValidationFailed(format!("Failed to get commit: {}", e)))?;
 
         // Create branch if it doesn't exist
         let branch = match repo.find_branch(&branch_name, git2::BranchType::Local) {
             Ok(branch) => branch,
-            Err(_) => {
-                repo.branch(&branch_name, &commit, false).map_err(|e| {
-                    RealmError::ValidationFailed(format!("Failed to create branch: {}", e))
-                })?
-            }
+            Err(_) => repo.branch(&branch_name, &commit, false).map_err(|e| {
+                RealmError::ValidationFailed(format!("Failed to create branch: {}", e))
+            })?,
         };
 
         // Create worktree
         let branch_ref = branch.into_reference();
-        let branch_ref_name = branch_ref.name().ok_or_else(|| {
-            RealmError::ValidationFailed("Branch has invalid name".to_string())
-        })?;
+        let branch_ref_name = branch_ref
+            .name()
+            .ok_or_else(|| RealmError::ValidationFailed("Branch has invalid name".to_string()))?;
 
         repo.worktree(
             &format!("{}-{}", rfc_name, repo_name),
             &worktree_path,
-            Some(
-                git2::WorktreeAddOptions::new()
-                    .reference(Some(&repo.find_reference(branch_ref_name).map_err(|e| {
-                        RealmError::ValidationFailed(format!("Failed to find branch ref: {}", e))
-                    })?)),
-            ),
+            Some(git2::WorktreeAddOptions::new().reference(Some(
+                &repo.find_reference(branch_ref_name).map_err(|e| {
+                    RealmError::ValidationFailed(format!("Failed to find branch ref: {}", e))
+                })?,
+            ))),
         )
-        .map_err(|e| {
-            RealmError::ValidationFailed(format!("Failed to create worktree: {}", e))
-        })?;
+        .map_err(|e| RealmError::ValidationFailed(format!("Failed to create worktree: {}", e)))?;
 
         info!(
             repo = %repo_name,
@@ -972,10 +1005,11 @@ impl RealmService {
             let rfc_name = rfc_entry.file_name().to_string_lossy().to_string();
 
             // Iterate repo directories
-            let repo_dirs = std::fs::read_dir(rfc_entry.path()).map_err(|e| RealmError::ReadFile {
-                path: rfc_entry.path().display().to_string(),
-                source: e,
-            })?;
+            let repo_dirs =
+                std::fs::read_dir(rfc_entry.path()).map_err(|e| RealmError::ReadFile {
+                    path: rfc_entry.path().display().to_string(),
+                    source: e,
+                })?;
 
             for repo_entry in repo_dirs {
                 let repo_entry = repo_entry.map_err(|e| RealmError::ReadFile {
@@ -1003,7 +1037,11 @@ impl RealmService {
     }
 
     /// Remove worktrees for an RFC
-    pub fn remove_worktrees(&self, realm_name: &str, rfc_name: &str) -> Result<Vec<String>, RealmError> {
+    pub fn remove_worktrees(
+        &self,
+        realm_name: &str,
+        rfc_name: &str,
+    ) -> Result<Vec<String>, RealmError> {
         let worktree_base = self.realms_path.parent().unwrap_or(&self.realms_path);
         let rfc_worktrees = worktree_base
             .join("worktrees")
@@ -1051,9 +1089,16 @@ impl RealmService {
     // ─── PR Workflow ────────────────────────────────────────────────────────
 
     /// Get PR status for all worktrees in an RFC
-    pub fn pr_status(&self, realm_name: &str, rfc_name: &str) -> Result<Vec<WorktreePrStatus>, RealmError> {
+    pub fn pr_status(
+        &self,
+        realm_name: &str,
+        rfc_name: &str,
+    ) -> Result<Vec<WorktreePrStatus>, RealmError> {
         let worktrees = self.list_worktrees(realm_name)?;
-        let rfc_worktrees: Vec<_> = worktrees.into_iter().filter(|wt| wt.rfc == rfc_name).collect();
+        let rfc_worktrees: Vec<_> = worktrees
+            .into_iter()
+            .filter(|wt| wt.rfc == rfc_name)
+            .collect();
 
         let mut statuses = Vec::new();
 
@@ -1121,7 +1166,10 @@ impl RealmService {
         message: Option<&str>,
     ) -> Result<Vec<(String, bool)>, RealmError> {
         let worktrees = self.list_worktrees(realm_name)?;
-        let rfc_worktrees: Vec<_> = worktrees.into_iter().filter(|wt| wt.rfc == rfc_name).collect();
+        let rfc_worktrees: Vec<_> = worktrees
+            .into_iter()
+            .filter(|wt| wt.rfc == rfc_name)
+            .collect();
 
         let default_message = format!("WIP: {}", rfc_name);
         let commit_message = message.unwrap_or(&default_message);
@@ -1174,7 +1222,11 @@ impl RealmService {
     }
 
     /// Count commits ahead of main/master branch
-    fn count_commits_ahead(&self, repo: &Repository, branch_name: &str) -> Result<usize, RealmError> {
+    fn count_commits_ahead(
+        &self,
+        repo: &Repository,
+        branch_name: &str,
+    ) -> Result<usize, RealmError> {
         // Try to find main or master
         let base_branch = repo
             .find_branch("main", git2::BranchType::Local)
@@ -1229,26 +1281,26 @@ impl RealmService {
             RealmError::ValidationFailed(format!("Failed to create signature: {}", e))
         })?;
 
-        let mut index = repo.index().map_err(|e| {
-            RealmError::ValidationFailed(format!("Failed to get index: {}", e))
-        })?;
+        let mut index = repo
+            .index()
+            .map_err(|e| RealmError::ValidationFailed(format!("Failed to get index: {}", e)))?;
 
         // Add all files
         index
             .add_all(["*"].iter(), git2::IndexAddOption::DEFAULT, None)
             .map_err(|e| RealmError::ValidationFailed(format!("Failed to add files: {}", e)))?;
 
-        index.write().map_err(|e| {
-            RealmError::ValidationFailed(format!("Failed to write index: {}", e))
-        })?;
+        index
+            .write()
+            .map_err(|e| RealmError::ValidationFailed(format!("Failed to write index: {}", e)))?;
 
-        let tree_id = index.write_tree().map_err(|e| {
-            RealmError::ValidationFailed(format!("Failed to write tree: {}", e))
-        })?;
+        let tree_id = index
+            .write_tree()
+            .map_err(|e| RealmError::ValidationFailed(format!("Failed to write tree: {}", e)))?;
 
-        let tree = repo.find_tree(tree_id).map_err(|e| {
-            RealmError::ValidationFailed(format!("Failed to find tree: {}", e))
-        })?;
+        let tree = repo
+            .find_tree(tree_id)
+            .map_err(|e| RealmError::ValidationFailed(format!("Failed to find tree: {}", e)))?;
 
         repo.commit(
             Some("HEAD"),
@@ -1268,26 +1320,26 @@ impl RealmService {
             RealmError::ValidationFailed(format!("Failed to create signature: {}", e))
         })?;
 
-        let mut index = repo.index().map_err(|e| {
-            RealmError::ValidationFailed(format!("Failed to get index: {}", e))
-        })?;
+        let mut index = repo
+            .index()
+            .map_err(|e| RealmError::ValidationFailed(format!("Failed to get index: {}", e)))?;
 
         // Add all files
         index
             .add_all(["*"].iter(), git2::IndexAddOption::DEFAULT, None)
             .map_err(|e| RealmError::ValidationFailed(format!("Failed to add files: {}", e)))?;
 
-        index.write().map_err(|e| {
-            RealmError::ValidationFailed(format!("Failed to write index: {}", e))
-        })?;
+        index
+            .write()
+            .map_err(|e| RealmError::ValidationFailed(format!("Failed to write index: {}", e)))?;
 
-        let tree_id = index.write_tree().map_err(|e| {
-            RealmError::ValidationFailed(format!("Failed to write tree: {}", e))
-        })?;
+        let tree_id = index
+            .write_tree()
+            .map_err(|e| RealmError::ValidationFailed(format!("Failed to write tree: {}", e)))?;
 
-        let tree = repo.find_tree(tree_id).map_err(|e| {
-            RealmError::ValidationFailed(format!("Failed to find tree: {}", e))
-        })?;
+        let tree = repo
+            .find_tree(tree_id)
+            .map_err(|e| RealmError::ValidationFailed(format!("Failed to find tree: {}", e)))?;
 
         let parent = repo.head().ok().and_then(|h| h.peel_to_commit().ok());
 
@@ -1556,10 +1608,14 @@ mod tests {
         // Create a repo directory and join
         let repo_path = tmp.path().join("my-repo");
         std::fs::create_dir_all(&repo_path).unwrap();
-        service.join_realm("test-realm", "my-repo", &repo_path).unwrap();
+        service
+            .join_realm("test-realm", "my-repo", &repo_path)
+            .unwrap();
 
         // Create domain
-        service.create_domain("test-realm", "s3-access", &["my-repo".to_string()]).unwrap();
+        service
+            .create_domain("test-realm", "s3-access", &["my-repo".to_string()])
+            .unwrap();
 
         // Load details
         let details = service.load_realm_details("test-realm").unwrap();
@@ -1602,7 +1658,9 @@ mod tests {
         let (service, _tmp) = test_service();
 
         service.init_realm("test-realm").unwrap();
-        service.create_domain("test-realm", "s3-access", &["aperture".to_string()]).unwrap();
+        service
+            .create_domain("test-realm", "s3-access", &["aperture".to_string()])
+            .unwrap();
 
         // First call loads from disk
         let domains1 = service.load_domains("test-realm").unwrap();
@@ -1627,7 +1685,9 @@ mod tests {
         // Create a repo directory and join (this should invalidate cache)
         let repo_path = service.realms_path.join("my-repo");
         std::fs::create_dir_all(&repo_path).unwrap();
-        service.join_realm("test-realm", "my-repo", &repo_path).unwrap();
+        service
+            .join_realm("test-realm", "my-repo", &repo_path)
+            .unwrap();
 
         // Load repos again (should see new repo since cache was invalidated)
         let repos2 = service.load_repos("test-realm").unwrap();

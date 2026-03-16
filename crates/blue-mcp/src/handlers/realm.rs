@@ -53,9 +53,8 @@ fn detect_context(cwd: Option<&Path>) -> Result<RealmContext, ServerError> {
         ServerError::CommandFailed(format!("Failed to load .blue/config.yaml: {}", e))
     })?;
 
-    let paths = DaemonPaths::new().map_err(|e| {
-        ServerError::CommandFailed(format!("Failed to get daemon paths: {}", e))
-    })?;
+    let paths = DaemonPaths::new()
+        .map_err(|e| ServerError::CommandFailed(format!("Failed to get daemon paths: {}", e)))?;
 
     let service = RealmService::new(paths.realms);
 
@@ -70,9 +69,10 @@ fn detect_context(cwd: Option<&Path>) -> Result<RealmContext, ServerError> {
 pub fn handle_status(cwd: Option<&Path>) -> Result<Value, ServerError> {
     let ctx = detect_context(cwd)?;
 
-    let details = ctx.service.load_realm_details(&ctx.realm_name).map_err(|e| {
-        ServerError::CommandFailed(format!("Failed to load realm: {}", e))
-    })?;
+    let details = ctx
+        .service
+        .load_realm_details(&ctx.realm_name)
+        .map_err(|e| ServerError::CommandFailed(format!("Failed to load realm: {}", e)))?;
 
     // Build repos list
     let repos: Vec<Value> = details
@@ -135,7 +135,8 @@ pub fn handle_status(cwd: Option<&Path>) -> Result<Value, ServerError> {
         next_steps.push("Create a domain with 'blue realm admin domain'".to_string());
     }
     if !notifications.is_empty() {
-        next_steps.push(format!("{} pending notification{} to review",
+        next_steps.push(format!(
+            "{} pending notification{} to review",
             notifications.len(),
             if notifications.len() == 1 { "" } else { "s" }
         ));
@@ -157,14 +158,16 @@ pub fn handle_check(cwd: Option<&Path>, realm_arg: Option<&str>) -> Result<Value
     let ctx = detect_context(cwd)?;
     let realm_name = realm_arg.unwrap_or(&ctx.realm_name);
 
-    let result = ctx.service.check_realm(realm_name).map_err(|e| {
-        ServerError::CommandFailed(format!("Failed to check realm: {}", e))
-    })?;
+    let result = ctx
+        .service
+        .check_realm(realm_name)
+        .map_err(|e| ServerError::CommandFailed(format!("Failed to check realm: {}", e)))?;
 
     // Load realm details for schema integrity check
-    let details = ctx.service.load_realm_details(realm_name).map_err(|e| {
-        ServerError::CommandFailed(format!("Failed to load realm details: {}", e))
-    })?;
+    let details = ctx
+        .service
+        .load_realm_details(realm_name)
+        .map_err(|e| ServerError::CommandFailed(format!("Failed to load realm details: {}", e)))?;
 
     let errors: Vec<Value> = result
         .errors
@@ -205,7 +208,8 @@ pub fn handle_check(cwd: Option<&Path>, realm_arg: Option<&str>) -> Result<Value
         next_steps.push("Review warnings - they may indicate issues".to_string());
     }
     if !notifications.is_empty() {
-        next_steps.push(format!("{} pending notification{} to review",
+        next_steps.push(format!(
+            "{} pending notification{} to review",
             notifications.len(),
             if notifications.len() == 1 { "" } else { "s" }
         ));
@@ -235,18 +239,17 @@ pub fn handle_contract_get(
 ) -> Result<Value, ServerError> {
     let ctx = detect_context(cwd)?;
 
-    let details = ctx.service.load_realm_details(&ctx.realm_name).map_err(|e| {
-        ServerError::CommandFailed(format!("Failed to load realm: {}", e))
-    })?;
+    let details = ctx
+        .service
+        .load_realm_details(&ctx.realm_name)
+        .map_err(|e| ServerError::CommandFailed(format!("Failed to load realm: {}", e)))?;
 
     // Find the domain
     let domain = details
         .domains
         .iter()
         .find(|d| d.domain.name == domain_name)
-        .ok_or_else(|| {
-            ServerError::NotFound(format!("Domain '{}' not found", domain_name))
-        })?;
+        .ok_or_else(|| ServerError::NotFound(format!("Domain '{}' not found", domain_name)))?;
 
     // Find the contract
     let contract = domain
@@ -370,8 +373,9 @@ impl SessionState {
         }
 
         let session_path = blue_dir.join("session");
-        let content = serde_yaml::to_string(self)
-            .map_err(|e| ServerError::CommandFailed(format!("Failed to serialize session: {}", e)))?;
+        let content = serde_yaml::to_string(self).map_err(|e| {
+            ServerError::CommandFailed(format!("Failed to serialize session: {}", e))
+        })?;
 
         std::fs::write(&session_path, content)
             .map_err(|e| ServerError::CommandFailed(format!("Failed to write session: {}", e)))?;
@@ -427,9 +431,10 @@ pub fn handle_session_start(
     }
 
     // Determine active domains from repo's bindings
-    let details = ctx.service.load_realm_details(&ctx.realm_name).map_err(|e| {
-        ServerError::CommandFailed(format!("Failed to load realm: {}", e))
-    })?;
+    let details = ctx
+        .service
+        .load_realm_details(&ctx.realm_name)
+        .map_err(|e| ServerError::CommandFailed(format!("Failed to load realm: {}", e)))?;
 
     let active_domains: Vec<String> = details
         .domains
@@ -476,11 +481,16 @@ pub fn handle_session_start(
         next_steps.push(format!(
             "Watching {} imported contract{}",
             contracts_watched.len(),
-            if contracts_watched.len() == 1 { "" } else { "s" }
+            if contracts_watched.len() == 1 {
+                ""
+            } else {
+                "s"
+            }
         ));
     }
     if active_rfc.is_none() {
-        next_steps.push("Consider setting active_rfc to track which RFC you're working on".to_string());
+        next_steps
+            .push("Consider setting active_rfc to track which RFC you're working on".to_string());
     }
     next_steps.push("Use session_stop when done to get a summary".to_string());
 
@@ -507,9 +517,8 @@ pub fn handle_session_stop(cwd: Option<&Path>) -> Result<Value, ServerError> {
     let cwd = cwd.ok_or(ServerError::InvalidParams)?;
 
     // Load existing session
-    let session = SessionState::load(cwd).ok_or_else(|| {
-        ServerError::NotFound("No active session. Nothing to stop.".to_string())
-    })?;
+    let session = SessionState::load(cwd)
+        .ok_or_else(|| ServerError::NotFound("No active session. Nothing to stop.".to_string()))?;
 
     // Calculate session duration
     let duration = Utc::now().signed_duration_since(session.started_at);
@@ -561,9 +570,10 @@ pub fn handle_worktree_create(
     let ctx = detect_context(Some(cwd))?;
 
     // Load realm details to find domain peers
-    let details = ctx.service.load_realm_details(&ctx.realm_name).map_err(|e| {
-        ServerError::CommandFailed(format!("Failed to load realm: {}", e))
-    })?;
+    let details = ctx
+        .service
+        .load_realm_details(&ctx.realm_name)
+        .map_err(|e| ServerError::CommandFailed(format!("Failed to load realm: {}", e)))?;
 
     // Determine which repos to create worktrees for
     let (selected_repos, selection_reason) = if let Some(explicit_repos) = repos {
@@ -594,16 +604,18 @@ pub fn handle_worktree_create(
 
         // If no peers found, just use current repo
         if repo_list.is_empty() {
-            (vec![ctx.repo_name.clone()], "Solo repo in realm".to_string())
+            (
+                vec![ctx.repo_name.clone()],
+                "Solo repo in realm".to_string(),
+            )
         } else {
             (repo_list, reason)
         }
     };
 
     // Get daemon paths for worktree location
-    let paths = DaemonPaths::new().map_err(|e| {
-        ServerError::CommandFailed(format!("Failed to get daemon paths: {}", e))
-    })?;
+    let paths = DaemonPaths::new()
+        .map_err(|e| ServerError::CommandFailed(format!("Failed to get daemon paths: {}", e)))?;
 
     // Create worktrees under ~/.blue/worktrees/<realm>/<rfc>/
     let worktree_base = paths.base.join("worktrees").join(&ctx.realm_name).join(rfc);
@@ -658,7 +670,10 @@ pub fn handle_worktree_create(
                 );
             }
             Err(e) => {
-                errors.push(format!("Failed to create worktree for '{}': {}", repo_name, e));
+                errors.push(format!(
+                    "Failed to create worktree for '{}': {}",
+                    repo_name, e
+                ));
             }
         }
     }
@@ -676,7 +691,13 @@ pub fn handle_worktree_create(
         next_steps.push("Review errors and fix before proceeding".to_string());
     }
 
-    let status = if errors.is_empty() { "success" } else if created.is_empty() { "error" } else { "partial" };
+    let status = if errors.is_empty() {
+        "success"
+    } else if created.is_empty() {
+        "error"
+    } else {
+        "partial"
+    };
 
     Ok(json!({
         "status": status,
@@ -709,8 +730,12 @@ fn create_git_worktree(
         .ok_or("Invalid worktree path")?;
 
     // Get HEAD commit to branch from
-    let head = repo.head().map_err(|e| format!("Failed to get HEAD: {}", e))?;
-    let commit = head.peel_to_commit().map_err(|e| format!("Failed to get commit: {}", e))?;
+    let head = repo
+        .head()
+        .map_err(|e| format!("Failed to get HEAD: {}", e))?;
+    let commit = head
+        .peel_to_commit()
+        .map_err(|e| format!("Failed to get commit: {}", e))?;
 
     // Check if branch exists, create if not
     let branch = match repo.find_branch(branch_name, git2::BranchType::Local) {
@@ -744,9 +769,10 @@ pub fn handle_pr_status(cwd: Option<&Path>, rfc: Option<&str>) -> Result<Value, 
     let ctx = detect_context(Some(cwd))?;
 
     // Load realm details
-    let details = ctx.service.load_realm_details(&ctx.realm_name).map_err(|e| {
-        ServerError::CommandFailed(format!("Failed to load realm: {}", e))
-    })?;
+    let details = ctx
+        .service
+        .load_realm_details(&ctx.realm_name)
+        .map_err(|e| ServerError::CommandFailed(format!("Failed to load realm: {}", e)))?;
 
     let branch_name = rfc.map(|r| format!("rfc/{}", r));
     let mut repos_status: Vec<Value> = Vec::new();
@@ -919,9 +945,8 @@ pub fn handle_notifications_list(
     let ctx = detect_context(Some(cwd))?;
 
     // Open daemon database
-    let paths = DaemonPaths::new().map_err(|e| {
-        ServerError::CommandFailed(format!("Failed to get daemon paths: {}", e))
-    })?;
+    let paths = DaemonPaths::new()
+        .map_err(|e| ServerError::CommandFailed(format!("Failed to get daemon paths: {}", e)))?;
 
     let db = DaemonDb::open(&paths.database).map_err(|e| {
         ServerError::CommandFailed(format!("Failed to open daemon database: {}", e))
@@ -933,14 +958,13 @@ pub fn handle_notifications_list(
     // Get notifications with state
     let notifications = db
         .list_notifications_with_state(&ctx.realm_name, &ctx.repo_name, state_filter)
-        .map_err(|e| {
-            ServerError::CommandFailed(format!("Failed to list notifications: {}", e))
-        })?;
+        .map_err(|e| ServerError::CommandFailed(format!("Failed to list notifications: {}", e)))?;
 
     // Filter to only domains the current repo participates in
-    let details = ctx.service.load_realm_details(&ctx.realm_name).map_err(|e| {
-        ServerError::CommandFailed(format!("Failed to load realm: {}", e))
-    })?;
+    let details = ctx
+        .service
+        .load_realm_details(&ctx.realm_name)
+        .map_err(|e| ServerError::CommandFailed(format!("Failed to load realm: {}", e)))?;
 
     let participating_domains: Vec<String> = details
         .domains
@@ -974,10 +998,18 @@ pub fn handle_notifications_list(
     // Build next steps
     let mut next_steps = Vec::new();
     if pending_count > 0 {
-        next_steps.push(format!("{} pending notification{} to review", pending_count, if pending_count == 1 { "" } else { "s" }));
+        next_steps.push(format!(
+            "{} pending notification{} to review",
+            pending_count,
+            if pending_count == 1 { "" } else { "s" }
+        ));
     }
     if expired_count > 0 {
-        next_steps.push(format!("Cleaned up {} expired notification{}", expired_count, if expired_count == 1 { "" } else { "s" }));
+        next_steps.push(format!(
+            "Cleaned up {} expired notification{}",
+            expired_count,
+            if expired_count == 1 { "" } else { "s" }
+        ));
     }
     if pending_count == 0 && seen_count == 0 {
         next_steps.push("No notifications. All quiet.".to_string());
@@ -1079,14 +1111,11 @@ fn fetch_pending_notifications(ctx: &RealmContext) -> Vec<Value> {
     };
 
     // Get pending notifications
-    let notifications = match db.list_notifications_with_state(
-        &ctx.realm_name,
-        &ctx.repo_name,
-        Some("pending"),
-    ) {
-        Ok(n) => n,
-        Err(_) => return Vec::new(),
-    };
+    let notifications =
+        match db.list_notifications_with_state(&ctx.realm_name, &ctx.repo_name, Some("pending")) {
+            Ok(n) => n,
+            Err(_) => return Vec::new(),
+        };
 
     // Load realm details to filter by participating domains
     let details = match ctx.service.load_realm_details(&ctx.realm_name) {
@@ -1142,10 +1171,7 @@ pub struct RfcDepStatus {
 ///
 /// Loads .blue/realm.toml and checks status of cross-repo RFC dependencies.
 /// Returns a status matrix showing resolved/unresolved dependencies.
-pub fn handle_validate_realm(
-    cwd: Option<&Path>,
-    strict: bool,
-) -> Result<Value, ServerError> {
+pub fn handle_validate_realm(cwd: Option<&Path>, strict: bool) -> Result<Value, ServerError> {
     let cwd = cwd.ok_or(ServerError::InvalidParams)?;
 
     // Check for .blue/realm.toml
@@ -1176,7 +1202,11 @@ pub fn handle_validate_realm(
         for dep in &deps.depends_on {
             let status = check_dependency(cwd, dep);
             if status.error.is_some() {
-                errors.push(format!("RFC {}: {}", rfc_id, status.error.as_ref().unwrap()));
+                errors.push(format!(
+                    "RFC {}: {}",
+                    rfc_id,
+                    status.error.as_ref().unwrap()
+                ));
             }
             all_deps.push(status);
         }
@@ -1190,12 +1220,18 @@ pub fn handle_validate_realm(
     // Build next steps
     let mut next_steps = Vec::new();
     if unresolved > 0 {
-        next_steps.push(format!("{} unresolved RFC dependencies - coordinate with dependent repos", unresolved));
+        next_steps.push(format!(
+            "{} unresolved RFC dependencies - coordinate with dependent repos",
+            unresolved
+        ));
 
         // List specific unresolved deps
         for dep in all_deps.iter().filter(|d| !d.resolved) {
             if let Some(ref status) = dep.status {
-                next_steps.push(format!("  {} is '{}' - wait for implementation", dep.dependency, status));
+                next_steps.push(format!(
+                    "  {} is '{}' - wait for implementation",
+                    dep.dependency, status
+                ));
             } else if let Some(ref err) = dep.error {
                 next_steps.push(format!("  {} - {}", dep.dependency, err));
             }
@@ -1239,7 +1275,10 @@ fn check_dependency(cwd: &Path, dep: &str) -> RfcDepStatus {
             rfc_id: String::new(),
             resolved: false,
             status: None,
-            error: Some(format!("Invalid dependency format '{}' - expected 'repo:rfc-id'", dep)),
+            error: Some(format!(
+                "Invalid dependency format '{}' - expected 'repo:rfc-id'",
+                dep
+            )),
         };
     }
 
@@ -1279,7 +1318,10 @@ fn check_dependency(cwd: &Path, dep: &str) -> RfcDepStatus {
         rfc_id,
         resolved: false,
         status: None,
-        error: Some(format!("Could not verify RFC status in repo '{}' - repo not in realm cache", parts[0])),
+        error: Some(format!(
+            "Could not verify RFC status in repo '{}' - repo not in realm cache",
+            parts[0]
+        )),
     }
 }
 

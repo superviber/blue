@@ -243,12 +243,20 @@ impl ContextManifest {
 
     /// Get all source URIs from identity tier
     pub fn identity_uris(&self) -> Vec<&str> {
-        self.identity.sources.iter().map(|s| s.uri.as_str()).collect()
+        self.identity
+            .sources
+            .iter()
+            .map(|s| s.uri.as_str())
+            .collect()
     }
 
     /// Get all source URIs from workflow tier
     pub fn workflow_uris(&self) -> Vec<&str> {
-        self.workflow.sources.iter().map(|s| s.uri.as_str()).collect()
+        self.workflow
+            .sources
+            .iter()
+            .map(|s| s.uri.as_str())
+            .collect()
     }
 
     /// Get total token budget
@@ -295,13 +303,11 @@ impl Default for ContextManifest {
                 max_tokens: 500,
             },
             workflow: WorkflowConfig {
-                sources: vec![
-                    SourceConfig {
-                        uri: "blue://state/current-rfc".to_string(),
-                        label: Some("Active RFC".to_string()),
-                        allow_external: false,
-                    },
-                ],
+                sources: vec![SourceConfig {
+                    uri: "blue://state/current-rfc".to_string(),
+                    label: Some("Active RFC".to_string()),
+                    allow_external: false,
+                }],
                 refresh_triggers: vec![RefreshTrigger::OnRfcChange],
                 max_tokens: 2000,
             },

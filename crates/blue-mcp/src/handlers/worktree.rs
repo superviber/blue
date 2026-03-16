@@ -86,7 +86,10 @@ fn detect_setup_script(path: &Path) -> Option<String> {
 /// Returns (stripped_name, rfc_number) if pattern matches, otherwise (original, None)
 pub fn strip_rfc_number_prefix(title: &str) -> (String, Option<u32>) {
     // Match pattern: NNNN-rest-of-title
-    if title.len() > 5 && title.chars().take(4).all(|c| c.is_ascii_digit()) && title.chars().nth(4) == Some('-') {
+    if title.len() > 5
+        && title.chars().take(4).all(|c| c.is_ascii_digit())
+        && title.chars().nth(4) == Some('-')
+    {
         let number: Option<u32> = title[..4].parse().ok();
         let stripped = title[5..].to_string();
         (stripped, number)
@@ -217,7 +220,10 @@ pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, Server
 
                     // Update RFC status to in-progress if accepted
                     if doc.status == "accepted" {
-                        let _ = state.store.update_document_status(DocType::Rfc, title, "in-progress");
+                        let _ =
+                            state
+                                .store
+                                .update_document_status(DocType::Rfc, title, "in-progress");
                     }
 
                     // Detect install command and setup script
@@ -297,15 +303,19 @@ pub fn handle_list(state: &ProjectState) -> Result<Value, ServerError> {
     let enriched: Vec<Value> = worktrees
         .iter()
         .filter_map(|wt| {
-            state.store.get_document_by_id(wt.document_id).ok().map(|doc| {
-                json!({
-                    "title": doc.title,
-                    "status": doc.status,
-                    "branch": wt.branch_name,
-                    "path": wt.worktree_path,
-                    "created_at": wt.created_at
+            state
+                .store
+                .get_document_by_id(wt.document_id)
+                .ok()
+                .map(|doc| {
+                    json!({
+                        "title": doc.title,
+                        "status": doc.status,
+                        "branch": wt.branch_name,
+                        "path": wt.worktree_path,
+                        "created_at": wt.created_at
+                    })
                 })
-            })
         })
         .collect();
 
@@ -388,11 +398,12 @@ pub fn handle_cleanup(state: &ProjectState, args: &Value) -> Result<Value, Serve
     };
 
     // Delete local branch
-    let branch_deleted = if let Ok(mut branch) = repo.find_branch(&branch_name, git2::BranchType::Local) {
-        branch.delete().is_ok()
-    } else {
-        false
-    };
+    let branch_deleted =
+        if let Ok(mut branch) = repo.find_branch(&branch_name, git2::BranchType::Local) {
+            branch.delete().is_ok()
+        } else {
+            false
+        };
 
     // Remove from store
     if worktree.is_some() {
@@ -450,8 +461,12 @@ pub fn handle_remove(state: &ProjectState, args: &Value) -> Result<Value, Server
     if !force {
         let repo_path = state.home.root.clone();
         if let Ok(repo) = git2::Repository::open(&repo_path) {
-            if let Ok(false) = blue_core::repo::is_branch_merged(&repo, &worktree.branch_name, "main") {
-                if let Ok(false) = blue_core::repo::is_branch_merged(&repo, &worktree.branch_name, "develop") {
+            if let Ok(false) =
+                blue_core::repo::is_branch_merged(&repo, &worktree.branch_name, "main")
+            {
+                if let Ok(false) =
+                    blue_core::repo::is_branch_merged(&repo, &worktree.branch_name, "develop")
+                {
                     return Ok(json!({
                         "status": "error",
                         "message": blue_core::voice::error(
@@ -542,16 +557,25 @@ mod tests {
         assert_eq!(slugify("Minimal Job Submission"), "minimal-job-submission");
 
         // Already slugified
-        assert_eq!(slugify("consistent-branch-naming"), "consistent-branch-naming");
+        assert_eq!(
+            slugify("consistent-branch-naming"),
+            "consistent-branch-naming"
+        );
 
         // Mixed case with spaces
-        assert_eq!(slugify("Add User Authentication"), "add-user-authentication");
+        assert_eq!(
+            slugify("Add User Authentication"),
+            "add-user-authentication"
+        );
 
         // Underscores converted
         assert_eq!(slugify("some_feature_name"), "some-feature-name");
 
         // Special characters removed
-        assert_eq!(slugify("Feature: Add (New) Stuff!"), "feature-add-new-stuff");
+        assert_eq!(
+            slugify("Feature: Add (New) Stuff!"),
+            "feature-add-new-stuff"
+        );
 
         // Multiple spaces/hyphens collapsed
         assert_eq!(slugify("too   many   spaces"), "too-many-spaces");

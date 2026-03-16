@@ -1,0 +1,12 @@
+{
+  "round": 2,
+  "focus": "Spec rigor - RFC 2119, conformance, git conventions, error model",
+  "panel": [
+    { "name": "Galette", "role": "Standards Expert", "tier": "adjacent", "source": "retained" },
+    { "name": "Tartlet", "role": "Git/VCS Expert", "tier": "adjacent", "source": "retained" },
+    { "name": "Eclair", "role": "Developer Experience Lead", "tier": "core", "source": "retained" },
+    { "name": "Strudel", "role": "Cognitive Scientist", "tier": "adjacent", "source": "retained" },
+    { "name": "Brioche", "role": "Systems Architect", "tier": "core", "source": "retained" }
+  ],
+  "note": "Reduced panel for spec finalization. Core design decisions locked in R1."
+}

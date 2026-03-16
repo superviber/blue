@@ -94,7 +94,11 @@ impl<P: LlmProvider> Indexer<P> {
 
         let content_to_index = if is_partial {
             // Take first MAX_FILE_LINES lines
-            content.lines().take(MAX_FILE_LINES).collect::<Vec<_>>().join("\n")
+            content
+                .lines()
+                .take(MAX_FILE_LINES)
+                .collect::<Vec<_>>()
+                .join("\n")
         } else {
             content.clone()
         };
@@ -109,7 +113,9 @@ impl<P: LlmProvider> Indexer<P> {
             stop_sequences: vec![], // Let model complete naturally
         };
 
-        let completion = self.provider.complete(&prompt, &options)
+        let completion = self
+            .provider
+            .complete(&prompt, &options)
             .map_err(IndexerError::LlmError)?;
 
         // Parse YAML response
@@ -145,12 +151,15 @@ impl<P: LlmProvider> Indexer<P> {
         entry.relationships = result.relationships.clone();
 
         // Store in database
-        let file_id = store.upsert_file_index(&entry)
+        let file_id = store
+            .upsert_file_index(&entry)
             .map_err(|e| IndexerError::StoreError(e.to_string()))?;
 
         // Convert and store symbols
-        let symbols: Vec<SymbolIndexEntry> = result.symbols.iter().map(|s| {
-            SymbolIndexEntry {
+        let symbols: Vec<SymbolIndexEntry> = result
+            .symbols
+            .iter()
+            .map(|s| SymbolIndexEntry {
                 id: None,
                 file_id,
                 name: s.name.clone(),
@@ -158,19 +167,28 @@ impl<P: LlmProvider> Indexer<P> {
                 start_line: s.start_line,
                 end_line: s.end_line,
                 description: s.description.clone(),
-            }
-        }).collect();
+            })
+            .collect();
 
-        store.set_file_symbols(file_id, &symbols)
+        store
+            .set_file_symbols(file_id, &symbols)
             .map_err(|e| IndexerError::StoreError(e.to_string()))?;
 
-        info!("Indexed {} with {} symbols", result.file_path, symbols.len());
+        info!(
+            "Indexed {} with {} symbols",
+            result.file_path,
+            symbols.len()
+        );
 
         Ok(result)
     }
 
     /// Check if a file needs re-indexing
-    pub fn needs_indexing(&self, file_path: &Path, store: &DocumentStore) -> Result<bool, IndexerError> {
+    pub fn needs_indexing(
+        &self,
+        file_path: &Path,
+        store: &DocumentStore,
+    ) -> Result<bool, IndexerError> {
         let path_str = file_path.to_string_lossy().to_string();
 
         // Read file and calculate hash
@@ -179,7 +197,13 @@ impl<P: LlmProvider> Indexer<P> {
         let current_hash = hash_content(&content);
 
         // Check against stored hash
-        store.is_file_stale(&self.config.realm, &self.config.repo, &path_str, &current_hash)
+        store
+            .is_file_stale(
+                &self.config.realm,
+                &self.config.repo,
+                &path_str,
+                &current_hash,
+            )
             .map_err(|e| IndexerError::StoreError(e.to_string()))
     }
 }
@@ -258,35 +282,43 @@ fn parse_index_response(response: &str) -> ParsedResponse {
     // Parse YAML
     match serde_yaml::from_str::<serde_yaml::Value>(yaml_content) {
         Ok(value) => {
-            let summary = value.get("summary")
+            let summary = value
+                .get("summary")
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string());
 
-            let relationships = value.get("relationships")
+            let relationships = value
+                .get("relationships")
                 .and_then(|v| v.as_str())
                 .map(|s| s.trim().to_string());
 
-            let symbols = value.get("symbols")
+            let symbols = value
+                .get("symbols")
                 .and_then(|v| v.as_sequence())
                 .map(|seq| {
-                    seq.iter().filter_map(|item| {
-                        let name = item.get("name")?.as_str()?.to_string();
-                        let kind = item.get("kind")?.as_str()?.to_string();
+                    seq.iter()
+                        .filter_map(|item| {
+                            let name = item.get("name")?.as_str()?.to_string();
+                            let kind = item.get("kind")?.as_str()?.to_string();
 
-                        Some(ParsedSymbol {
-                            name,
-                            kind,
-                            start_line: item.get("start_line")
-                                .and_then(|v| v.as_i64())
-                                .map(|n| n as i32),
-                            end_line: item.get("end_line")
-                                .and_then(|v| v.as_i64())
-                                .map(|n| n as i32),
-                            description: item.get("description")
-                                .and_then(|v| v.as_str())
-                                .map(|s| s.to_string()),
+                            Some(ParsedSymbol {
+                                name,
+                                kind,
+                                start_line: item
+                                    .get("start_line")
+                                    .and_then(|v| v.as_i64())
+                                    .map(|n| n as i32),
+                                end_line: item
+                                    .get("end_line")
+                                    .and_then(|v| v.as_i64())
+                                    .map(|n| n as i32),
+                                description: item
+                                    .get("description")
+                                    .and_then(|v| v.as_str())
+                                    .map(|s| s.to_string()),
+                            })
                         })
-                    }).collect()
+                        .collect()
                 })
                 .unwrap_or_default();
 
@@ -337,9 +369,9 @@ pub enum IndexerError {
 /// File extensions we should index
 pub fn is_indexable_file(path: &Path) -> bool {
     let extensions: &[&str] = &[
-        "rs", "py", "js", "ts", "tsx", "jsx", "go", "java", "c", "cpp", "h", "hpp",
-        "rb", "php", "swift", "kt", "scala", "clj", "ex", "exs", "erl", "hs",
-        "ml", "mli", "sql", "sh", "bash", "zsh", "yaml", "yml", "toml", "json",
+        "rs", "py", "js", "ts", "tsx", "jsx", "go", "java", "c", "cpp", "h", "hpp", "rb", "php",
+        "swift", "kt", "scala", "clj", "ex", "exs", "erl", "hs", "ml", "mli", "sql", "sh", "bash",
+        "zsh", "yaml", "yml", "toml", "json",
     ];
 
     path.extension()
@@ -351,8 +383,19 @@ pub fn is_indexable_file(path: &Path) -> bool {
 /// Directories to skip when indexing
 pub fn should_skip_dir(name: &str) -> bool {
     let skip_dirs: &[&str] = &[
-        "node_modules", "target", ".git", "__pycache__", "venv", ".venv",
-        "dist", "build", ".next", ".nuxt", "vendor", ".cargo", ".blue",
+        "node_modules",
+        "target",
+        ".git",
+        "__pycache__",
+        "venv",
+        ".venv",
+        "dist",
+        "build",
+        ".next",
+        ".nuxt",
+        "vendor",
+        ".cargo",
+        ".blue",
     ];
 
     skip_dirs.contains(&name) || name.starts_with('.')
@@ -409,7 +452,10 @@ symbols:
 ```"#;
 
         let parsed = parse_index_response(response);
-        assert_eq!(parsed.summary, Some("This file handles user authentication".to_string()));
+        assert_eq!(
+            parsed.summary,
+            Some("This file handles user authentication".to_string())
+        );
         assert!(parsed.relationships.is_some());
         assert_eq!(parsed.symbols.len(), 1);
         assert_eq!(parsed.symbols[0].name, "authenticate");

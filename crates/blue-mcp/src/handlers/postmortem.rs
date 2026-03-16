@@ -5,7 +5,7 @@
 use std::fs;
 use std::path::PathBuf;
 
-use blue_core::{DocType, Document, ProjectState, Rfc, title_to_slug};
+use blue_core::{title_to_slug, DocType, Document, ProjectState, Rfc};
 use serde_json::{json, Value};
 
 use crate::error::ServerError;
@@ -87,7 +87,8 @@ pub fn handle_create(state: &mut ProjectState, args: &Value) -> Result<Value, Se
     let pm_path = docs_path.join(&file_path);
 
     // Generate markdown content
-    let markdown = generate_postmortem_markdown(title, severity, summary, root_cause, duration, &impact);
+    let markdown =
+        generate_postmortem_markdown(title, severity, summary, root_cause, duration, &impact);
 
     // Create postmortems directory if it doesn't exist
     if let Some(parent) = pm_path.parent() {
@@ -160,9 +161,10 @@ pub fn handle_action_to_rfc(state: &mut ProjectState, args: &Value) -> Result<Va
             ServerError::NotFound(format!("Post-mortem '{}' not found", postmortem_title))
         })?;
 
-    let pm_file_path = pm_doc.file_path.as_ref().ok_or_else(|| {
-        ServerError::CommandFailed("Post-mortem has no file path".to_string())
-    })?;
+    let pm_file_path = pm_doc
+        .file_path
+        .as_ref()
+        .ok_or_else(|| ServerError::CommandFailed("Post-mortem has no file path".to_string()))?;
 
     let docs_path = state.home.docs_path.clone();
     let pm_path = docs_path.join(pm_file_path);
@@ -173,16 +175,14 @@ pub fn handle_action_to_rfc(state: &mut ProjectState, args: &Value) -> Result<Va
     let (action_idx, action_description) = find_action_item(&pm_content, action)?;
 
     // Generate RFC title from action item if not provided
-    let rfc_title = rfc_title_override
-        .map(String::from)
-        .unwrap_or_else(|| {
-            action_description
-                .chars()
-                .take(50)
-                .collect::<String>()
-                .trim()
-                .to_string()
-        });
+    let rfc_title = rfc_title_override.map(String::from).unwrap_or_else(|| {
+        action_description
+            .chars()
+            .take(50)
+            .collect::<String>()
+            .trim()
+            .to_string()
+    });
 
     // Create RFC with post-mortem reference
     let mut rfc = Rfc::new(&rfc_title);
@@ -382,10 +382,7 @@ fn generate_postmortem_markdown(
     let date = chrono::Utc::now().format("%Y-%m-%d").to_string();
 
     // Title
-    md.push_str(&format!(
-        "# Post-Mortem: {}\n\n",
-        to_title_case(title)
-    ));
+    md.push_str(&format!("# Post-Mortem: {}\n\n", to_title_case(title)));
 
     // Metadata table
     md.push_str("| | |\n|---|---|\n");
@@ -454,7 +451,6 @@ fn generate_postmortem_markdown(
 
     md
 }
-
 
 /// Convert slug to title case
 fn to_title_case(s: &str) -> String {

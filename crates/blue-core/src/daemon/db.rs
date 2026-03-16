@@ -189,9 +189,9 @@ impl DaemonDb {
 
     /// List all tracked realms
     pub fn list_realms(&self) -> Result<Vec<Realm>, DaemonDbError> {
-        let mut stmt = self.conn.prepare(
-            "SELECT name, forgejo_url, local_path, last_sync, status FROM realms",
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT name, forgejo_url, local_path, last_sync, status FROM realms")?;
 
         let realms = stmt
             .query_map([], |row| {
@@ -311,9 +311,7 @@ impl DaemonDb {
             "#,
         )?;
 
-        let session = stmt
-            .query_row([id], Self::row_to_session)
-            .optional()?;
+        let session = stmt.query_row([id], Self::row_to_session).optional()?;
 
         Ok(session)
     }
@@ -505,14 +503,12 @@ impl DaemonDb {
                 };
                 (n, state.to_string())
             })
-            .filter(|(_, state)| {
-                match state_filter {
-                    Some("pending") => state == "pending",
-                    Some("seen") => state == "seen",
-                    Some("expired") => state == "expired",
-                    Some("all") | None => true,
-                    _ => true,
-                }
+            .filter(|(_, state)| match state_filter {
+                Some("pending") => state == "pending",
+                Some("seen") => state == "seen",
+                Some("expired") => state == "expired",
+                Some("all") | None => true,
+                _ => true,
             })
             .collect();
 
@@ -621,6 +617,8 @@ mod tests {
         db.acknowledge_notification(id, "fungal").unwrap();
 
         let notifications = db.list_notifications().unwrap();
-        assert!(notifications[0].acknowledged_by.contains(&"fungal".to_string()));
+        assert!(notifications[0]
+            .acknowledged_by
+            .contains(&"fungal".to_string()));
     }
 }

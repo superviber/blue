@@ -6,7 +6,7 @@
 use serde_json::{json, Value};
 use std::sync::{Arc, Mutex, OnceLock};
 
-use blue_core::{KeywordLlm, LlmConfig, LlmManager, LocalLlmConfig, LlmProvider};
+use blue_core::{KeywordLlm, LlmConfig, LlmManager, LlmProvider, LocalLlmConfig};
 use blue_ollama::{EmbeddedOllama, HealthStatus, OllamaLlm};
 
 use crate::error::ServerError;
@@ -22,10 +22,7 @@ fn get_ollama() -> &'static Arc<Mutex<Option<OllamaLlm>>> {
 /// Start Ollama server
 pub fn handle_start(args: &Value) -> Result<Value, ServerError> {
     let port = args.get("port").and_then(|v| v.as_u64()).map(|p| p as u16);
-    let model = args
-        .get("model")
-        .and_then(|v| v.as_str())
-        .map(String::from);
+    let model = args.get("model").and_then(|v| v.as_str()).map(String::from);
     let backend = args.get("backend").and_then(|v| v.as_str());
     let use_external = args
         .get("use_external")
@@ -46,7 +43,9 @@ pub fn handle_start(args: &Value) -> Result<Value, ServerError> {
     };
 
     let ollama = OllamaLlm::new(&config);
-    ollama.start().map_err(|e| ServerError::CommandFailed(e.to_string()))?;
+    ollama
+        .start()
+        .map_err(|e| ServerError::CommandFailed(e.to_string()))?;
 
     let mut guard = get_ollama().lock().unwrap();
     *guard = Some(ollama);
@@ -63,7 +62,9 @@ pub fn handle_start(args: &Value) -> Result<Value, ServerError> {
 pub fn handle_stop() -> Result<Value, ServerError> {
     let mut guard = get_ollama().lock().unwrap();
     if let Some(ref ollama) = *guard {
-        ollama.stop().map_err(|e| ServerError::CommandFailed(e.to_string()))?;
+        ollama
+            .stop()
+            .map_err(|e| ServerError::CommandFailed(e.to_string()))?;
     }
     *guard = None;
 
@@ -80,27 +81,21 @@ pub fn handle_status() -> Result<Value, ServerError> {
     if let Some(ref ollama) = *guard {
         let health = ollama.ollama().health_check();
         match health {
-            HealthStatus::Healthy { version, gpu } => {
-                Ok(json!({
-                    "running": true,
-                    "version": version,
-                    "gpu": gpu,
-                    "ready": ollama.is_ready()
-                }))
-            }
-            HealthStatus::Unhealthy { error } => {
-                Ok(json!({
-                    "running": true,
-                    "unhealthy": true,
-                    "error": error
-                }))
-            }
-            HealthStatus::NotRunning => {
-                Ok(json!({
-                    "running": false,
-                    "message": "Ollama is not running"
-                }))
-            }
+            HealthStatus::Healthy { version, gpu } => Ok(json!({
+                "running": true,
+                "version": version,
+                "gpu": gpu,
+                "ready": ollama.is_ready()
+            })),
+            HealthStatus::Unhealthy { error } => Ok(json!({
+                "running": true,
+                "unhealthy": true,
+                "error": error
+            })),
+            HealthStatus::NotRunning => Ok(json!({
+                "running": false,
+                "message": "Ollama is not running"
+            })),
         }
     } else {
         // Check if there's an external Ollama running
@@ -112,14 +107,12 @@ pub fn handle_status() -> Result<Value, ServerError> {
         if external.is_ollama_running() {
             let health = external.health_check();
             match health {
-                HealthStatus::Healthy { version, gpu } => {
-                    Ok(json!({
-                        "running": true,
-                        "external": true,
-                        "version": version,
-                        "gpu": gpu
-                    }))
-                }
+                HealthStatus::Healthy { version, gpu } => Ok(json!({
+                    "running": true,
+                    "external": true,
+                    "version": version,
+                    "gpu": gpu
+                })),
                 _ => Ok(json!({
                     "running": false,
                     "managed": false,
@@ -438,7 +431,10 @@ mod tests {
         assert_eq!(chain.len(), 3);
 
         // Keywords should always be available
-        let keywords = chain.iter().find(|p| p.get("name").unwrap() == "keywords").unwrap();
+        let keywords = chain
+            .iter()
+            .find(|p| p.get("name").unwrap() == "keywords")
+            .unwrap();
         assert_eq!(keywords.get("available").unwrap(), true);
     }
 }

@@ -1,0 +1,25 @@
+{
+  "domain": "Knowledge Filesystem Architecture",
+  "question": "How can we improve the UKFS specification for agent-navigable knowledge representation?",
+  "experts": [
+    { "role": "Filesystem Architect", "tier": "core", "relevance": 0.95, "focus": "Path semantics, directory structure, naming conventions, filesystem primitives" },
+    { "role": "Knowledge Engineer", "tier": "core", "relevance": 0.92, "focus": "Ontology design, semantic relationships, knowledge representation patterns" },
+    { "role": "AI Agent Specialist", "tier": "core", "relevance": 0.90, "focus": "LLM navigation patterns, reasoning about paths, tool use integration" },
+    { "role": "Developer Experience Lead", "tier": "core", "relevance": 0.88, "focus": "Usability, discoverability, documentation, onboarding" },
+    { "role": "API Designer", "tier": "core", "relevance": 0.85, "focus": "Convention consistency, ergonomics, extensibility, backward compatibility" },
+    { "role": "Systems Architect", "tier": "core", "relevance": 0.82, "focus": "Overall coherence, integration patterns, architectural trade-offs" },
+    { "role": "Database Architect", "tier": "adjacent", "relevance": 0.75, "focus": "Scaling strategies, indexing, sharding, query optimization" },
+    { "role": "Security Engineer", "tier": "adjacent", "relevance": 0.72, "focus": "Access control, encryption at rest, sensitive data handling" },
+    { "role": "Graph Theorist", "tier": "adjacent", "relevance": 0.70, "focus": "Relation modeling, traversal patterns, n-ary relations, hypergraphs" },
+    { "role": "Git/VCS Expert", "tier": "adjacent", "relevance": 0.68, "focus": "Versioning, merge conflicts, collaborative editing, branch strategies" },
+    { "role": "Standards Expert", "tier": "adjacent", "relevance": 0.65, "focus": "RFC conventions, spec completeness, interoperability, IETF patterns" },
+    { "role": "Cognitive Scientist", "tier": "adjacent", "relevance": 0.62, "focus": "Mental models, memorability, learnability, chunking" },
+    { "role": "Performance Engineer", "tier": "adjacent", "relevance": 0.58, "focus": "Path resolution speed, caching strategies, benchmarking" },
+    { "role": "Library Scientist", "tier": "wildcard", "relevance": 0.45, "focus": "Classification systems, Dewey/LoC parallels, information retrieval" },
+    { "role": "Linguistics Expert", "tier": "wildcard", "relevance": 0.40, "focus": "Naming semantics, cross-cultural considerations, abbreviation psychology" },
+    { "role": "Contrarian", "tier": "wildcard", "relevance": 0.35, "focus": "Challenge assumptions, find edge cases, question necessity" },
+    { "role": "End User Advocate", "tier": "wildcard", "relevance": 0.32, "focus": "Non-developer users, simplicity, accessibility" },
+    { "role": "Chaos Engineer", "tier": "wildcard", "relevance": 0.28, "focus": "Failure modes, recovery patterns, robustness testing" }
+  ],
+  "panel_size": 12
+}

@@ -1,0 +1,13 @@
+[PERSPECTIVE P01: The refs-table-only redesign is already half-implemented -- the codebase dual-stores refs and should drop the separate table]
+The codebase already stores references as inline `Option<Vec<Reference>>` JSON arrays on every entity (perspectives, tensions, recommendations, evidence, claims) AND separately in the `alignment_refs` table. This is accidental dual-write: every entity carries its outbound edges as `{type, target}` pairs inside the entity payload, while `alignment_refs` redundantly stores the same edges as relational rows. Eliminating the `alignment_refs` table and relying solely on the per-entity inline refs is not a redesign -- it is removing the redundant copy. DynamoDB's partition-load-then-traverse pattern (Cannoli P01) works precisely because the inline refs already exist; the separate refs table is a SQLite artifact that DynamoDB does not need and that RFC 0058's `ref#{source_id}#{ref_type}#{target_id}` SK pattern merely re-encodes as DynamoDB items for no additional query benefit.
+
+[PERSPECTIVE P02: Dropping the refs table simultaneously resolves MUFFIN R1-T01 and ECLAIR R1-T01]
+If refs live only as inline arrays within their source entities (already encrypted inside the entity payload), then verdict denormalization of `tensions_resolved` and `recommendations_adopted` becomes unnecessary -- the in-memory graph assembly Cannoli described can reconstruct these from the partition load without pre-computing them at write time. This eliminates the consistency risk (MUFFIN R1-T01: stale denormalized arrays) and the domain-model leakage (ECLAIR R1-T01: DynamoDB-shaped fields surviving a backend swap) in a single move, because the denormalized verdict fields exist only to compensate for the cost of traversing a separate refs table that should not exist.
+
+[TENSION T01: Inline-refs-only design requires the trait to expose graph assembly as a library, not a query method]
+If the trait exposes `fn get_verdict_with_context(...)` that returns pre-assembled verdict graphs, every backend must implement the assembly logic independently. If instead the trait returns raw entities and a shared library assembles the graph in-memory, the trait stays thin and backend-neutral -- but no RFC specifies which layer owns graph assembly.
+
+[RESOLVED: STRUDEL R1-T01 (trait shaped by workarounds vs domain)]
+The inline-refs-only design resolves this: when refs are embedded in entities and graph assembly is a shared library function operating on domain structs (not a trait method), the trait surface contains only partition-scoped CRUD -- naturally implementable by any backend -- and the DynamoDB-vs-relational question cannot leak into the trait shape.
+
+---

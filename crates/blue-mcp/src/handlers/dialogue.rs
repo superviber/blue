@@ -8,22 +8,46 @@ use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use blue_core::{DocType, Document, LinkType, ProjectState, title_to_slug};
 use blue_core::alignment_db::{
-    self, ExpertTier as DbExpertTier, ExpertSource as DbExpertSource,
-    EntityType, RefType, VerdictType, Verdict,
-    ValidationError, ValidationCollector,
-    validate_ref_semantics, validate_display_id,
-    get_dialogue, register_expert, get_experts,
-    create_round_with_metrics, register_perspective, register_tension,
-    register_recommendation, register_evidence, register_claim, register_ref,
-    register_verdict, update_tension_status, update_expert_score,
-    get_perspectives, get_tensions, get_recommendations, get_evidence, get_claims, get_verdicts,
-    display_id, parse_display_id,
+    self,
+    can_dialogue_converge,
+    create_round_with_metrics,
+    display_id,
+    get_claims,
+    get_dialogue,
+    get_evidence,
+    get_experts,
+    get_perspectives,
+    get_recommendations,
+    get_scoreboard,
+    get_tensions,
+    get_verdicts,
+    parse_display_id,
+    register_claim,
+    register_evidence,
+    register_expert,
+    register_perspective,
+    register_recommendation,
+    register_ref,
+    register_tension,
+    register_verdict,
+    update_expert_score,
+    update_tension_status,
+    validate_display_id,
+    validate_ref_semantics,
+    ConvergenceMetrics,
+    EntityType,
+    ExpertSource as DbExpertSource,
+    ExpertTier as DbExpertTier,
+    RefType,
     // RFC 0057: Convergence discipline
-    ScoreComponents, ConvergenceMetrics,
-    can_dialogue_converge, get_scoreboard,
+    ScoreComponents,
+    ValidationCollector,
+    ValidationError,
+    Verdict,
+    VerdictType,
 };
+use blue_core::{title_to_slug, DocType, Document, LinkType, ProjectState};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -44,7 +68,6 @@ fn coerce_bool(v: &Value) -> Option<bool> {
 
 /// Expert tier for pool-based sampling (RFC 0048)
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
 pub enum ExpertTier {
     Core,
     Adjacent,
@@ -422,10 +445,7 @@ pub fn handle_create(state: &mut ProjectState, args: &Value) -> Result<Value, Se
     let content = args.get("content").and_then(|v| v.as_str());
 
     // Alignment mode params
-    let alignment = args
-        .get("alignment")
-        .and_then(coerce_bool)
-        .unwrap_or(false);
+    let alignment = args.get("alignment").and_then(coerce_bool).unwrap_or(false);
     let model = args
         .get("model")
         .and_then(|v| v.as_str())
@@ -474,9 +494,7 @@ pub fn handle_create(state: &mut ProjectState, args: &Value) -> Result<Value, Se
             state
                 .store
                 .find_document(DocType::Rfc, rfc)
-                .map_err(|_| {
-                    ServerError::NotFound(format!("RFC '{}' not found", rfc))
-                })?,
+                .map_err(|_| ServerError::NotFound(format!("RFC '{}' not found", rfc)))?,
         )
     } else {
         None
@@ -512,13 +530,7 @@ pub fn handle_create(state: &mut ProjectState, args: &Value) -> Result<Value, Se
         );
         (md, Some(agents), Some(pool))
     } else {
-        let md = generate_dialogue_markdown(
-            title,
-            dialogue_number,
-            rfc_title,
-            summary,
-            content,
-        );
+        let md = generate_dialogue_markdown(title, dialogue_number, rfc_title, summary, content);
         (md, None, None)
     };
 
@@ -548,11 +560,9 @@ pub fn handle_create(state: &mut ProjectState, args: &Value) -> Result<Value, Se
     // Link to RFC if provided
     if let Some(ref rfc) = rfc_doc {
         if let (Some(rfc_id), Some(dialogue_id)) = (rfc.id, Some(dialogue_id)) {
-            let _ = state.store.link_documents(
-                dialogue_id,
-                rfc_id,
-                LinkType::DialogueToRfc,
-            );
+            let _ = state
+                .store
+                .link_documents(dialogue_id, rfc_id, LinkType::DialogueToRfc);
         }
     }
 
@@ -570,8 +580,9 @@ pub fn handle_create(state: &mut ProjectState, args: &Value) -> Result<Value, Se
         // RFC 0048: Persist expert pool to output directory
         if let Some(ref pool) = pool_for_response {
             let pool_path = format!("{}/expert-pool.json", output_dir);
-            let pool_json = serde_json::to_string_pretty(pool)
-                .map_err(|e| ServerError::CommandFailed(format!("Failed to serialize pool: {}", e)))?;
+            let pool_json = serde_json::to_string_pretty(pool).map_err(|e| {
+                ServerError::CommandFailed(format!("Failed to serialize pool: {}", e))
+            })?;
             fs::write(&pool_path, pool_json)
                 .map_err(|e| ServerError::CommandFailed(format!("Failed to write pool: {}", e)))?;
         }
@@ -806,11 +817,14 @@ pub fn handle_save(state: &mut ProjectState, args: &Value) -> Result<Value, Serv
 
     // Add extraction metadata to result
     if let Some(obj) = result.as_object_mut() {
-        obj.insert("extraction".to_string(), json!({
-            "source_file": extraction.source_file,
-            "message_count": extraction.message_count,
-            "status": format!("{:?}", extraction.status).to_lowercase(),
-        }));
+        obj.insert(
+            "extraction".to_string(),
+            json!({
+                "source_file": extraction.source_file,
+                "message_count": extraction.message_count,
+                "status": format!("{:?}", extraction.status).to_lowercase(),
+            }),
+        );
     }
 
     Ok(result)
@@ -877,7 +891,6 @@ fn generate_dialogue_markdown(
     md
 }
 
-
 // ==================== Alignment Mode Helpers ====================
 
 /// Weighted random sampling without replacement (RFC 0048)
@@ -925,15 +938,21 @@ pub fn sample_panel_from_pool(pool: &ExpertPool, panel_size: usize) -> Vec<PoolE
     let (core_n, adj_n, wc_n) = tier_split(panel_size);
 
     // Separate experts by tier
-    let core: Vec<_> = pool.experts.iter()
+    let core: Vec<_> = pool
+        .experts
+        .iter()
         .filter(|e| e.tier == ExpertTier::Core)
         .cloned()
         .collect();
-    let adjacent: Vec<_> = pool.experts.iter()
+    let adjacent: Vec<_> = pool
+        .experts
+        .iter()
         .filter(|e| e.tier == ExpertTier::Adjacent)
         .cloned()
         .collect();
-    let wildcard: Vec<_> = pool.experts.iter()
+    let wildcard: Vec<_> = pool
+        .experts
+        .iter()
         .filter(|e| e.tier == ExpertTier::Wildcard)
         .cloned()
         .collect();
@@ -947,7 +966,9 @@ pub fn sample_panel_from_pool(pool: &ExpertPool, panel_size: usize) -> Vec<PoolE
     // If we don't have enough in a tier, fill from others
     while panel.len() < panel_size && panel.len() < pool.experts.len() {
         let used_roles: std::collections::HashSet<_> = panel.iter().map(|e| &e.role).collect();
-        let remaining: Vec<_> = pool.experts.iter()
+        let remaining: Vec<_> = pool
+            .experts
+            .iter()
             .filter(|e| !used_roles.contains(&e.role))
             .cloned()
             .collect();
@@ -1009,7 +1030,10 @@ pub fn generate_context_brief(output_dir: &str, round: usize) -> Result<String, 
                 brief.push('\n');
             }
             if tension_lines.len() > 5 {
-                brief.push_str(&format!("... and {} more tensions\n", tension_lines.len() - 5));
+                brief.push_str(&format!(
+                    "... and {} more tensions\n",
+                    tension_lines.len() - 5
+                ));
             }
             brief.push('\n');
         }
@@ -1034,7 +1058,10 @@ pub fn generate_context_brief(output_dir: &str, round: usize) -> Result<String, 
         if let Ok(panel) = serde_json::from_str::<Vec<PastryAgent>>(&panel_json) {
             brief.push_str(&format!("### Round {} Panel\n\n", prev_round));
             for agent in panel.iter().take(8) {
-                brief.push_str(&format!("- {} {}: {}\n", agent.emoji, agent.name, agent.role));
+                brief.push_str(&format!(
+                    "- {} {}: {}\n",
+                    agent.emoji, agent.name, agent.role
+                ));
             }
             if panel.len() > 8 {
                 brief.push_str(&format!("... and {} more experts\n", panel.len() - 8));
@@ -1119,20 +1146,52 @@ pub fn generate_alignment_dialogue_markdown(
         md.push('\n');
 
         // Group by tier
-        let core: Vec<_> = p.experts.iter().filter(|e| e.tier == ExpertTier::Core).collect();
-        let adjacent: Vec<_> = p.experts.iter().filter(|e| e.tier == ExpertTier::Adjacent).collect();
-        let wildcard: Vec<_> = p.experts.iter().filter(|e| e.tier == ExpertTier::Wildcard).collect();
+        let core: Vec<_> = p
+            .experts
+            .iter()
+            .filter(|e| e.tier == ExpertTier::Core)
+            .collect();
+        let adjacent: Vec<_> = p
+            .experts
+            .iter()
+            .filter(|e| e.tier == ExpertTier::Adjacent)
+            .collect();
+        let wildcard: Vec<_> = p
+            .experts
+            .iter()
+            .filter(|e| e.tier == ExpertTier::Wildcard)
+            .collect();
 
         md.push_str("| Tier | Experts |\n");
         md.push_str("|------|--------|\n");
         if !core.is_empty() {
-            md.push_str(&format!("| Core | {} |\n", core.iter().map(|e| e.role.as_str()).collect::<Vec<_>>().join(", ")));
+            md.push_str(&format!(
+                "| Core | {} |\n",
+                core.iter()
+                    .map(|e| e.role.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
         }
         if !adjacent.is_empty() {
-            md.push_str(&format!("| Adjacent | {} |\n", adjacent.iter().map(|e| e.role.as_str()).collect::<Vec<_>>().join(", ")));
+            md.push_str(&format!(
+                "| Adjacent | {} |\n",
+                adjacent
+                    .iter()
+                    .map(|e| e.role.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
         }
         if !wildcard.is_empty() {
-            md.push_str(&format!("| Wildcard | {} |\n", wildcard.iter().map(|e| e.role.as_str()).collect::<Vec<_>>().join(", ")));
+            md.push_str(&format!(
+                "| Wildcard | {} |\n",
+                wildcard
+                    .iter()
+                    .map(|e| e.role.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
         }
         md.push('\n');
     }
@@ -1486,19 +1545,19 @@ You are not limited to the initial pool. If the dialogue surfaces a perspective 
     // RFC 0050: For graduated rotation, the panel is a suggestion that the Judge can override
     // Use "suggested_panel" to make this clear; other modes use "agents" as the final panel
     if rotation == RotationMode::Graduated {
-        result.as_object_mut().unwrap().insert(
-            "suggested_panel".to_string(),
-            json!(agent_list),
-        );
-        result.as_object_mut().unwrap().insert(
-            "panel_is_suggestion".to_string(),
-            json!(true),
-        );
+        result
+            .as_object_mut()
+            .unwrap()
+            .insert("suggested_panel".to_string(), json!(agent_list));
+        result
+            .as_object_mut()
+            .unwrap()
+            .insert("panel_is_suggestion".to_string(), json!(true));
     } else {
-        result.as_object_mut().unwrap().insert(
-            "agents".to_string(),
-            json!(agent_list),
-        );
+        result
+            .as_object_mut()
+            .unwrap()
+            .insert("agents".to_string(), json!(agent_list));
     }
 
     // RFC 0048: Include pool info if present
@@ -1611,7 +1670,10 @@ pub fn handle_round_prompt(args: &Value) -> Result<Value, ServerError> {
 
     // RFC 0050: Focus instruction for created experts
     let focus_instruction = if let Some(focus) = expert_focus {
-        format!("\n\n**Your Focus**: {}\nBring this specialized perspective to the dialogue.", focus)
+        format!(
+            "\n\n**Your Focus**: {}\nBring this specialized perspective to the dialogue.",
+            focus
+        )
     } else {
         String::new()
     };
@@ -1713,9 +1775,27 @@ Five lines. The FILE_WRITTEN line proves you wrote the file. Without it, the Jud
         source_read_instructions = source_read_instructions,
     );
 
+    // Write prompt to file for audit/debugging
+    // Ensure round directory exists first
+    let round_dir = format!("{}/round-{}", output_dir, round);
+    if let Err(e) = fs::create_dir_all(&round_dir) {
+        eprintln!(
+            "Warning: Failed to create round directory {}: {}",
+            round_dir, e
+        );
+    }
+    let prompt_file = format!("{}/{}.prompt.md", round_dir, agent_lowercase);
+    if let Err(e) = fs::write(&prompt_file, &prompt) {
+        eprintln!(
+            "Warning: Failed to write prompt file {}: {}",
+            prompt_file, e
+        );
+    }
+
     let mut response = json!({
         "status": "success",
         "prompt": prompt,
+        "prompt_file": prompt_file,
         "output_file": output_file,
         "task_params": {
             "subagent_type": "general-purpose",
@@ -1730,24 +1810,24 @@ Five lines. The FILE_WRITTEN line proves you wrote the file. Without it, the Jud
             ExpertSource::Pool => "pool",
             ExpertSource::Created => "created",
         };
-        response.as_object_mut().unwrap().insert(
-            "expert_source".to_string(),
-            json!(source_str),
-        );
+        response
+            .as_object_mut()
+            .unwrap()
+            .insert("expert_source".to_string(), json!(source_str));
         // Include context brief indicator for fresh experts
         if source != ExpertSource::Retained && round > 0 {
-            response.as_object_mut().unwrap().insert(
-                "has_context_brief".to_string(),
-                json!(true),
-            );
+            response
+                .as_object_mut()
+                .unwrap()
+                .insert("has_context_brief".to_string(), json!(true));
         }
     }
 
     if let Some(focus) = expert_focus {
-        response.as_object_mut().unwrap().insert(
-            "focus".to_string(),
-            json!(focus),
-        );
+        response
+            .as_object_mut()
+            .unwrap()
+            .insert("focus".to_string(), json!(focus));
     }
 
     Ok(response)
@@ -1805,9 +1885,8 @@ pub fn handle_sample_panel(args: &Value) -> Result<Value, ServerError> {
         ))
     })?;
 
-    let pool: ExpertPool = serde_json::from_str(&pool_content).map_err(|e| {
-        ServerError::CommandFailed(format!("Failed to parse expert pool: {}", e))
-    })?;
+    let pool: ExpertPool = serde_json::from_str(&pool_content)
+        .map_err(|e| ServerError::CommandFailed(format!("Failed to parse expert pool: {}", e)))?;
 
     // Filter pool based on retain/exclude
     let filtered: Vec<PoolExpert> = pool
@@ -1817,9 +1896,13 @@ pub fn handle_sample_panel(args: &Value) -> Result<Value, ServerError> {
             let role_lower = e.role.to_lowercase();
             // Include if in retain list (if retain is non-empty)
             let in_retain = retain.is_empty()
-                || retain.iter().any(|r| role_lower.contains(&r.to_lowercase()));
+                || retain
+                    .iter()
+                    .any(|r| role_lower.contains(&r.to_lowercase()));
             // Exclude if in exclude list
-            let in_exclude = exclude.iter().any(|x| role_lower.contains(&x.to_lowercase()));
+            let in_exclude = exclude
+                .iter()
+                .any(|x| role_lower.contains(&x.to_lowercase()));
             in_retain && !in_exclude
         })
         .cloned()
@@ -1845,9 +1928,8 @@ pub fn handle_sample_panel(args: &Value) -> Result<Value, ServerError> {
     // Create round directory and save panel
     let output_dir = format!("/tmp/blue-dialogue/{}", slug);
     let round_dir = format!("{}/round-{}", output_dir, round);
-    fs::create_dir_all(&round_dir).map_err(|e| {
-        ServerError::CommandFailed(format!("Failed to create round dir: {}", e))
-    })?;
+    fs::create_dir_all(&round_dir)
+        .map_err(|e| ServerError::CommandFailed(format!("Failed to create round dir: {}", e)))?;
 
     let panel_path = format!("{}/panel.json", round_dir);
     let panel_json = serde_json::to_string_pretty(&agents)
@@ -1892,7 +1974,8 @@ pub fn handle_evolve_panel(args: &Value) -> Result<Value, ServerError> {
         .and_then(|v| serde_json::from_value(v.clone()).ok())
         .ok_or_else(|| {
             ServerError::CommandFailed(
-                "panel parameter required: array of {name, role, source, tier?, focus?}".to_string(),
+                "panel parameter required: array of {name, role, source, tier?, focus?}"
+                    .to_string(),
             )
         })?;
 
@@ -1978,9 +2061,8 @@ pub fn handle_evolve_panel(args: &Value) -> Result<Value, ServerError> {
 
     // Create round directory
     let round_dir = format!("{}/round-{}", output_dir, round);
-    fs::create_dir_all(&round_dir).map_err(|e| {
-        ServerError::CommandFailed(format!("Failed to create round dir: {}", e))
-    })?;
+    fs::create_dir_all(&round_dir)
+        .map_err(|e| ServerError::CommandFailed(format!("Failed to create round dir: {}", e)))?;
 
     // Build panel history
     let history = PanelHistory {
@@ -2092,23 +2174,25 @@ pub fn handle_round_context(state: &ProjectState, args: &Value) -> Result<Value,
     let (can_converge, blockers) = can_dialogue_converge(conn, dialogue_id)
         .map_err(|e| ServerError::CommandFailed(format!("Failed to check convergence: {}", e)))?;
 
-    let last_round_metrics = scoreboard.last().map(|r| json!({
-        "round": r.round,
-        "score": {
-            "W": r.w,
-            "C": r.c,
-            "T": r.t,
-            "R": r.r,
-            "total": r.total,
-        },
-        "velocity": r.velocity,
-        "open_tensions": r.open_tensions,
-        "new_perspectives": r.new_perspectives,
-        "converge_signals": r.converge_signals,
-        "panel_size": r.panel_size,
-        "converge_percent": r.converge_percent,
-        "cumulative_score": r.cumulative_score,
-    }));
+    let last_round_metrics = scoreboard.last().map(|r| {
+        json!({
+            "round": r.round,
+            "score": {
+                "W": r.w,
+                "C": r.c,
+                "T": r.t,
+                "R": r.r,
+                "total": r.total,
+            },
+            "velocity": r.velocity,
+            "open_tensions": r.open_tensions,
+            "new_perspectives": r.new_perspectives,
+            "converge_signals": r.converge_signals,
+            "panel_size": r.panel_size,
+            "converge_percent": r.converge_percent,
+            "cumulative_score": r.cumulative_score,
+        })
+    });
 
     // Build context response
     Ok(json!({
@@ -2279,11 +2363,25 @@ fn validate_round_register_inputs(args: &Value) -> Vec<ValidationError> {
             let field_prefix = format!("perspectives[{}]", i);
 
             // Required fields
-            if p.get("label").and_then(|v| v.as_str()).map(|s| s.is_empty()).unwrap_or(true) {
-                collector.add(ValidationError::missing_field("label").with_field(format!("{}.label", field_prefix)));
+            if p.get("label")
+                .and_then(|v| v.as_str())
+                .map(|s| s.is_empty())
+                .unwrap_or(true)
+            {
+                collector.add(
+                    ValidationError::missing_field("label")
+                        .with_field(format!("{}.label", field_prefix)),
+                );
             }
-            if p.get("content").and_then(|v| v.as_str()).map(|s| s.is_empty()).unwrap_or(true) {
-                collector.add(ValidationError::missing_field("content").with_field(format!("{}.content", field_prefix)));
+            if p.get("content")
+                .and_then(|v| v.as_str())
+                .map(|s| s.is_empty())
+                .unwrap_or(true)
+            {
+                collector.add(
+                    ValidationError::missing_field("content")
+                        .with_field(format!("{}.content", field_prefix)),
+                );
             }
 
             // Validate references
@@ -2296,16 +2394,25 @@ fn validate_round_register_inputs(args: &Value) -> Vec<ValidationError> {
 
                     // Validate ref type
                     if RefType::from_str(ref_type_str).is_none() && !ref_type_str.is_empty() {
-                        collector.add(ValidationError::invalid_ref_type(ref_type_str).with_field(format!("{}.type", ref_field)));
+                        collector.add(
+                            ValidationError::invalid_ref_type(ref_type_str)
+                                .with_field(format!("{}.type", ref_field)),
+                        );
                     }
 
                     // Validate target ID format
                     if !target.is_empty() {
                         if let Err(e) = validate_display_id(target) {
                             collector.add(e.with_field(format!("{}.target", ref_field)));
-                        } else if let (Some(ref_type), Some((target_type, _, _))) = (RefType::from_str(ref_type_str), parse_display_id(target)) {
+                        } else if let (Some(ref_type), Some((target_type, _, _))) =
+                            (RefType::from_str(ref_type_str), parse_display_id(target))
+                        {
                             // Validate semantic constraints
-                            if let Some(e) = validate_ref_semantics(ref_type, EntityType::Perspective, target_type) {
+                            if let Some(e) = validate_ref_semantics(
+                                ref_type,
+                                EntityType::Perspective,
+                                target_type,
+                            ) {
                                 collector.add(e.with_field(ref_field));
                             }
                         }
@@ -2320,11 +2427,25 @@ fn validate_round_register_inputs(args: &Value) -> Vec<ValidationError> {
         for (i, t) in tensions.iter().enumerate() {
             let field_prefix = format!("tensions[{}]", i);
 
-            if t.get("label").and_then(|v| v.as_str()).map(|s| s.is_empty()).unwrap_or(true) {
-                collector.add(ValidationError::missing_field("label").with_field(format!("{}.label", field_prefix)));
+            if t.get("label")
+                .and_then(|v| v.as_str())
+                .map(|s| s.is_empty())
+                .unwrap_or(true)
+            {
+                collector.add(
+                    ValidationError::missing_field("label")
+                        .with_field(format!("{}.label", field_prefix)),
+                );
             }
-            if t.get("description").and_then(|v| v.as_str()).map(|s| s.is_empty()).unwrap_or(true) {
-                collector.add(ValidationError::missing_field("description").with_field(format!("{}.description", field_prefix)));
+            if t.get("description")
+                .and_then(|v| v.as_str())
+                .map(|s| s.is_empty())
+                .unwrap_or(true)
+            {
+                collector.add(
+                    ValidationError::missing_field("description")
+                        .with_field(format!("{}.description", field_prefix)),
+                );
             }
 
             // Validate references
@@ -2335,14 +2456,21 @@ fn validate_round_register_inputs(args: &Value) -> Vec<ValidationError> {
                     let target = r.get("target").and_then(|v| v.as_str()).unwrap_or("");
 
                     if RefType::from_str(ref_type_str).is_none() && !ref_type_str.is_empty() {
-                        collector.add(ValidationError::invalid_ref_type(ref_type_str).with_field(format!("{}.type", ref_field)));
+                        collector.add(
+                            ValidationError::invalid_ref_type(ref_type_str)
+                                .with_field(format!("{}.type", ref_field)),
+                        );
                     }
 
                     if !target.is_empty() {
                         if let Err(e) = validate_display_id(target) {
                             collector.add(e.with_field(format!("{}.target", ref_field)));
-                        } else if let (Some(ref_type), Some((target_type, _, _))) = (RefType::from_str(ref_type_str), parse_display_id(target)) {
-                            if let Some(e) = validate_ref_semantics(ref_type, EntityType::Tension, target_type) {
+                        } else if let (Some(ref_type), Some((target_type, _, _))) =
+                            (RefType::from_str(ref_type_str), parse_display_id(target))
+                        {
+                            if let Some(e) =
+                                validate_ref_semantics(ref_type, EntityType::Tension, target_type)
+                            {
                                 collector.add(e.with_field(ref_field));
                             }
                         }
@@ -2357,11 +2485,25 @@ fn validate_round_register_inputs(args: &Value) -> Vec<ValidationError> {
         for (i, r) in recommendations.iter().enumerate() {
             let field_prefix = format!("recommendations[{}]", i);
 
-            if r.get("label").and_then(|v| v.as_str()).map(|s| s.is_empty()).unwrap_or(true) {
-                collector.add(ValidationError::missing_field("label").with_field(format!("{}.label", field_prefix)));
+            if r.get("label")
+                .and_then(|v| v.as_str())
+                .map(|s| s.is_empty())
+                .unwrap_or(true)
+            {
+                collector.add(
+                    ValidationError::missing_field("label")
+                        .with_field(format!("{}.label", field_prefix)),
+                );
             }
-            if r.get("content").and_then(|v| v.as_str()).map(|s| s.is_empty()).unwrap_or(true) {
-                collector.add(ValidationError::missing_field("content").with_field(format!("{}.content", field_prefix)));
+            if r.get("content")
+                .and_then(|v| v.as_str())
+                .map(|s| s.is_empty())
+                .unwrap_or(true)
+            {
+                collector.add(
+                    ValidationError::missing_field("content")
+                        .with_field(format!("{}.content", field_prefix)),
+                );
             }
 
             // Validate references
@@ -2372,14 +2514,23 @@ fn validate_round_register_inputs(args: &Value) -> Vec<ValidationError> {
                     let target = ref_obj.get("target").and_then(|v| v.as_str()).unwrap_or("");
 
                     if RefType::from_str(ref_type_str).is_none() && !ref_type_str.is_empty() {
-                        collector.add(ValidationError::invalid_ref_type(ref_type_str).with_field(format!("{}.type", ref_field)));
+                        collector.add(
+                            ValidationError::invalid_ref_type(ref_type_str)
+                                .with_field(format!("{}.type", ref_field)),
+                        );
                     }
 
                     if !target.is_empty() {
                         if let Err(e) = validate_display_id(target) {
                             collector.add(e.with_field(format!("{}.target", ref_field)));
-                        } else if let (Some(ref_type), Some((target_type, _, _))) = (RefType::from_str(ref_type_str), parse_display_id(target)) {
-                            if let Some(e) = validate_ref_semantics(ref_type, EntityType::Recommendation, target_type) {
+                        } else if let (Some(ref_type), Some((target_type, _, _))) =
+                            (RefType::from_str(ref_type_str), parse_display_id(target))
+                        {
+                            if let Some(e) = validate_ref_semantics(
+                                ref_type,
+                                EntityType::Recommendation,
+                                target_type,
+                            ) {
                                 collector.add(e.with_field(ref_field));
                             }
                         }
@@ -2394,11 +2545,25 @@ fn validate_round_register_inputs(args: &Value) -> Vec<ValidationError> {
         for (i, e) in evidence.iter().enumerate() {
             let field_prefix = format!("evidence[{}]", i);
 
-            if e.get("label").and_then(|v| v.as_str()).map(|s| s.is_empty()).unwrap_or(true) {
-                collector.add(ValidationError::missing_field("label").with_field(format!("{}.label", field_prefix)));
+            if e.get("label")
+                .and_then(|v| v.as_str())
+                .map(|s| s.is_empty())
+                .unwrap_or(true)
+            {
+                collector.add(
+                    ValidationError::missing_field("label")
+                        .with_field(format!("{}.label", field_prefix)),
+                );
             }
-            if e.get("content").and_then(|v| v.as_str()).map(|s| s.is_empty()).unwrap_or(true) {
-                collector.add(ValidationError::missing_field("content").with_field(format!("{}.content", field_prefix)));
+            if e.get("content")
+                .and_then(|v| v.as_str())
+                .map(|s| s.is_empty())
+                .unwrap_or(true)
+            {
+                collector.add(
+                    ValidationError::missing_field("content")
+                        .with_field(format!("{}.content", field_prefix)),
+                );
             }
         }
     }
@@ -2408,11 +2573,25 @@ fn validate_round_register_inputs(args: &Value) -> Vec<ValidationError> {
         for (i, c) in claims.iter().enumerate() {
             let field_prefix = format!("claims[{}]", i);
 
-            if c.get("label").and_then(|v| v.as_str()).map(|s| s.is_empty()).unwrap_or(true) {
-                collector.add(ValidationError::missing_field("label").with_field(format!("{}.label", field_prefix)));
+            if c.get("label")
+                .and_then(|v| v.as_str())
+                .map(|s| s.is_empty())
+                .unwrap_or(true)
+            {
+                collector.add(
+                    ValidationError::missing_field("label")
+                        .with_field(format!("{}.label", field_prefix)),
+                );
             }
-            if c.get("content").and_then(|v| v.as_str()).map(|s| s.is_empty()).unwrap_or(true) {
-                collector.add(ValidationError::missing_field("content").with_field(format!("{}.content", field_prefix)));
+            if c.get("content")
+                .and_then(|v| v.as_str())
+                .map(|s| s.is_empty())
+                .unwrap_or(true)
+            {
+                collector.add(
+                    ValidationError::missing_field("content")
+                        .with_field(format!("{}.content", field_prefix)),
+                );
             }
         }
     }
@@ -2424,12 +2603,17 @@ fn validate_round_register_inputs(args: &Value) -> Vec<ValidationError> {
             let tension_id = u.get("id").and_then(|v| v.as_str()).unwrap_or("");
 
             if tension_id.is_empty() {
-                collector.add(ValidationError::missing_field("id").with_field(format!("{}.id", field_prefix)));
+                collector.add(
+                    ValidationError::missing_field("id").with_field(format!("{}.id", field_prefix)),
+                );
             } else if let Err(e) = validate_display_id(tension_id) {
                 collector.add(e.with_field(format!("{}.id", field_prefix)));
             } else if let Some((entity_type, _, _)) = parse_display_id(tension_id) {
                 if entity_type != EntityType::Tension {
-                    collector.add(ValidationError::type_id_mismatch("T", tension_id).with_field(format!("{}.id", field_prefix)));
+                    collector.add(
+                        ValidationError::type_id_mismatch("T", tension_id)
+                            .with_field(format!("{}.id", field_prefix)),
+                    );
                 }
             }
         }
@@ -2481,14 +2665,26 @@ pub fn handle_round_register(state: &ProjectState, args: &Value) -> Result<Value
         wisdom: sc.get("wisdom").and_then(|v| v.as_i64()).unwrap_or(0) as i32,
         consistency: sc.get("consistency").and_then(|v| v.as_i64()).unwrap_or(0) as i32,
         truth: sc.get("truth").and_then(|v| v.as_i64()).unwrap_or(0) as i32,
-        relationships: sc.get("relationships").and_then(|v| v.as_i64()).unwrap_or(0) as i32,
+        relationships: sc
+            .get("relationships")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0) as i32,
     });
 
     // RFC 0057: Parse convergence metrics
     let convergence_metrics = {
-        let open_tensions = args.get("open_tensions").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
-        let new_perspectives = args.get("new_perspectives").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
-        let converge_signals = args.get("converge_signals").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+        let open_tensions = args
+            .get("open_tensions")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0) as i32;
+        let new_perspectives = args
+            .get("new_perspectives")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0) as i32;
+        let converge_signals = args
+            .get("converge_signals")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0) as i32;
         let panel_size = args.get("panel_size").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
 
         if open_tensions > 0 || new_perspectives > 0 || converge_signals > 0 || panel_size > 0 {
@@ -2547,19 +2743,43 @@ pub fn handle_round_register(state: &ProjectState, args: &Value) -> Result<Value
             let contributors: Vec<String> = p
                 .get("contributors")
                 .and_then(|v| v.as_array())
-                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
+                })
                 .unwrap_or_default();
 
-            let global_id = register_perspective(conn, dialogue_id, round, label, content, &contributors, None)
-                .map_err(|e| ServerError::CommandFailed(format!("Failed to register perspective: {}", e)))?;
+            let global_id = register_perspective(
+                conn,
+                dialogue_id,
+                round,
+                label,
+                content,
+                &contributors,
+                None,
+            )
+            .map_err(|e| {
+                ServerError::CommandFailed(format!("Failed to register perspective: {}", e))
+            })?;
 
             // Register refs for this perspective
             if let Some(refs) = p.get("references").and_then(|v| v.as_array()) {
                 for r in refs {
                     let ref_type_str = r.get("type").and_then(|v| v.as_str()).unwrap_or("support");
                     let target = r.get("target").and_then(|v| v.as_str()).unwrap_or("");
-                    if let (Some(ref_type), Some((target_type, _, _))) = (RefType::from_str(ref_type_str), parse_display_id(target)) {
-                        let _ = register_ref(conn, dialogue_id, EntityType::Perspective, &global_id, ref_type, target_type, target);
+                    if let (Some(ref_type), Some((target_type, _, _))) =
+                        (RefType::from_str(ref_type_str), parse_display_id(target))
+                    {
+                        let _ = register_ref(
+                            conn,
+                            dialogue_id,
+                            EntityType::Perspective,
+                            &global_id,
+                            ref_type,
+                            target_type,
+                            target,
+                        );
                     }
                 }
             }
@@ -2579,19 +2799,43 @@ pub fn handle_round_register(state: &ProjectState, args: &Value) -> Result<Value
             let contributors: Vec<String> = t
                 .get("contributors")
                 .and_then(|v| v.as_array())
-                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
+                })
                 .unwrap_or_default();
 
-            let global_id = register_tension(conn, dialogue_id, round, label, description, &contributors, None)
-                .map_err(|e| ServerError::CommandFailed(format!("Failed to register tension: {}", e)))?;
+            let global_id = register_tension(
+                conn,
+                dialogue_id,
+                round,
+                label,
+                description,
+                &contributors,
+                None,
+            )
+            .map_err(|e| {
+                ServerError::CommandFailed(format!("Failed to register tension: {}", e))
+            })?;
 
             // Register refs for this tension
             if let Some(refs) = t.get("references").and_then(|v| v.as_array()) {
                 for r in refs {
                     let ref_type_str = r.get("type").and_then(|v| v.as_str()).unwrap_or("support");
                     let target = r.get("target").and_then(|v| v.as_str()).unwrap_or("");
-                    if let (Some(ref_type), Some((target_type, _, _))) = (RefType::from_str(ref_type_str), parse_display_id(target)) {
-                        let _ = register_ref(conn, dialogue_id, EntityType::Tension, &global_id, ref_type, target_type, target);
+                    if let (Some(ref_type), Some((target_type, _, _))) =
+                        (RefType::from_str(ref_type_str), parse_display_id(target))
+                    {
+                        let _ = register_ref(
+                            conn,
+                            dialogue_id,
+                            EntityType::Tension,
+                            &global_id,
+                            ref_type,
+                            target_type,
+                            target,
+                        );
                     }
                 }
             }
@@ -2611,20 +2855,48 @@ pub fn handle_round_register(state: &ProjectState, args: &Value) -> Result<Value
             let contributors: Vec<String> = r
                 .get("contributors")
                 .and_then(|v| v.as_array())
-                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
+                })
                 .unwrap_or_default();
             let parameters = r.get("parameters").cloned();
 
-            let global_id = register_recommendation(conn, dialogue_id, round, label, content, &contributors, parameters.as_ref(), None)
-                .map_err(|e| ServerError::CommandFailed(format!("Failed to register recommendation: {}", e)))?;
+            let global_id = register_recommendation(
+                conn,
+                dialogue_id,
+                round,
+                label,
+                content,
+                &contributors,
+                parameters.as_ref(),
+                None,
+            )
+            .map_err(|e| {
+                ServerError::CommandFailed(format!("Failed to register recommendation: {}", e))
+            })?;
 
             // Register refs
             if let Some(refs) = r.get("references").and_then(|v| v.as_array()) {
                 for ref_obj in refs {
-                    let ref_type_str = ref_obj.get("type").and_then(|v| v.as_str()).unwrap_or("support");
+                    let ref_type_str = ref_obj
+                        .get("type")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("support");
                     let target = ref_obj.get("target").and_then(|v| v.as_str()).unwrap_or("");
-                    if let (Some(ref_type), Some((target_type, _, _))) = (RefType::from_str(ref_type_str), parse_display_id(target)) {
-                        let _ = register_ref(conn, dialogue_id, EntityType::Recommendation, &global_id, ref_type, target_type, target);
+                    if let (Some(ref_type), Some((target_type, _, _))) =
+                        (RefType::from_str(ref_type_str), parse_display_id(target))
+                    {
+                        let _ = register_ref(
+                            conn,
+                            dialogue_id,
+                            EntityType::Recommendation,
+                            &global_id,
+                            ref_type,
+                            target_type,
+                            target,
+                        );
                     }
                 }
             }
@@ -2644,19 +2916,46 @@ pub fn handle_round_register(state: &ProjectState, args: &Value) -> Result<Value
             let contributors: Vec<String> = e
                 .get("contributors")
                 .and_then(|v| v.as_array())
-                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
+                })
                 .unwrap_or_default();
 
-            let global_id = register_evidence(conn, dialogue_id, round, label, content, &contributors, None)
-                .map_err(|e| ServerError::CommandFailed(format!("Failed to register evidence: {}", e)))?;
+            let global_id = register_evidence(
+                conn,
+                dialogue_id,
+                round,
+                label,
+                content,
+                &contributors,
+                None,
+            )
+            .map_err(|e| {
+                ServerError::CommandFailed(format!("Failed to register evidence: {}", e))
+            })?;
 
             // Register refs
             if let Some(refs) = e.get("references").and_then(|v| v.as_array()) {
                 for ref_obj in refs {
-                    let ref_type_str = ref_obj.get("type").and_then(|v| v.as_str()).unwrap_or("support");
+                    let ref_type_str = ref_obj
+                        .get("type")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("support");
                     let target = ref_obj.get("target").and_then(|v| v.as_str()).unwrap_or("");
-                    if let (Some(ref_type), Some((target_type, _, _))) = (RefType::from_str(ref_type_str), parse_display_id(target)) {
-                        let _ = register_ref(conn, dialogue_id, EntityType::Evidence, &global_id, ref_type, target_type, target);
+                    if let (Some(ref_type), Some((target_type, _, _))) =
+                        (RefType::from_str(ref_type_str), parse_display_id(target))
+                    {
+                        let _ = register_ref(
+                            conn,
+                            dialogue_id,
+                            EntityType::Evidence,
+                            &global_id,
+                            ref_type,
+                            target_type,
+                            target,
+                        );
                     }
                 }
             }
@@ -2676,19 +2975,44 @@ pub fn handle_round_register(state: &ProjectState, args: &Value) -> Result<Value
             let contributors: Vec<String> = c
                 .get("contributors")
                 .and_then(|v| v.as_array())
-                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
+                })
                 .unwrap_or_default();
 
-            let global_id = register_claim(conn, dialogue_id, round, label, content, &contributors, None)
-                .map_err(|e| ServerError::CommandFailed(format!("Failed to register claim: {}", e)))?;
+            let global_id = register_claim(
+                conn,
+                dialogue_id,
+                round,
+                label,
+                content,
+                &contributors,
+                None,
+            )
+            .map_err(|e| ServerError::CommandFailed(format!("Failed to register claim: {}", e)))?;
 
             // Register refs
             if let Some(refs) = c.get("references").and_then(|v| v.as_array()) {
                 for ref_obj in refs {
-                    let ref_type_str = ref_obj.get("type").and_then(|v| v.as_str()).unwrap_or("support");
+                    let ref_type_str = ref_obj
+                        .get("type")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("support");
                     let target = ref_obj.get("target").and_then(|v| v.as_str()).unwrap_or("");
-                    if let (Some(ref_type), Some((target_type, _, _))) = (RefType::from_str(ref_type_str), parse_display_id(target)) {
-                        let _ = register_ref(conn, dialogue_id, EntityType::Claim, &global_id, ref_type, target_type, target);
+                    if let (Some(ref_type), Some((target_type, _, _))) =
+                        (RefType::from_str(ref_type_str), parse_display_id(target))
+                    {
+                        let _ = register_ref(
+                            conn,
+                            dialogue_id,
+                            EntityType::Claim,
+                            &global_id,
+                            ref_type,
+                            target_type,
+                            target,
+                        );
                     }
                 }
             }
@@ -2706,13 +3030,22 @@ pub fn handle_round_register(state: &ProjectState, args: &Value) -> Result<Value
             let actors: Vec<String> = u
                 .get("by")
                 .and_then(|v| v.as_array())
-                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
-                .or_else(|| u.get("by").and_then(|v| v.as_str()).map(|s| vec![s.to_string()]))
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
+                })
+                .or_else(|| {
+                    u.get("by")
+                        .and_then(|v| v.as_str())
+                        .map(|s| vec![s.to_string()])
+                })
                 .unwrap_or_default();
             let via = u.get("via").and_then(|v| v.as_str());
 
             let status = alignment_db::TensionStatus::from_str(status_str);
-            let _ = update_tension_status(conn, dialogue_id, tension_id, status, &actors, via, round);
+            let _ =
+                update_tension_status(conn, dialogue_id, tension_id, status, &actors, via, round);
         }
     }
 
@@ -2721,7 +3054,8 @@ pub fn handle_round_register(state: &ProjectState, args: &Value) -> Result<Value
         let mut updated_scores = Vec::new();
         for (expert_slug, score_val) in expert_scores {
             if let Some(expert_score) = score_val.as_i64() {
-                let _ = update_expert_score(conn, dialogue_id, expert_slug, round, expert_score as i32);
+                let _ =
+                    update_expert_score(conn, dialogue_id, expert_slug, round, expert_score as i32);
                 updated_scores.push(json!({ "expert_slug": expert_slug, "score": expert_score }));
             }
         }
@@ -2775,34 +3109,60 @@ pub fn handle_verdict_register(state: &ProjectState, args: &Value) -> Result<Val
         .ok_or(ServerError::InvalidParams)?;
 
     // Optional fields
-    let conditions: Option<Vec<String>> = args
-        .get("conditions")
-        .and_then(|v| v.as_array())
-        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect());
+    let conditions: Option<Vec<String>> =
+        args.get("conditions")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            });
 
     let vote = args.get("vote").and_then(|v| v.as_str()).map(String::from);
-    let confidence = args.get("confidence").and_then(|v| v.as_str()).map(String::from);
-    let author_expert = args.get("author_expert").and_then(|v| v.as_str()).map(String::from);
+    let confidence = args
+        .get("confidence")
+        .and_then(|v| v.as_str())
+        .map(String::from);
+    let author_expert = args
+        .get("author_expert")
+        .and_then(|v| v.as_str())
+        .map(String::from);
 
     let tensions_resolved: Option<Vec<String>> = args
         .get("tensions_resolved")
         .and_then(|v| v.as_array())
-        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect());
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        });
 
     let tensions_accepted: Option<Vec<String>> = args
         .get("tensions_accepted")
         .and_then(|v| v.as_array())
-        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect());
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        });
 
     let recommendations_adopted: Option<Vec<String>> = args
         .get("recommendations_adopted")
         .and_then(|v| v.as_array())
-        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect());
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        });
 
     let supporting_experts: Option<Vec<String>> = args
         .get("supporting_experts")
         .and_then(|v| v.as_array())
-        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect());
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        });
 
     // RFC 0057: Force flag allows convergence without meeting criteria (with warning)
     let force = coerce_bool(args.get("force").unwrap_or(&Value::Bool(false))).unwrap_or(false);
@@ -2816,8 +3176,9 @@ pub fn handle_verdict_register(state: &ProjectState, args: &Value) -> Result<Val
     // RFC 0057: Convergence validation for final verdicts
     let mut forced_warning: Option<String> = None;
     if verdict_type == VerdictType::Final {
-        let (can_converge, blockers) = can_dialogue_converge(conn, dialogue_id)
-            .map_err(|e| ServerError::CommandFailed(format!("Failed to check convergence: {}", e)))?;
+        let (can_converge, blockers) = can_dialogue_converge(conn, dialogue_id).map_err(|e| {
+            ServerError::CommandFailed(format!("Failed to check convergence: {}", e))
+        })?;
 
         if !can_converge {
             if force {
@@ -3071,7 +3432,10 @@ pub fn handle_export(state: &ProjectState, args: &Value) -> Result<Value, Server
     let final_path = match output_path {
         Some(p) => p.to_string(),
         None => {
-            let dir = dialogue.output_dir.as_deref().unwrap_or("/tmp/blue-dialogue");
+            let dir = dialogue
+                .output_dir
+                .as_deref()
+                .unwrap_or("/tmp/blue-dialogue");
             format!("{}/{}/dialogue.json", dir, dialogue_id)
         }
     };
@@ -3088,9 +3452,8 @@ pub fn handle_export(state: &ProjectState, args: &Value) -> Result<Value, Server
         ServerError::CommandFailed(format!("Failed to serialize export data: {}", e))
     })?;
 
-    fs::write(&final_path, &json_str).map_err(|e| {
-        ServerError::CommandFailed(format!("Failed to write export file: {}", e))
-    })?;
+    fs::write(&final_path, &json_str)
+        .map_err(|e| ServerError::CommandFailed(format!("Failed to write export file: {}", e)))?;
 
     Ok(json!({
         "status": "success",
@@ -3121,7 +3484,10 @@ mod tests {
 
     #[test]
     fn test_title_to_slug() {
-        assert_eq!(title_to_slug("RFC Implementation Discussion"), "rfc-implementation-discussion");
+        assert_eq!(
+            title_to_slug("RFC Implementation Discussion"),
+            "rfc-implementation-discussion"
+        );
         assert_eq!(title_to_slug("quick-chat"), "quick-chat");
     }
 
@@ -3233,9 +3599,21 @@ mod tests {
     #[test]
     fn test_weighted_sample_respects_size() {
         let experts = vec![
-            PoolExpert { role: "A".to_string(), tier: ExpertTier::Core, relevance: 0.9 },
-            PoolExpert { role: "B".to_string(), tier: ExpertTier::Core, relevance: 0.8 },
-            PoolExpert { role: "C".to_string(), tier: ExpertTier::Core, relevance: 0.7 },
+            PoolExpert {
+                role: "A".to_string(),
+                tier: ExpertTier::Core,
+                relevance: 0.9,
+            },
+            PoolExpert {
+                role: "B".to_string(),
+                tier: ExpertTier::Core,
+                relevance: 0.8,
+            },
+            PoolExpert {
+                role: "C".to_string(),
+                tier: ExpertTier::Core,
+                relevance: 0.7,
+            },
         ];
         // Request more than available
         let sampled = weighted_sample(&experts, 5);
@@ -3322,7 +3700,11 @@ mod tests {
         assert!(instructions.contains("READ CONTEXT"));
 
         // Must have agent prompt template with Read tool reference
-        let template = protocol.get("agent_prompt_template").unwrap().as_str().unwrap();
+        let template = protocol
+            .get("agent_prompt_template")
+            .unwrap()
+            .as_str()
+            .unwrap();
         assert!(template.contains("{{NAME}}"));
         assert!(template.contains("{{ROLE}}"));
         assert!(template.contains("PERSPECTIVE"));
@@ -3353,9 +3735,15 @@ mod tests {
 
         // Must have convergence params (RFC 0057)
         assert_eq!(protocol["convergence"]["max_rounds"], 10);
-        assert!(protocol["convergence"]["tension_resolution_gate"].as_bool().unwrap());
-        assert!(protocol["convergence"]["velocity_formula"].as_str().is_some());
-        assert!(protocol["convergence"]["convergence_formula"].as_str().is_some());
+        assert!(protocol["convergence"]["tension_resolution_gate"]
+            .as_bool()
+            .unwrap());
+        assert!(protocol["convergence"]["velocity_formula"]
+            .as_str()
+            .is_some());
+        assert!(protocol["convergence"]["convergence_formula"]
+            .as_str()
+            .is_some());
     }
 
     #[test]
@@ -3372,7 +3760,11 @@ mod tests {
         );
 
         // Template should NOT contain grounding instructions when no sources
-        let template = protocol.get("agent_prompt_template").unwrap().as_str().unwrap();
+        let template = protocol
+            .get("agent_prompt_template")
+            .unwrap()
+            .as_str()
+            .unwrap();
         assert!(!template.contains("GROUNDING"));
     }
 
@@ -3638,7 +4030,10 @@ mod tests {
         assert_eq!(spec.name, "Palmier");
         assert_eq!(spec.source, ExpertSource::Created);
         assert_eq!(spec.tier, Some("Adjacent".to_string()));
-        assert_eq!(spec.focus, Some("Geographic concentration risk".to_string()));
+        assert_eq!(
+            spec.focus,
+            Some("Geographic concentration risk".to_string())
+        );
     }
 
     #[test]
@@ -3858,11 +4253,31 @@ mod tests {
             domain: "Investment Analysis".to_string(),
             question: Some("Should we invest?".to_string()),
             experts: vec![
-                PoolExpert { role: "Value Analyst".to_string(), tier: ExpertTier::Core, relevance: 0.95 },
-                PoolExpert { role: "Risk Manager".to_string(), tier: ExpertTier::Core, relevance: 0.90 },
-                PoolExpert { role: "Growth Analyst".to_string(), tier: ExpertTier::Adjacent, relevance: 0.75 },
-                PoolExpert { role: "ESG Analyst".to_string(), tier: ExpertTier::Adjacent, relevance: 0.70 },
-                PoolExpert { role: "Contrarian".to_string(), tier: ExpertTier::Wildcard, relevance: 0.35 },
+                PoolExpert {
+                    role: "Value Analyst".to_string(),
+                    tier: ExpertTier::Core,
+                    relevance: 0.95,
+                },
+                PoolExpert {
+                    role: "Risk Manager".to_string(),
+                    tier: ExpertTier::Core,
+                    relevance: 0.90,
+                },
+                PoolExpert {
+                    role: "Growth Analyst".to_string(),
+                    tier: ExpertTier::Adjacent,
+                    relevance: 0.75,
+                },
+                PoolExpert {
+                    role: "ESG Analyst".to_string(),
+                    tier: ExpertTier::Adjacent,
+                    relevance: 0.70,
+                },
+                PoolExpert {
+                    role: "Contrarian".to_string(),
+                    tier: ExpertTier::Wildcard,
+                    relevance: 0.35,
+                },
             ],
         };
         let pool_path = format!("{}/expert-pool.json", test_dir);
@@ -3996,11 +4411,27 @@ mod tests {
             domain: "Data Architecture".to_string(),
             question: Some("How should we design the data layer?".to_string()),
             experts: vec![
-                PoolExpert { role: "API Architect".to_string(), tier: ExpertTier::Core, relevance: 0.95 },
-                PoolExpert { role: "Security Engineer".to_string(), tier: ExpertTier::Core, relevance: 0.90 },
-                PoolExpert { role: "Performance Engineer".to_string(), tier: ExpertTier::Adjacent, relevance: 0.70 },
+                PoolExpert {
+                    role: "API Architect".to_string(),
+                    tier: ExpertTier::Core,
+                    relevance: 0.95,
+                },
+                PoolExpert {
+                    role: "Security Engineer".to_string(),
+                    tier: ExpertTier::Core,
+                    relevance: 0.90,
+                },
+                PoolExpert {
+                    role: "Performance Engineer".to_string(),
+                    tier: ExpertTier::Adjacent,
+                    relevance: 0.70,
+                },
                 // Data Architect as Wildcard - might not be sampled in a small panel!
-                PoolExpert { role: "Data Architect".to_string(), tier: ExpertTier::Wildcard, relevance: 0.40 },
+                PoolExpert {
+                    role: "Data Architect".to_string(),
+                    tier: ExpertTier::Wildcard,
+                    relevance: 0.40,
+                },
             ],
         };
         let pool_path = format!("{}/expert-pool.json", test_dir);
@@ -4068,14 +4499,22 @@ mod tests {
 
         let prompt_result = handle_round_prompt(&prompt_args).unwrap();
         assert_eq!(prompt_result["status"], "success");
-        assert!(prompt_result["prompt"].as_str().unwrap().contains("Data Architect"));
+        assert!(prompt_result["prompt"]
+            .as_str()
+            .unwrap()
+            .contains("Data Architect"));
 
         // Step 6: Simulate Round 1 evolution
         fs::write(
             format!("{}/tensions.md", test_dir),
-            "| ID | Tension |\n|---|---|\n| T01 | Schema flexibility vs performance |"
-        ).unwrap();
-        fs::write(format!("{}/round-0.summary.md", test_dir), "Debate on design approach.").unwrap();
+            "| ID | Tension |\n|---|---|\n| T01 | Schema flexibility vs performance |",
+        )
+        .unwrap();
+        fs::write(
+            format!("{}/round-0.summary.md", test_dir),
+            "Debate on design approach.",
+        )
+        .unwrap();
 
         let evolve_args = json!({
             "output_dir": test_dir,
@@ -4111,7 +4550,10 @@ mod tests {
 
         let fresh_result = handle_round_prompt(&fresh_args).unwrap();
         assert_eq!(fresh_result["has_context_brief"], true);
-        assert!(fresh_result["prompt"].as_str().unwrap().contains("Context for Round 1"));
+        assert!(fresh_result["prompt"]
+            .as_str()
+            .unwrap()
+            .contains("Context for Round 1"));
 
         println!("\n=== FRESH EXPERT CONTEXT ===");
         println!("  ✓ Context brief included for Scone");

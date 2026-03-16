@@ -1,0 +1,14 @@
+[PERSPECTIVE P01: The project-management repo must enforce a declarative schema, not mirror Jira state]
+The external project-management repo should not be a cache or mirror of Jira -- it should be the declarative source of truth that Jira reflects. This means the repo defines Feature Releases (Epics) and their constituent RFCs (Tasks) in structured files (YAML or TOML), and a sync command reconciles Jira to match, not the reverse. If Jira is treated as ground truth, you inherit Jira's lack of schema enforcement, freeform fields, and workflow drift across orgs. By making the repo authoritative, Blue can enforce naming conventions, required fields, and lifecycle transitions uniformly, then push state to Jira as a projection.
+
+[PERSPECTIVE P02: RFC-to-Jira-Task mapping needs a stable, repo-local identity that survives Jira project moves]
+Every RFC should carry a Blue-native identifier (e.g., `RFC-0042`) that is the primary key, with the Jira issue key (e.g., `PROJ-317`) stored as a secondary binding in the project-management repo's manifest. Jira issue keys are fragile -- they change when issues move between projects, and they are scoped to a single Jira instance. If Blue embeds Jira keys as the canonical ID, any Jira reorg breaks every cross-reference. The mapping file in the project-management repo (e.g., `releases/2026-Q2.yaml`) should list RFC IDs with optional Jira bindings, so the system degrades gracefully when Jira is unavailable or reconfigured.
+
+[PERSPECTIVE P03: Credential storage convention must be explicit about multi-domain support from day one]
+Blue serves all users, not one org. The credential guide must not assume a single Atlassian domain. The local credential store (e.g., `~/.config/blue/jira-credentials.toml`) should be keyed by domain (`myorg.atlassian.net`), each entry holding the API token and user email. Jira CLI's own config supports profiles, but Blue should wrap this with its own domain-keyed config so that the project-management repo can declare which domain it targets and Blue automatically selects the right credential. Without this, users working across multiple orgs (consultants, platform teams) will hit credential collisions immediately.
+
+[TENSION T01: Sync direction ambiguity]
+If the project-management repo is ground truth, what happens when a PM updates a Jira field directly -- does Blue overwrite it on next sync, or does it detect drift and prompt for resolution?
+
+[TENSION T02: Convention enforcement scope]
+Blue can enforce conventions in its own artifacts and the project-management repo, but Jira's workflow and field configurations are per-Jira-project admin settings -- how far should Blue attempt to enforce or validate Jira-side conventions (e.g., required fields, allowed transitions) versus simply documenting expected setup?

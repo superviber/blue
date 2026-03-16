@@ -18,8 +18,16 @@ pub fn handle_status(state: &ProjectState, _args: &Value) -> Result<Value, Serve
     let mut total_drift = 0;
     let mut drift_details = serde_json::Map::new();
 
-    for doc_type in &[DocType::Rfc, DocType::Spike, DocType::Adr, DocType::Decision] {
-        if let Ok(result) = state.store.reconcile(&state.home.docs_path, Some(*doc_type), true) {
+    for doc_type in &[
+        DocType::Rfc,
+        DocType::Spike,
+        DocType::Adr,
+        DocType::Decision,
+    ] {
+        if let Ok(result) = state
+            .store
+            .reconcile(&state.home.docs_path, Some(*doc_type), true)
+        {
             if result.has_drift() {
                 total_drift += result.drift_count();
                 drift_details.insert(
@@ -28,7 +36,7 @@ pub fn handle_status(state: &ProjectState, _args: &Value) -> Result<Value, Serve
                         "unindexed": result.unindexed.len(),
                         "orphaned": result.orphaned.len(),
                         "stale": result.stale.len()
-                    })
+                    }),
                 );
             }
         }

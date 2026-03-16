@@ -136,7 +136,13 @@ fn classify_url_safety(url: &str) -> UrlSafetyLevel {
 
     // Production patterns - blocked
     let production_patterns = [
-        "prod.", ".prod", "production.", ".production", "live.", ".live", "www.",
+        "prod.",
+        ".prod",
+        "production.",
+        ".production",
+        "live.",
+        ".live",
+        "www.",
     ];
     if production_patterns.iter().any(|p| lower.contains(p)) {
         return UrlSafetyLevel::Production;
@@ -144,8 +150,19 @@ fn classify_url_safety(url: &str) -> UrlSafetyLevel {
 
     // Development patterns
     let dev_patterns = [
-        "dev.", ".dev", "development.", ".development", "local.", ".local", ":3000", ":3001",
-        ":5173", ":5174", ":8080", ":8000", ":4200",
+        "dev.",
+        ".dev",
+        "development.",
+        ".development",
+        "local.",
+        ".local",
+        ":3000",
+        ":3001",
+        ":5173",
+        ":5174",
+        ":8080",
+        ":8000",
+        ":4200",
     ];
     if dev_patterns.iter().any(|p| lower.contains(p)) {
         return UrlSafetyLevel::Development;
@@ -171,7 +188,10 @@ fn classify_url_safety(url: &str) -> UrlSafetyLevel {
 }
 
 /// Validate URL safety and return error if blocked
-fn validate_url_safety(safety_level: &UrlSafetyLevel, allow_staging: bool) -> Result<(), ServerError> {
+fn validate_url_safety(
+    safety_level: &UrlSafetyLevel,
+    allow_staging: bool,
+) -> Result<(), ServerError> {
     match safety_level {
         UrlSafetyLevel::Localhost | UrlSafetyLevel::Development => Ok(()),
         UrlSafetyLevel::Staging => {
@@ -222,7 +242,10 @@ fn generate_verification_steps(task: &str, target_url: &str) -> Vec<Verification
     });
 
     // Page load verification
-    if lower.contains("page load") || lower.contains("loads correctly") || lower.contains("displays") {
+    if lower.contains("page load")
+        || lower.contains("loads correctly")
+        || lower.contains("displays")
+    {
         step_num += 1;
         steps.push(VerificationStep {
             step: step_num,

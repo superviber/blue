@@ -27,6 +27,8 @@ dirs.workspace = true
 semver.workspace = true
 regex.workspace = true
 sha2.workspace = true
+keyring.workspace = true
+uuid.workspace = true
 
 [dev-dependencies]
 tower.workspace = true

@@ -98,7 +98,10 @@ impl ProjectState {
 
     /// Get RFCs that are in-progress with active worktrees
     pub fn active_items(&self) -> Vec<WorkItem> {
-        match self.store.list_documents_by_status(DocType::Rfc, "in-progress") {
+        match self
+            .store
+            .list_documents_by_status(DocType::Rfc, "in-progress")
+        {
             Ok(docs) => docs
                 .into_iter()
                 .filter(|doc| self.worktree_rfcs.contains(&doc.title))
@@ -118,7 +121,10 @@ impl ProjectState {
 
     /// Get RFCs that are accepted and ready to start
     pub fn ready_items(&self) -> Vec<WorkItem> {
-        match self.store.list_documents_by_status(DocType::Rfc, "accepted") {
+        match self
+            .store
+            .list_documents_by_status(DocType::Rfc, "accepted")
+        {
             Ok(docs) => docs
                 .into_iter()
                 .map(|doc| WorkItem {
@@ -137,7 +143,10 @@ impl ProjectState {
 
     /// Get RFCs that are in-progress but have no worktree (possibly stalled)
     pub fn stalled_items(&self) -> Vec<WorkItem> {
-        match self.store.list_documents_by_status(DocType::Rfc, "in-progress") {
+        match self
+            .store
+            .list_documents_by_status(DocType::Rfc, "in-progress")
+        {
             Ok(docs) => docs
                 .into_iter()
                 .filter(|doc| !self.worktree_rfcs.contains(&doc.title))

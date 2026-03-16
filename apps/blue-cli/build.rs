@@ -53,7 +53,10 @@ fn download_goose() -> Result<(), Box<dyn std::error::Error>> {
 
     let (url, archive_name) = get_goose_url(&target)?;
 
-    println!("cargo:warning=Downloading Goose {} for {}", GOOSE_VERSION, target);
+    println!(
+        "cargo:warning=Downloading Goose {} for {}",
+        GOOSE_VERSION, target
+    );
 
     // Download to OUT_DIR
     let archive_path = out_dir.join(&archive_name);

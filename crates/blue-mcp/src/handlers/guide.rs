@@ -21,17 +21,14 @@ struct GuideProgress {
 }
 
 /// Guide sections in order
-const SECTIONS: &[&str] = &[
-    "intro",
-    "workflow",
-    "documents",
-    "implementation",
-    "ready",
-];
+const SECTIONS: &[&str] = &["intro", "workflow", "documents", "implementation", "ready"];
 
 /// Handle blue_guide
 pub fn handle_guide(args: &Value, blue_path: &Path) -> Result<Value, ServerError> {
-    let action = args.get("action").and_then(|v| v.as_str()).unwrap_or("resume");
+    let action = args
+        .get("action")
+        .and_then(|v| v.as_str())
+        .unwrap_or("resume");
 
     let progress_path = blue_path.join("onboarding.json");
     let mut progress = load_progress(&progress_path);
@@ -62,8 +59,13 @@ pub fn handle_guide(args: &Value, blue_path: &Path) -> Result<Value, ServerError
             render_section(&progress.current_section.clone(), &progress)
         }
         "next" => {
-            if !progress.completed_sections.contains(&progress.current_section) {
-                progress.completed_sections.push(progress.current_section.clone());
+            if !progress
+                .completed_sections
+                .contains(&progress.current_section)
+            {
+                progress
+                    .completed_sections
+                    .push(progress.current_section.clone());
             }
 
             let current_idx = SECTIONS
@@ -111,7 +113,11 @@ pub fn handle_guide(args: &Value, blue_path: &Path) -> Result<Value, ServerError
         "status" => {
             let total = SECTIONS.len();
             let completed = progress.completed_sections.len();
-            let percentage = if total > 0 { (completed * 100) / total } else { 0 };
+            let percentage = if total > 0 {
+                (completed * 100) / total
+            } else {
+                0
+            };
 
             Ok(json!({
                 "status": "success",
@@ -216,7 +222,8 @@ Off you go! 🐑
 
 fn get_section_content(section: &str) -> &'static str {
     match section {
-        "intro" => r#"
+        "intro" => {
+            r#"
 ═══════════════════════════════════════════════════════════════════════════
                          👋 HELLO THERE
 ═══════════════════════════════════════════════════════════════════════════
@@ -233,8 +240,10 @@ Think of me as your friendly project shepherd. I keep track of everything
 so nothing falls through the cracks.
 
 Ready to learn the workflow?
-"#,
-        "workflow" => r#"
+"#
+        }
+        "workflow" => {
+            r#"
 ═══════════════════════════════════════════════════════════════════════════
                          📋 THE WORKFLOW
 ═══════════════════════════════════════════════════════════════════════════
@@ -275,8 +284,10 @@ Here's how features flow from idea to implementation:
     └──────────────────────────────────┘
 
 Don't worry about memorizing this. I'll guide you through each step.
-"#,
-        "documents" => r#"
+"#
+        }
+        "documents" => {
+            r#"
 ═══════════════════════════════════════════════════════════════════════════
                          📄 DOCUMENT TYPES
 ═══════════════════════════════════════════════════════════════════════════
@@ -308,8 +319,10 @@ Decision Note
   • Lightweight alternative to RFC/ADR
   • For simple choices between options
   • Command: blue_decision_create
-"#,
-        "implementation" => r#"
+"#
+        }
+        "implementation" => {
+            r#"
 ═══════════════════════════════════════════════════════════════════════════
                          🔨 IMPLEMENTATION
 ═══════════════════════════════════════════════════════════════════════════
@@ -345,8 +358,10 @@ Once an RFC is accepted, here's the implementation flow:
    blue_worktree_cleanup title="my-feature"
    - Removes worktree and branch
    - Syncs with develop
-"#,
-        "ready" => r#"
+"#
+        }
+        "ready" => {
+            r#"
 ═══════════════════════════════════════════════════════════════════════════
                          🚀 READY TO START
 ═══════════════════════════════════════════════════════════════════════════
@@ -374,7 +389,8 @@ WORKFLOW
 Just describe what you want to do, and I'll suggest the right tool.
 
 Off you go! 🐑
-"#,
+"#
+        }
         _ => "Unknown section",
     }
 }

@@ -28,7 +28,9 @@ pub fn handle_audit(state: &ProjectState) -> Result<Value, ServerError> {
     {
         let worktrees = state.store.list_worktrees().unwrap_or_default();
         for doc in docs {
-            let has_worktree = worktrees.iter().any(|wt| wt.document_id == doc.id.unwrap_or(0));
+            let has_worktree = worktrees
+                .iter()
+                .any(|wt| wt.document_id == doc.id.unwrap_or(0));
             if !has_worktree {
                 issues.push(AuditIssue {
                     category: "rfc",
@@ -78,7 +80,10 @@ pub fn handle_audit(state: &ProjectState) -> Result<Value, ServerError> {
     }
 
     // Check 4: Stale reminders (overdue by more than 7 days)
-    if let Ok(reminders) = state.store.list_reminders(Some(blue_core::ReminderStatus::Pending), false) {
+    if let Ok(reminders) = state
+        .store
+        .list_reminders(Some(blue_core::ReminderStatus::Pending), false)
+    {
         let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
         for reminder in reminders {
             if let Some(due) = &reminder.due_date {
@@ -102,7 +107,10 @@ pub fn handle_audit(state: &ProjectState) -> Result<Value, ServerError> {
                 issues.push(AuditIssue {
                     category: "staging",
                     title: lock.resource.clone(),
-                    issue: format!("Lock expired at {} (held by '{}')", lock.expires_at, lock.locked_by),
+                    issue: format!(
+                        "Lock expired at {} (held by '{}')",
+                        lock.expires_at, lock.locked_by
+                    ),
                     severity: "warning",
                 });
                 recommendations.push(format!(

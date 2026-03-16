@@ -118,7 +118,11 @@ pub struct LocalRepoConfig {
 
 impl LocalRepoConfig {
     /// Create a new local config
-    pub fn new(realm_name: impl Into<String>, realm_url: impl Into<String>, repo: impl Into<String>) -> Self {
+    pub fn new(
+        realm_name: impl Into<String>,
+        realm_url: impl Into<String>,
+        repo: impl Into<String>,
+    ) -> Self {
         Self {
             realm: RealmRef {
                 name: realm_name.into(),
@@ -222,9 +226,8 @@ impl LocalRealmDependencies {
             path: path.display().to_string(),
             source: e,
         })?;
-        let config: Self = toml::from_str(&content).map_err(|e| {
-            RealmError::ValidationFailed(format!("Invalid TOML: {}", e))
-        })?;
+        let config: Self = toml::from_str(&content)
+            .map_err(|e| RealmError::ValidationFailed(format!("Invalid TOML: {}", e)))?;
         Ok(config)
     }
 
@@ -250,10 +253,8 @@ impl LocalRealmDependencies {
 
     /// Add dependencies for an RFC
     pub fn add_rfc_deps(&mut self, rfc_id: impl Into<String>, deps: Vec<String>) {
-        self.rfc.insert(
-            rfc_id.into(),
-            RfcDependencies { depends_on: deps },
-        );
+        self.rfc
+            .insert(rfc_id.into(), RfcDependencies { depends_on: deps });
     }
 
     /// Check if the realm.toml exists at the given path
@@ -294,8 +295,7 @@ mod tests {
 
     #[test]
     fn test_repo_config_yaml_roundtrip() {
-        let config = RepoConfig::local("aperture", "/path/to/aperture")
-            .with_org("cultivarium");
+        let config = RepoConfig::local("aperture", "/path/to/aperture").with_org("cultivarium");
 
         let yaml = serde_yaml::to_string(&config).unwrap();
         let parsed: RepoConfig = serde_yaml::from_str(&yaml).unwrap();

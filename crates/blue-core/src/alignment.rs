@@ -29,7 +29,6 @@ pub struct Expert {
 
 /// Expert tier based on relevance to topic
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
 pub enum ExpertTier {
     Core,
     Adjacent,
@@ -294,10 +293,7 @@ fn calculate_convergence(responses: &[ExpertResponse]) -> f64 {
 
     // Simple approach: count how many experts have high confidence (>0.7)
     // and similar positions (based on first few words matching)
-    let high_confidence: Vec<_> = responses
-        .iter()
-        .filter(|r| r.confidence >= 0.7)
-        .collect();
+    let high_confidence: Vec<_> = responses.iter().filter(|r| r.confidence >= 0.7).collect();
 
     if high_confidence.is_empty() {
         return 0.0;
@@ -307,7 +303,12 @@ fn calculate_convergence(responses: &[ExpertResponse]) -> f64 {
     let mut position_groups: HashMap<String, usize> = HashMap::new();
     for response in &high_confidence {
         // Normalize position to first 20 chars
-        let key = response.position.chars().take(20).collect::<String>().to_lowercase();
+        let key = response
+            .position
+            .chars()
+            .take(20)
+            .collect::<String>()
+            .to_lowercase();
         *position_groups.entry(key).or_insert(0) += 1;
     }
 

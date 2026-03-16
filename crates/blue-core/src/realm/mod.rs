@@ -17,17 +17,15 @@ mod service;
 pub use config::{
     AdmissionPolicy, BreakingChangePolicy, Governance, RealmConfig, TrustConfig, TrustMode,
 };
-pub use contract::{
-    Compatibility, Contract, ContractValue, EvolutionEntry, ValidationConfig,
-};
+pub use contract::{Compatibility, Contract, ContractValue, EvolutionEntry, ValidationConfig};
 pub use domain::{Binding, BindingRole, Domain, ExportBinding, ImportBinding, ImportStatus};
 pub use repo::{
     LocalRealmDependencies, LocalRealmMembership, LocalRepoConfig, RealmRef, RepoConfig,
     RfcDependencies,
 };
 pub use service::{
-    CheckIssue, CheckIssueKind, CheckResult, DomainDetails, RealmDetails, RealmInfo,
-    RealmService, RealmSyncStatus, SyncResult, WorktreeInfo, WorktreePrStatus,
+    CheckIssue, CheckIssueKind, CheckResult, DomainDetails, RealmDetails, RealmInfo, RealmService,
+    RealmSyncStatus, SyncResult, WorktreeInfo, WorktreePrStatus,
 };
 
 use thiserror::Error;

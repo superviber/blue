@@ -4,7 +4,7 @@
 
 use std::fs;
 
-use blue_core::{Decision, DocType, Document, ProjectState, title_to_slug};
+use blue_core::{title_to_slug, Decision, DocType, Document, ProjectState};
 use serde_json::{json, Value};
 
 use crate::error::ServerError;
@@ -25,7 +25,11 @@ pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, Server
     let alternatives: Vec<String> = args
         .get("alternatives")
         .and_then(|v| v.as_array())
-        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
         .unwrap_or_default();
 
     // Create decision
@@ -61,7 +65,8 @@ pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, Server
     if let Some(parent) = decision_path.parent() {
         fs::create_dir_all(parent).map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
     }
-    fs::write(&decision_path, &markdown).map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+    fs::write(&decision_path, &markdown)
+        .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
 
     // Add to store
     let mut doc = Document::new(DocType::Decision, title, "recorded");
@@ -84,4 +89,3 @@ pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, Server
         )
     }))
 }
-

@@ -61,9 +61,9 @@ pub fn verify_binary(path: &PathBuf) -> Result<(), LlmError> {
     let mut buffer = [0u8; 8192];
 
     loop {
-        let bytes_read = file.read(&mut buffer).map_err(|e| {
-            LlmError::Other(format!("Failed to read binary: {}", e))
-        })?;
+        let bytes_read = file
+            .read(&mut buffer)
+            .map_err(|e| LlmError::Other(format!("Failed to read binary: {}", e)))?;
         if bytes_read == 0 {
             break;
         }
@@ -162,8 +162,13 @@ struct GenerateResponse {
 /// Health status of Ollama
 #[derive(Debug, Clone)]
 pub enum HealthStatus {
-    Healthy { version: String, gpu: Option<String> },
-    Unhealthy { error: String },
+    Healthy {
+        version: String,
+        gpu: Option<String>,
+    },
+    Unhealthy {
+        error: String,
+    },
     NotRunning,
 }
 
@@ -234,7 +239,11 @@ impl EmbeddedOllama {
 
     /// Check if Ollama is already running on the port
     pub fn is_ollama_running(&self) -> bool {
-        if let Ok(resp) = self.client.get(format!("{}/api/version", self.base_url())).send() {
+        if let Ok(resp) = self
+            .client
+            .get(format!("{}/api/version", self.base_url()))
+            .send()
+        {
             if let Ok(version) = resp.json::<VersionResponse>() {
                 debug!("Found running Ollama: {}", version.version);
                 return true;
@@ -377,9 +386,9 @@ impl EmbeddedOllama {
         cmd.stdout(std::process::Stdio::null());
         cmd.stderr(std::process::Stdio::null());
 
-        let child = cmd.spawn().map_err(|e| {
-            LlmError::NotAvailable(format!("Failed to start Ollama: {}", e))
-        })?;
+        let child = cmd
+            .spawn()
+            .map_err(|e| LlmError::NotAvailable(format!("Failed to start Ollama: {}", e)))?;
 
         *self.process.lock().unwrap() = Some(child);
 
@@ -413,7 +422,10 @@ impl EmbeddedOllama {
         let mut process = self.process.lock().unwrap();
         if let Some(mut child) = process.take() {
             // Try graceful shutdown first
-            let _ = self.client.post(format!("{}/api/shutdown", self.base_url())).send();
+            let _ = self
+                .client
+                .post(format!("{}/api/shutdown", self.base_url()))
+                .send();
 
             // Wait briefly for graceful shutdown
             std::thread::sleep(Duration::from_secs(2));
@@ -430,18 +442,20 @@ impl EmbeddedOllama {
 
     /// Get health status
     pub fn health_check(&self) -> HealthStatus {
-        match self.client.get(format!("{}/api/version", self.base_url())).send() {
-            Ok(resp) => {
-                match resp.json::<VersionResponse>() {
-                    Ok(version) => HealthStatus::Healthy {
-                        version: version.version,
-                        gpu: version.gpu,
-                    },
-                    Err(e) => HealthStatus::Unhealthy {
-                        error: e.to_string(),
-                    },
-                }
-            }
+        match self
+            .client
+            .get(format!("{}/api/version", self.base_url()))
+            .send()
+        {
+            Ok(resp) => match resp.json::<VersionResponse>() {
+                Ok(version) => HealthStatus::Healthy {
+                    version: version.version,
+                    gpu: version.gpu,
+                },
+                Err(e) => HealthStatus::Unhealthy {
+                    error: e.to_string(),
+                },
+            },
             Err(_) => HealthStatus::NotRunning,
         }
     }
@@ -619,7 +633,11 @@ impl OllamaLlm {
 }
 
 impl LlmProvider for OllamaLlm {
-    fn complete(&self, prompt: &str, options: &CompletionOptions) -> Result<CompletionResult, LlmError> {
+    fn complete(
+        &self,
+        prompt: &str,
+        options: &CompletionOptions,
+    ) -> Result<CompletionResult, LlmError> {
         if !self.ollama.is_ready() {
             return Err(LlmError::NotAvailable("Ollama not started".to_string()));
         }
@@ -821,7 +839,8 @@ mod tests {
             stop_sequences: vec![],
         };
 
-        let result = ollama.generate("qwen2.5:0.5b", "2+2=", &options)
+        let result = ollama
+            .generate("qwen2.5:0.5b", "2+2=", &options)
             .expect("Failed to generate");
 
         println!("Response: {}", result.text);

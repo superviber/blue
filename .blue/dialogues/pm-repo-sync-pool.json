@@ -1,0 +1,66 @@
+{
+  "domain": "Project Management Integration Architecture",
+  "question": "How should Blue sync generalize to treat PM repos as the single source of truth for project artifacts across an org, projecting to Jira while maintaining git authority?",
+  "experts": [
+    {
+      "role": "DevTools Architect (CLI & Workflow Systems)",
+      "tier": "Core",
+      "relevance": 0.95
+    },
+    {
+      "role": "Project Management Domain Expert (Jira/Linear/Shortcut)",
+      "tier": "Core",
+      "relevance": 0.92
+    },
+    {
+      "role": "Data Modeling Specialist (YAML schemas, document formats)",
+      "tier": "Core",
+      "relevance": 0.90
+    },
+    {
+      "role": "Distributed Systems Engineer (cross-repo coordination)",
+      "tier": "Core",
+      "relevance": 0.88
+    },
+    {
+      "role": "Developer Experience Advocate (ergonomics, onboarding)",
+      "tier": "Adjacent",
+      "relevance": 0.78
+    },
+    {
+      "role": "API Integration Specialist (REST, webhooks, sync protocols)",
+      "tier": "Adjacent",
+      "relevance": 0.75
+    },
+    {
+      "role": "Solo Founder Operator (wearing all hats, context switching)",
+      "tier": "Adjacent",
+      "relevance": 0.72
+    },
+    {
+      "role": "Security & Credential Management Engineer",
+      "tier": "Adjacent",
+      "relevance": 0.68
+    },
+    {
+      "role": "Git Workflow Specialist (monorepos, worktrees, conventions)",
+      "tier": "Adjacent",
+      "relevance": 0.65
+    },
+    {
+      "role": "Product Manager (roadmap planning, sprint ceremonies)",
+      "tier": "Wildcard",
+      "relevance": 0.55
+    },
+    {
+      "role": "Organizational Psychologist (team coordination, cognitive load)",
+      "tier": "Wildcard",
+      "relevance": 0.45
+    },
+    {
+      "role": "Database Migration Specialist (schema evolution, backwards compat)",
+      "tier": "Wildcard",
+      "relevance": 0.40
+    }
+  ]
+}

@@ -123,8 +123,8 @@ impl DaemonClient {
     /// Start the daemon as a background process
     fn start_daemon(&self) -> Result<(), ClientError> {
         // Get the path to the blue binary (assumes it's in PATH or same location)
-        let exe = std::env::current_exe()
-            .map_err(|e| ClientError::DaemonStartFailed(e.to_string()))?;
+        let exe =
+            std::env::current_exe().map_err(|e| ClientError::DaemonStartFailed(e.to_string()))?;
 
         // Start daemon in background
         let child = Command::new(&exe)

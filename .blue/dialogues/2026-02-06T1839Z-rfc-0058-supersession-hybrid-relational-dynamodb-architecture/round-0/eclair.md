@@ -1,0 +1,10 @@
+[PERSPECTIVE P01: The refs table is a typed directed graph that DynamoDB cannot traverse without full scans]
+The RFC 0051 `refs` table encodes a typed directed graph with 8 edge types (support, oppose, refine, address, resolve, reopen, question, depend) across 5 node types. Real dialogue queries are graph traversals: "What evidence chain supports this verdict?" requires walking depend -> claim -> evidence -> perspective paths of arbitrary depth. RFC 0058's single-table design can answer one-hop adjacency queries (GSI on target_id), but multi-hop traversals like "show all entities transitively affected by resolving T0001" require N sequential reads with client-side assembly -- exactly the pattern where relational databases with recursive CTEs (`WITH RECURSIVE`) or even simple self-joins excel. The semantic CHECK constraints in RFC 0051's refs schema (e.g., resolve/reopen/address must target tensions only, refine must be same-type) are also naturally enforced by relational databases but must be reimplemented in application code for DynamoDB.
+
+[PERSPECTIVE P02: DynamoDB's query cost model penalizes the cross-entity analytics RFC 0051 was designed to enable]
+RFC 0051 explicitly motivates global tracking for "cross-dialogue analysis" and "visualization dashboards" -- queries like "show all unresolved tensions across all dialogues with their dependency graphs" or "which expert's perspectives most often get adopted into verdicts." These are scatter-gather operations across partition boundaries in DynamoDB (one partition per dialogue), but trivial indexed queries in a relational store. The three GSIs in RFC 0058 only cover the simplest access patterns; the analytical queries that justify RFC 0051's existence are left unaddressed.
+
+[TENSION T01: Local-prod parity versus query model fitness]
+The strongest argument for RFC 0058 is configuration-only divergence between local and production, but this same property is achievable with embedded PostgreSQL (via pgembedded/pgtemp) or Turso's local mode, so the tension is whether parity requires DynamoDB specifically or merely requires a single code path.
+
+---

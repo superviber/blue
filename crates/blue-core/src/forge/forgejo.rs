@@ -48,7 +48,8 @@ impl Forge for ForgejoForge {
             base: opts.base,
         };
 
-        let response = self.client
+        let response = self
+            .client
             .post(&url)
             .header("Authorization", self.auth_header())
             .header("Content-Type", "application/json")
@@ -75,7 +76,8 @@ impl Forge for ForgejoForge {
     fn get_pr(&self, owner: &str, repo: &str, number: u64) -> Result<PullRequest, ForgeError> {
         let url = self.api_url(&format!("/repos/{}/{}/pulls/{}", owner, repo, number));
 
-        let response = self.client
+        let response = self
+            .client
             .get(&url)
             .header("Authorization", self.auth_header())
             .send()
@@ -105,7 +107,13 @@ impl Forge for ForgejoForge {
         Ok(pr.into_pull_request(&self.host, owner, repo))
     }
 
-    fn merge_pr(&self, owner: &str, repo: &str, number: u64, strategy: MergeStrategy) -> Result<(), ForgeError> {
+    fn merge_pr(
+        &self,
+        owner: &str,
+        repo: &str,
+        number: u64,
+        strategy: MergeStrategy,
+    ) -> Result<(), ForgeError> {
         let url = self.api_url(&format!("/repos/{}/{}/pulls/{}/merge", owner, repo, number));
 
         let do_type = match strategy {
@@ -119,7 +127,8 @@ impl Forge for ForgejoForge {
             merge_message_field: None,
         };
 
-        let response = self.client
+        let response = self
+            .client
             .post(&url)
             .header("Authorization", self.auth_header())
             .header("Content-Type", "application/json")
@@ -142,7 +151,8 @@ impl Forge for ForgejoForge {
     fn pr_is_merged(&self, owner: &str, repo: &str, number: u64) -> Result<bool, ForgeError> {
         let url = self.api_url(&format!("/repos/{}/{}/pulls/{}/merge", owner, repo, number));
 
-        let response = self.client
+        let response = self
+            .client
             .get(&url)
             .header("Authorization", self.auth_header())
             .send()
@@ -203,7 +213,11 @@ impl ForgejoPr {
             number: self.number,
             url,
             title: self.title,
-            state: if self.state == "open" { PrState::Open } else { PrState::Closed },
+            state: if self.state == "open" {
+                PrState::Open
+            } else {
+                PrState::Closed
+            },
             merged: self.merged,
             head: self.head.ref_name,
             base: self.base.ref_name,

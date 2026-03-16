@@ -97,7 +97,8 @@ fn parse_https_url(url: &str) -> GitUrl {
 
     let host = parts.first().map(|s| s.to_string()).unwrap_or_default();
     let owner = parts.get(1).map(|s| s.to_string()).unwrap_or_default();
-    let repo = parts.get(2)
+    let repo = parts
+        .get(2)
         .map(|s| s.trim_end_matches(".git").to_string())
         .unwrap_or_default();
 
@@ -112,12 +113,16 @@ fn parse_https_url(url: &str) -> GitUrl {
 fn parse_ssh_protocol_url(url: &str) -> GitUrl {
     // Format: ssh://git@host/owner/repo.git
     let without_protocol = url.trim_start_matches("ssh://");
-    let without_user = without_protocol.split('@').nth(1).unwrap_or(without_protocol);
+    let without_user = without_protocol
+        .split('@')
+        .nth(1)
+        .unwrap_or(without_protocol);
     let parts: Vec<&str> = without_user.splitn(4, '/').collect();
 
     let host = parts.first().map(|s| s.to_string()).unwrap_or_default();
     let owner = parts.get(1).map(|s| s.to_string()).unwrap_or_default();
-    let repo = parts.get(2)
+    let repo = parts
+        .get(2)
         .map(|s| s.trim_end_matches(".git").to_string())
         .unwrap_or_default();
 
@@ -136,7 +141,8 @@ fn parse_git_protocol_url(url: &str) -> GitUrl {
 
     let host = parts.first().map(|s| s.to_string()).unwrap_or_default();
     let owner = parts.get(1).map(|s| s.to_string()).unwrap_or_default();
-    let repo = parts.get(2)
+    let repo = parts
+        .get(2)
         .map(|s| s.trim_end_matches(".git").to_string())
         .unwrap_or_default();
 

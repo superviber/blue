@@ -248,8 +248,7 @@ impl ImportBinding {
 
     /// Check if this import satisfies a given version
     pub fn satisfies(&self, version: &str) -> Result<bool, RealmError> {
-        let req = semver::VersionReq::parse(&self.version)
-            .map_err(RealmError::InvalidVersion)?;
+        let req = semver::VersionReq::parse(&self.version).map_err(RealmError::InvalidVersion)?;
         let ver = semver::Version::parse(version)?;
         Ok(req.matches(&ver))
     }
@@ -293,8 +292,7 @@ mod tests {
     fn test_binding_provider() {
         let mut binding = Binding::provider("aperture");
         binding.add_export(
-            ExportBinding::new("s3-permissions")
-                .with_source("models/training/s3_paths.py"),
+            ExportBinding::new("s3-permissions").with_source("models/training/s3_paths.py"),
         );
 
         assert_eq!(binding.role, BindingRole::Provider);
@@ -319,8 +317,7 @@ mod tests {
     #[test]
     fn test_import_satisfies() {
         // semver uses comma to separate version requirements
-        let import = ImportBinding::new("test")
-            .with_version(">=1.0.0, <2.0.0");
+        let import = ImportBinding::new("test").with_version(">=1.0.0, <2.0.0");
 
         assert!(import.satisfies("1.0.0").unwrap());
         assert!(import.satisfies("1.5.0").unwrap());

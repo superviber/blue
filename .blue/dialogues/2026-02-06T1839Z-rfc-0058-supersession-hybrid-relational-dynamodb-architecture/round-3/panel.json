@@ -1,0 +1,97 @@
+{
+  "agents": [
+    {
+      "emoji": "🧁",
+      "focus": "Confirm governance gate. Address Strudel's graph assembly tension. Signal CONVERGE or identify blockers.",
+      "name": "Croissant",
+      "relevance": 0.68,
+      "role": "Rust Systems Engineer (Trait Abstractions)",
+      "tier": "Adjacent"
+    },
+    {
+      "emoji": "🧁",
+      "focus": "Resolve refs table disagreement with Cannoli. Resolve own T01 (graph assembly location). Signal CONVERGE or identify blockers.",
+      "name": "Strudel",
+      "relevance": 0.3,
+      "role": "Contrarian (Challenge All Assumptions)",
+      "tier": "Wildcard"
+    },
+    {
+      "emoji": "🧁",
+      "focus": "Confirm three-phase gate. Signal CONVERGE or identify blockers.",
+      "name": "Galette",
+      "relevance": 0.65,
+      "role": "Developer Experience Engineer",
+      "tier": "Adjacent"
+    },
+    {
+      "emoji": "🧁",
+      "focus": "Confirm AAD portability resolution. Address hash chain boundary. Signal CONVERGE or identify blockers.",
+      "name": "Tartlet",
+      "relevance": 0.7,
+      "role": "Data Migration Specialist",
+      "tier": "Adjacent"
+    },
+    {
+      "emoji": "🧁",
+      "focus": "Resolve refs table disagreement with Strudel. Signal CONVERGE or identify blockers.",
+      "name": "Cannoli",
+      "relevance": 0.42,
+      "role": "Serverless & Edge Deployment Advocate",
+      "tier": "Wildcard"
+    },
+    {
+      "emoji": "🧁",
+      "focus": "Confirm verdict denormalization elimination. Signal CONVERGE or identify blockers.",
+      "name": "Muffin",
+      "relevance": 0.95,
+      "role": "Relational Database Architect",
+      "tier": "Core"
+    }
+  ],
+  "history": {
+    "created_count": 0,
+    "experts": [
+      {
+        "focus": "Confirm governance gate. Address Strudel's graph assembly tension. Signal CONVERGE or identify blockers.",
+        "name": "Croissant",
+        "role": "Rust Systems Engineer (Trait Abstractions)",
+        "source": "retained"
+      },
+      {
+        "focus": "Resolve refs table disagreement with Cannoli. Resolve own T01 (graph assembly location). Signal CONVERGE or identify blockers.",
+        "name": "Strudel",
+        "role": "Contrarian (Challenge All Assumptions)",
+        "source": "retained"
+      },
+      {
+        "focus": "Confirm three-phase gate. Signal CONVERGE or identify blockers.",
+        "name": "Galette",
+        "role": "Developer Experience Engineer",
+        "source": "retained"
+      },
+      {
+        "focus": "Confirm AAD portability resolution. Address hash chain boundary. Signal CONVERGE or identify blockers.",
+        "name": "Tartlet",
+        "role": "Data Migration Specialist",
+        "source": "retained"
+      },
+      {
+        "focus": "Resolve refs table disagreement with Strudel. Signal CONVERGE or identify blockers.",
+        "name": "Cannoli",
+        "role": "Serverless & Edge Deployment Advocate",
+        "source": "retained"
+      },
+      {
+        "focus": "Confirm verdict denormalization elimination. Signal CONVERGE or identify blockers.",
+        "name": "Muffin",
+        "role": "Relational Database Architect",
+        "source": "retained"
+      }
+    ],
+    "from_pool_count": 0,
+    "panel_size": 6,
+    "retained_count": 6,
+    "round": 3
+  }
+}

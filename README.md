@@ -21,10 +21,13 @@ I speak through Blue—a sheep from Stonehenge who is your very best friend.
 ## Install
 
 ```bash
-./install.sh
+cargo build --release
+./target/release/blue install
 ```
 
-Installs CLI to `/usr/local/bin` and configures MCP for Claude Code. See [INSTALL.md](INSTALL.md) for details.
+Configures hooks, skills, and MCP for Claude Code. Restart Claude Code after installation.
+
+See [INSTALL.md](INSTALL.md) for details.
 
 ## Getting Started
 
@@ -70,27 +73,58 @@ Blue speaks to Claude via MCP (Model Context Protocol). Eight tools for cross-re
 
 See [docs/mcp](docs/mcp/) for full documentation.
 
+## Playwright MCP with Chrome Profiles
+
+By default, Playwright MCP launches a fresh browser with no saved sessions. To use your existing Chrome profile (with saved logins), copy the profile and point Playwright at the copy.
+
+**Setup:**
+
+1. Copy your Chrome profile to a temp location (avoids profile lock conflicts):
+   ```bash
+   mkdir -p /tmp/chrome-profile
+   cp -r ~/Library/Application\ Support/Google/Chrome/Default /tmp/chrome-profile/Default
+   cp ~/Library/Application\ Support/Google/Chrome/Local\ State /tmp/chrome-profile/
+   ```
+
+2. Update `.claude/plugins/.../playwright/.mcp.json`:
+   ```json
+   {
+     "playwright": {
+       "command": "npx",
+       "args": [
+         "@playwright/mcp@latest",
+         "--executable-path", "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+         "--user-data-dir", "/tmp/chrome-profile"
+       ]
+     }
+   }
+   ```
+
+3. Restart Claude Code.
+
+**Limitations:**
+- Saved passwords won't autofill (Keychain encryption is path-bound). Usernames fill fine.
+- Copy your passwords from `chrome://password-manager/passwords` in your regular Chrome as needed.
+- Sessions stay active within the Playwright instance, so you only log in once per site.
+- Re-copy the profile if you need fresh cookies/sessions.
+
+**What didn't work:**
+- `--remote-debugging-port=9222`: Chrome on macOS silently ignores TCP port binding.
+- `--extension` mode with Playwright MCP Bridge: Opens a new profile instead of connecting to the existing one.
+- Direct `--user-data-dir` pointing to the live Chrome profile: Lock file conflicts.
+
 ### Quick Setup
 
 ```bash
-# Build Blue
 cargo build --release
-
-# Configure Claude Code (~/.config/claude-code/mcp.json)
-{
-  "mcpServers": {
-    "blue": {
-      "command": "blue",
-      "args": ["mcp"]
-    }
-  }
-}
+./target/release/blue install
+# Restart Claude Code
 ```
 
 Then in Claude:
 ```
-Human: What's my realm status?
-Claude: [calls realm_status] You're in aperture/blue...
+Human: blue status
+Claude: [calls blue_status] Project: blue, Branch: develop...
 ```
 
 ## Blue

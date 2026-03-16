@@ -6,7 +6,7 @@
 
 use std::sync::OnceLock;
 
-use blue_core::{BlueUri, ContextManifest, ProjectState, estimate_tokens, read_uri_content};
+use blue_core::{estimate_tokens, read_uri_content, BlueUri, ContextManifest, ProjectState};
 use rand::Rng;
 use serde_json::{json, Value};
 
@@ -29,9 +29,10 @@ pub fn handle_resources_list(state: &ProjectState) -> Result<Value, ServerError>
     // Add identity tier sources
     for source in &manifest.identity.sources {
         let uri = &source.uri;
-        let description = source.label.clone().unwrap_or_else(|| {
-            format!("Identity context from {}", uri)
-        });
+        let description = source
+            .label
+            .clone()
+            .unwrap_or_else(|| format!("Identity context from {}", uri));
 
         resources.push(json!({
             "uri": uri,
@@ -44,9 +45,10 @@ pub fn handle_resources_list(state: &ProjectState) -> Result<Value, ServerError>
     // Add workflow tier sources
     for source in &manifest.workflow.sources {
         let uri = &source.uri;
-        let description = source.label.clone().unwrap_or_else(|| {
-            format!("Workflow context from {}", uri)
-        });
+        let description = source
+            .label
+            .clone()
+            .unwrap_or_else(|| format!("Workflow context from {}", uri));
 
         resources.push(json!({
             "uri": uri,
@@ -130,8 +132,7 @@ pub fn handle_resources_read(state: &ProjectState, uri: &str) -> Result<Value, S
     let project_root = &state.home.root;
 
     // Parse the URI
-    let blue_uri = BlueUri::parse(uri)
-        .map_err(|_| ServerError::InvalidParams)?;
+    let blue_uri = BlueUri::parse(uri).map_err(|_| ServerError::InvalidParams)?;
 
     // Handle dynamic state URIs specially
     if blue_uri.is_dynamic() {
@@ -139,7 +140,8 @@ pub fn handle_resources_read(state: &ProjectState, uri: &str) -> Result<Value, S
     }
 
     // Resolve to file paths
-    let paths = blue_uri.resolve(project_root)
+    let paths = blue_uri
+        .resolve(project_root)
         .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
 
     if paths.is_empty() {
@@ -153,8 +155,8 @@ pub fn handle_resources_read(state: &ProjectState, uri: &str) -> Result<Value, S
     }
 
     // Read and concatenate content
-    let content = read_uri_content(&paths)
-        .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+    let content =
+        read_uri_content(&paths).map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
 
     let tokens = estimate_tokens(&content);
 
@@ -173,7 +175,9 @@ pub fn handle_resources_read(state: &ProjectState, uri: &str) -> Result<Value, S
         blue_core::RefreshPolicy::Never => false,
         blue_core::RefreshPolicy::SessionStart => {
             // Only log if never injected in this session
-            state.store.get_last_injection(get_session_id(state), uri)
+            state
+                .store
+                .get_last_injection(get_session_id(state), uri)
                 .map(|opt| opt.is_none())
                 .unwrap_or(true)
         }
@@ -226,15 +230,13 @@ fn handle_state_uri(state: &ProjectState, blue_uri: &BlueUri) -> Result<Value, S
                         }]
                     }))
                 }
-                _ => {
-                    Ok(json!({
-                        "contents": [{
-                            "uri": blue_uri.to_uri_string(),
-                            "mimeType": "text/markdown",
-                            "text": format!("Unknown state entity: {}", entity)
-                        }]
-                    }))
-                }
+                _ => Ok(json!({
+                    "contents": [{
+                        "uri": blue_uri.to_uri_string(),
+                        "mimeType": "text/markdown",
+                        "text": format!("Unknown state entity: {}", entity)
+                    }]
+                })),
             }
         }
         _ => Err(ServerError::InvalidParams),
@@ -246,7 +248,9 @@ fn get_current_rfc_content(state: &ProjectState) -> Result<String, ServerError> 
     use blue_core::DocType;
 
     // Try to find an in-progress RFC
-    let docs = state.store.list_documents(DocType::Rfc)
+    let docs = state
+        .store
+        .list_documents(DocType::Rfc)
         .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
 
     let in_progress = docs.iter().find(|d| d.status == "in-progress");
@@ -279,21 +283,25 @@ fn get_active_tasks_content(state: &ProjectState) -> Result<String, ServerError>
     use blue_core::DocType;
 
     // Find in-progress RFC
-    let docs = state.store.list_documents(DocType::Rfc)
+    let docs = state
+        .store
+        .list_documents(DocType::Rfc)
         .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
 
     let in_progress = docs.iter().find(|d| d.status == "in-progress");
 
     match in_progress {
         Some(doc) => {
-            let doc_id = doc.id.ok_or(ServerError::StateLoadFailed("No document ID".to_string()))?;
+            let doc_id = doc
+                .id
+                .ok_or(ServerError::StateLoadFailed("No document ID".to_string()))?;
 
-            let tasks = state.store.get_tasks(doc_id)
+            let tasks = state
+                .store
+                .get_tasks(doc_id)
                 .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
 
-            let incomplete: Vec<_> = tasks.iter()
-                .filter(|t| !t.completed)
-                .collect();
+            let incomplete: Vec<_> = tasks.iter().filter(|t| !t.completed).collect();
 
             if incomplete.is_empty() {
                 return Ok(format!(
@@ -309,9 +317,7 @@ fn get_active_tasks_content(state: &ProjectState) -> Result<String, ServerError>
 
             Ok(content)
         }
-        None => {
-            Ok("No RFC is currently in progress. No active tasks.".to_string())
-        }
+        None => Ok("No RFC is currently in progress. No active tasks.".to_string()),
     }
 }
 
@@ -325,7 +331,9 @@ fn generate_session_id(state: &ProjectState) -> String {
     const CHARSET: &[u8] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 
     // Get repo name from project state
-    let repo = state.home.project_name
+    let repo = state
+        .home
+        .project_name
         .as_ref()
         .map(|s| sanitize_id_component(s))
         .unwrap_or_else(|| "unknown".to_string());
@@ -415,7 +423,12 @@ fn get_refresh_policy(uri: &str, _status: Option<&str>) -> blue_core::RefreshPol
 }
 
 /// Log a context injection to the audit trail
-fn log_injection(state: &ProjectState, uri: &str, content_hash: &str, tokens: usize) -> Result<(), ServerError> {
+fn log_injection(
+    state: &ProjectState,
+    uri: &str,
+    content_hash: &str,
+    tokens: usize,
+) -> Result<(), ServerError> {
     // Determine tier from URI
     let tier = determine_tier(uri);
 
@@ -423,7 +436,9 @@ fn log_injection(state: &ProjectState, uri: &str, content_hash: &str, tokens: us
     let session_id = get_session_id(state);
 
     // Log to database
-    state.store.log_injection(session_id, tier, uri, content_hash, Some(tokens as i32))
+    state
+        .store
+        .log_injection(session_id, tier, uri, content_hash, Some(tokens as i32))
         .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
 
     Ok(())
@@ -448,24 +463,26 @@ pub fn handle_context_status(state: &ProjectState) -> Result<Value, ServerError>
     let session_id = get_session_id(state);
 
     // Get recent injections for this session
-    let injections = state.store
+    let injections = state
+        .store
         .get_session_injections(session_id, 10)
         .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
 
     // Get relevance edge count
-    let edge_count = state.store
-        .count_relevance_edges()
-        .unwrap_or(0);
+    let edge_count = state.store.count_relevance_edges().unwrap_or(0);
 
     // Format injection summary
-    let injection_summary: Vec<Value> = injections.iter().map(|inj| {
-        json!({
-            "uri": inj.source_uri,
-            "tier": inj.tier,
-            "tokens": inj.token_count,
-            "timestamp": inj.timestamp
+    let injection_summary: Vec<Value> = injections
+        .iter()
+        .map(|inj| {
+            json!({
+                "uri": inj.source_uri,
+                "tier": inj.tier,
+                "tokens": inj.token_count,
+                "timestamp": inj.timestamp
+            })
         })
-    }).collect();
+        .collect();
 
     Ok(json!({
         "status": "success",
@@ -537,7 +554,10 @@ mod tests {
         assert_eq!(sanitize_id_component("Blue"), "blue");
         assert_eq!(sanitize_id_component("my-project"), "my-project");
         assert_eq!(sanitize_id_component("My Project!"), "myproject");
-        assert_eq!(sanitize_id_component("a".repeat(50).as_str()), "a".repeat(32));
+        assert_eq!(
+            sanitize_id_component("a".repeat(50).as_str()),
+            "a".repeat(32)
+        );
     }
 
     #[test]
@@ -547,7 +567,12 @@ mod tests {
 
         // Should be in format: repo-realm-random12
         let parts: Vec<&str> = session_id.split('-').collect();
-        assert_eq!(parts.len(), 3, "Session ID should have 3 parts: {}", session_id);
+        assert_eq!(
+            parts.len(),
+            3,
+            "Session ID should have 3 parts: {}",
+            session_id
+        );
         assert_eq!(parts[0], "test", "First part should be repo name");
         assert_eq!(parts[1], "default", "Second part should be realm name");
         assert_eq!(parts[2].len(), 12, "Random suffix should be 12 chars");

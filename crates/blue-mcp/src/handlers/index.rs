@@ -36,10 +36,7 @@ pub fn handle_search(state: &ProjectState, args: &Value) -> Result<Value, Server
         .and_then(|v| v.as_str())
         .ok_or(ServerError::InvalidParams)?;
 
-    let limit = args
-        .get("limit")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(10) as usize;
+    let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(10) as usize;
 
     let symbols_only = args
         .get("symbols_only")
@@ -219,9 +216,15 @@ pub fn handle_index_file(state: &ProjectState, args: &Value) -> Result<Value, Se
                     file_id,
                     name: name.to_string(),
                     kind: kind.to_string(),
-                    start_line: s.get("start_line").and_then(|v| v.as_i64()).map(|v| v as i32),
+                    start_line: s
+                        .get("start_line")
+                        .and_then(|v| v.as_i64())
+                        .map(|v| v as i32),
                     end_line: s.get("end_line").and_then(|v| v.as_i64()).map(|v| v as i32),
-                    description: s.get("description").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                    description: s
+                        .get("description")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string()),
                 })
             })
             .collect();

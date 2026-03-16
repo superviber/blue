@@ -1,0 +1,13 @@
+{
+  "round": 0,
+  "panel": [
+    { "name": "Muffin", "emoji": "🧁", "role": "Platform Engineer", "tier": "core", "source": "pool", "focus": "Docker orchestration, service composition, local stack architecture" },
+    { "name": "Cupcake", "emoji": "🧁", "role": "Security Architect", "tier": "core", "source": "pool", "focus": "Encryption mode boundaries, key management tiers, zero-knowledge preservation" },
+    { "name": "Scone", "emoji": "🧁", "role": "DevEx Engineer", "tier": "core", "source": "pool", "focus": "Developer onboarding, friction reduction, npm-start simplicity" },
+    { "name": "Eclair", "emoji": "🧁", "role": "Cloud Architect", "tier": "core", "source": "pool", "focus": "AWS service parity, DynamoDB Local, LocalStack, API Gateway mocking" },
+    { "name": "Donut", "emoji": "🧁", "role": "Frontend Architect", "tier": "core", "source": "pool", "focus": "Dashboard decryption UI, encrypted/plaintext toggle, real-time updates" },
+    { "name": "Brioche", "emoji": "🧁", "role": "Secrets Engineer", "tier": "adjacent", "source": "pool", "focus": "Infisical local mode, dotenv fallback, secret rotation simulation" },
+    { "name": "Croissant", "emoji": "🧁", "role": "Cryptography Engineer", "tier": "adjacent", "source": "pool", "focus": "Key derivation parity, algorithm consistency, mode detection" },
+    { "name": "Macaron", "emoji": "🧁", "role": "Startup CTO", "tier": "wildcard", "source": "pool", "focus": "Pragmatic simplicity, time-to-first-run, 80/20 decisions" }
+  ]
+}

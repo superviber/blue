@@ -3,13 +3,13 @@
 //! Provides a unified interface for interacting with different git forges
 //! (GitHub, Forgejo/Gitea) for PR operations.
 
+mod forgejo;
 mod git_url;
 mod github;
-mod forgejo;
 
-pub use git_url::{GitUrl, parse_git_url};
-pub use github::GitHubForge;
 pub use forgejo::ForgejoForge;
+pub use git_url::{parse_git_url, GitUrl};
+pub use github::GitHubForge;
 
 use serde::{Deserialize, Serialize};
 use std::env;
@@ -87,7 +87,11 @@ pub enum ForgeError {
     Parse(String),
 
     #[error("PR not found: {owner}/{repo}#{number}")]
-    NotFound { owner: String, repo: String, number: u64 },
+    NotFound {
+        owner: String,
+        repo: String,
+        number: u64,
+    },
 }
 
 /// The Forge trait - unified interface for git forges
@@ -99,7 +103,13 @@ pub trait Forge: Send + Sync {
     fn get_pr(&self, owner: &str, repo: &str, number: u64) -> Result<PullRequest, ForgeError>;
 
     /// Merge a pull request
-    fn merge_pr(&self, owner: &str, repo: &str, number: u64, strategy: MergeStrategy) -> Result<(), ForgeError>;
+    fn merge_pr(
+        &self,
+        owner: &str,
+        repo: &str,
+        number: u64,
+        strategy: MergeStrategy,
+    ) -> Result<(), ForgeError>;
 
     /// Check if a PR is merged
     fn pr_is_merged(&self, owner: &str, repo: &str, number: u64) -> Result<bool, ForgeError>;
@@ -152,16 +162,16 @@ fn probe_forgejo_api(host: &str) -> bool {
 /// Get the appropriate token for a forge type
 pub fn get_token(forge_type: ForgeType) -> Result<String, ForgeError> {
     match forge_type {
-        ForgeType::GitHub => {
-            env::var("GITHUB_TOKEN")
-                .or_else(|_| env::var("GH_TOKEN"))
-                .map_err(|_| ForgeError::MissingToken { var: "GITHUB_TOKEN" })
-        }
-        ForgeType::Forgejo => {
-            env::var("FORGEJO_TOKEN")
-                .or_else(|_| env::var("GITEA_TOKEN"))
-                .map_err(|_| ForgeError::MissingToken { var: "FORGEJO_TOKEN" })
-        }
+        ForgeType::GitHub => env::var("GITHUB_TOKEN")
+            .or_else(|_| env::var("GH_TOKEN"))
+            .map_err(|_| ForgeError::MissingToken {
+                var: "GITHUB_TOKEN",
+            }),
+        ForgeType::Forgejo => env::var("FORGEJO_TOKEN")
+            .or_else(|_| env::var("GITEA_TOKEN"))
+            .map_err(|_| ForgeError::MissingToken {
+                var: "FORGEJO_TOKEN",
+            }),
     }
 }
 
@@ -315,8 +325,8 @@ impl BlueConfig {
         let content = std::fs::read_to_string(&config_path)
             .map_err(|e| ConfigError::ReadError(e.to_string()))?;
 
-        let config: Self = serde_yaml::from_str(&content)
-            .map_err(|e| ConfigError::ParseError(e.to_string()))?;
+        let config: Self =
+            serde_yaml::from_str(&content).map_err(|e| ConfigError::ParseError(e.to_string()))?;
 
         config.validate()?;
         Ok(config)
@@ -330,8 +340,7 @@ impl BlueConfig {
     /// Save config to .blue/config.yaml
     pub fn save(&self, blue_dir: &std::path::Path) -> Result<(), std::io::Error> {
         let config_path = blue_dir.join("config.yaml");
-        let content = serde_yaml::to_string(self)
-            .map_err(std::io::Error::other)?;
+        let content = serde_yaml::to_string(self).map_err(std::io::Error::other)?;
         std::fs::write(&config_path, content)
     }
 
@@ -368,7 +377,10 @@ pub fn detect_forge_type_cached(remote_url: &str, blue_dir: Option<&std::path::P
     if let Some(dir) = blue_dir {
         if let Ok(config) = BlueConfig::load(dir) {
             // Validate cached config matches current remote
-            if config.forge.host == url.host && config.forge.owner == url.owner && config.forge.repo == url.repo {
+            if config.forge.host == url.host
+                && config.forge.owner == url.owner
+                && config.forge.repo == url.repo
+            {
                 return config.forge.forge_type;
             }
         }
@@ -400,7 +412,10 @@ pub fn detect_forge_type_cached(remote_url: &str, blue_dir: Option<&std::path::P
 }
 
 /// Create a forge instance with caching support
-pub fn create_forge_cached(remote_url: &str, blue_dir: Option<&std::path::Path>) -> Result<Box<dyn Forge>, ForgeError> {
+pub fn create_forge_cached(
+    remote_url: &str,
+    blue_dir: Option<&std::path::Path>,
+) -> Result<Box<dyn Forge>, ForgeError> {
     let url = parse_git_url(remote_url);
     let forge_type = detect_forge_type_cached(remote_url, blue_dir);
     let token = get_token(forge_type)?;

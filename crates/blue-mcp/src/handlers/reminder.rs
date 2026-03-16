@@ -23,7 +23,9 @@ pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, Server
     // Find linked document if specified
     let linked_doc_id = if let Some(link_title) = link_to {
         // Try RFC first, then spike, then others
-        let doc = state.store.find_document(DocType::Rfc, link_title)
+        let doc = state
+            .store
+            .find_document(DocType::Rfc, link_title)
             .or_else(|_| state.store.find_document(DocType::Spike, link_title))
             .or_else(|_| state.store.find_document(DocType::Decision, link_title));
 
@@ -92,7 +94,10 @@ pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, Server
 /// Handle blue_reminder_list
 pub fn handle_list(state: &ProjectState, args: &Value) -> Result<Value, ServerError> {
     let status_filter = args.get("status").and_then(|v| v.as_str());
-    let include_future = args.get("include_future").and_then(|v| v.as_bool()).unwrap_or(false);
+    let include_future = args
+        .get("include_future")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
 
     let status = status_filter.and_then(|s| match s {
         "pending" => Some(ReminderStatus::Pending),
@@ -102,7 +107,10 @@ pub fn handle_list(state: &ProjectState, args: &Value) -> Result<Value, ServerEr
         _ => Some(ReminderStatus::Pending),
     });
 
-    let reminders = state.store.list_reminders(status, include_future).unwrap_or_default();
+    let reminders = state
+        .store
+        .list_reminders(status, include_future)
+        .unwrap_or_default();
 
     if reminders.is_empty() {
         let msg = match status_filter {
@@ -139,8 +147,14 @@ pub fn handle_list(state: &ProjectState, args: &Value) -> Result<Value, ServerEr
         })
         .collect();
 
-    let due_count = reminder_list.iter().filter(|r| r["is_due"].as_bool().unwrap_or(false)).count();
-    let overdue_count = reminder_list.iter().filter(|r| r["is_overdue"].as_bool().unwrap_or(false)).count();
+    let due_count = reminder_list
+        .iter()
+        .filter(|r| r["is_due"].as_bool().unwrap_or(false))
+        .count();
+    let overdue_count = reminder_list
+        .iter()
+        .filter(|r| r["is_overdue"].as_bool().unwrap_or(false))
+        .count();
 
     let hint = if overdue_count > 0 {
         Some(format!("{} overdue!", overdue_count))

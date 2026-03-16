@@ -14,7 +14,10 @@
 
 use std::process::Command;
 
-use blue_core::{CreatePrOpts, DocType, MergeStrategy, ProjectState, create_forge_cached, detect_forge_type_cached, parse_git_url};
+use blue_core::{
+    create_forge_cached, detect_forge_type_cached, parse_git_url, CreatePrOpts, DocType,
+    MergeStrategy, ProjectState,
+};
 use serde_json::{json, Value};
 
 use crate::error::ServerError;
@@ -30,7 +33,6 @@ pub enum TaskCategory {
     /// Requires human verification
     TrulyManual,
 }
-
 
 /// Handle blue_pr_create
 ///
@@ -163,38 +165,37 @@ pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, Server
     };
 
     match forge.create_pr(opts) {
-        Ok(pr) => {
-            Ok(json!({
-                "status": "success",
-                "pr_url": pr.url,
-                "pr_number": pr.number,
-                "forge": forge_type.to_string(),
-                "base_branch": base,
-                "title": title,
-                "message": blue_core::voice::success(
-                    &format!("Created PR #{}", pr.number),
-                    Some(&pr.url)
-                ),
-                "next_steps": [
-                    "Run blue_pr_verify to check test plan items"
-                ]
-            }))
-        }
-        Err(e) => {
-            Ok(json!({
-                "status": "error",
-                "message": blue_core::voice::error(
-                    "Failed to create PR",
-                    &format!("{}", e)
-                )
-            }))
-        }
+        Ok(pr) => Ok(json!({
+            "status": "success",
+            "pr_url": pr.url,
+            "pr_number": pr.number,
+            "forge": forge_type.to_string(),
+            "base_branch": base,
+            "title": title,
+            "message": blue_core::voice::success(
+                &format!("Created PR #{}", pr.number),
+                Some(&pr.url)
+            ),
+            "next_steps": [
+                "Run blue_pr_verify to check test plan items"
+            ]
+        })),
+        Err(e) => Ok(json!({
+            "status": "error",
+            "message": blue_core::voice::error(
+                "Failed to create PR",
+                &format!("{}", e)
+            )
+        })),
     }
 }
 
 /// Handle blue_pr_verify
 pub fn handle_verify(_state: &ProjectState, args: &Value) -> Result<Value, ServerError> {
-    let pr_number = args.get("pr_number").and_then(|v| v.as_u64()).map(|n| n as u32);
+    let pr_number = args
+        .get("pr_number")
+        .and_then(|v| v.as_u64())
+        .map(|n| n as u32);
 
     // Fetch PR via gh CLI
     let pr_data = fetch_pr_data(pr_number)?;
@@ -203,10 +204,7 @@ pub fn handle_verify(_state: &ProjectState, args: &Value) -> Result<Value, Serve
     let items = parse_test_plan(&pr_data.body);
 
     let checked_count = items.iter().filter(|(_, checked, _)| *checked).count();
-    let unchecked: Vec<_> = items
-        .iter()
-        .filter(|(_, checked, _)| !*checked)
-        .collect();
+    let unchecked: Vec<_> = items.iter().filter(|(_, checked, _)| !*checked).collect();
 
     let cli_tasks: Vec<_> = unchecked
         .iter()
@@ -265,7 +263,10 @@ pub fn handle_check_item(_state: &ProjectState, args: &Value) -> Result<Value, S
         .and_then(|v| v.as_str())
         .ok_or(ServerError::InvalidParams)?;
 
-    let pr_number = args.get("pr_number").and_then(|v| v.as_u64()).map(|n| n as u32);
+    let pr_number = args
+        .get("pr_number")
+        .and_then(|v| v.as_u64())
+        .map(|n| n as u32);
     let verified_by = args.get("verified_by").and_then(|v| v.as_str());
 
     // Fetch current PR body
@@ -296,7 +297,10 @@ pub fn handle_check_item(_state: &ProjectState, args: &Value) -> Result<Value, S
 
 /// Handle blue_pr_check_approvals
 pub fn handle_check_approvals(_state: &ProjectState, args: &Value) -> Result<Value, ServerError> {
-    let pr_number = args.get("pr_number").and_then(|v| v.as_u64()).map(|n| n as u32);
+    let pr_number = args
+        .get("pr_number")
+        .and_then(|v| v.as_u64())
+        .map(|n| n as u32);
 
     let (approved, approved_by) = fetch_pr_approvals(pr_number)?;
     let pr_data = fetch_pr_data(pr_number)?;
@@ -413,30 +417,26 @@ pub fn handle_merge(state: &ProjectState, args: &Value) -> Result<Value, ServerE
     };
 
     match forge.merge_pr(&git_url.owner, &git_url.repo, number, strategy) {
-        Ok(()) => {
-            Ok(json!({
-                "status": "success",
-                "pr_number": number,
-                "forge": forge_type.to_string(),
-                "strategy": if squash { "squash" } else { "merge" },
-                "message": blue_core::voice::success(
-                    &format!("Merged PR #{}", number),
-                    Some("Run blue_worktree_cleanup to clean up local worktree.")
-                ),
-                "next_steps": [
-                    "Run blue_worktree_cleanup to remove worktree and local branch"
-                ]
-            }))
-        }
-        Err(e) => {
-            Ok(json!({
-                "status": "error",
-                "message": blue_core::voice::error(
-                    "Merge failed",
-                    &format!("{}", e)
-                )
-            }))
-        }
+        Ok(()) => Ok(json!({
+            "status": "success",
+            "pr_number": number,
+            "forge": forge_type.to_string(),
+            "strategy": if squash { "squash" } else { "merge" },
+            "message": blue_core::voice::success(
+                &format!("Merged PR #{}", number),
+                Some("Run blue_worktree_cleanup to clean up local worktree.")
+            ),
+            "next_steps": [
+                "Run blue_worktree_cleanup to remove worktree and local branch"
+            ]
+        })),
+        Err(e) => Ok(json!({
+            "status": "error",
+            "message": blue_core::voice::error(
+                "Merge failed",
+                &format!("{}", e)
+            )
+        })),
     }
 }
 
@@ -444,11 +444,11 @@ pub fn handle_merge(state: &ProjectState, args: &Value) -> Result<Value, ServerE
 /// Returns Ok(()) if ready to merge, Err with reason otherwise
 fn check_merge_preconditions(pr_number: Option<u32>) -> Result<(), String> {
     // Try to fetch PR data via gh CLI
-    let pr_data = fetch_pr_data(pr_number)
-        .map_err(|e| format!("Couldn't fetch PR data: {:?}", e))?;
+    let pr_data =
+        fetch_pr_data(pr_number).map_err(|e| format!("Couldn't fetch PR data: {:?}", e))?;
 
-    let (approved, _) = fetch_pr_approvals(pr_number)
-        .map_err(|e| format!("Couldn't fetch approvals: {:?}", e))?;
+    let (approved, _) =
+        fetch_pr_approvals(pr_number).map_err(|e| format!("Couldn't fetch approvals: {:?}", e))?;
 
     let items = parse_test_plan(&pr_data.body);
     let all_items_checked = items.iter().all(|(_, checked, _)| *checked);
@@ -605,9 +605,19 @@ fn categorize_task(description: &str) -> TaskCategory {
 
     // CLI-automatable patterns
     let cli_patterns = [
-        "run tests", "run test", "unit test", "npm test", "cargo test",
-        "build", "compile", "lint", "format", "install", "type check",
-        "pytest", "make",
+        "run tests",
+        "run test",
+        "unit test",
+        "npm test",
+        "cargo test",
+        "build",
+        "compile",
+        "lint",
+        "format",
+        "install",
+        "type check",
+        "pytest",
+        "make",
     ];
 
     if cli_patterns.iter().any(|p| lower.contains(p)) {
@@ -616,9 +626,16 @@ fn categorize_task(description: &str) -> TaskCategory {
 
     // Truly manual patterns (check before browser patterns)
     let manual_patterns = [
-        "physical device", "screen reader", "voiceover", "nvda",
-        "subjective", "intuitive", "usability", "production",
-        "accessibility audit", "manual",
+        "physical device",
+        "screen reader",
+        "voiceover",
+        "nvda",
+        "subjective",
+        "intuitive",
+        "usability",
+        "production",
+        "accessibility audit",
+        "manual",
     ];
 
     if manual_patterns.iter().any(|p| lower.contains(p)) {
@@ -627,9 +644,21 @@ fn categorize_task(description: &str) -> TaskCategory {
 
     // Browser-automatable patterns
     let browser_patterns = [
-        "verify", "check", "confirm", "displays", "shows", "click",
-        "navigate", "form", "modal", "dropdown", "responsive", "login",
-        "error message", "validation", "visual",
+        "verify",
+        "check",
+        "confirm",
+        "displays",
+        "shows",
+        "click",
+        "navigate",
+        "form",
+        "modal",
+        "dropdown",
+        "responsive",
+        "login",
+        "error message",
+        "validation",
+        "visual",
     ];
 
     if browser_patterns.iter().any(|p| lower.contains(p)) {
@@ -640,7 +669,10 @@ fn categorize_task(description: &str) -> TaskCategory {
     TaskCategory::TrulyManual
 }
 
-fn update_checkbox_in_body(body: &str, item_selector: &str) -> Result<(String, String), ServerError> {
+fn update_checkbox_in_body(
+    body: &str,
+    item_selector: &str,
+) -> Result<(String, String), ServerError> {
     let mut lines: Vec<String> = body.lines().map(|s| s.to_string()).collect();
     let mut matched_item = None;
     let mut matched_line_idx = None;
@@ -667,7 +699,9 @@ fn update_checkbox_in_body(body: &str, item_selector: &str) -> Result<(String, S
             let description = trimmed[5..].trim();
 
             let matches = target_index.map(|idx| idx == item_index).unwrap_or(false)
-                || description.to_lowercase().contains(&item_selector.to_lowercase());
+                || description
+                    .to_lowercase()
+                    .contains(&item_selector.to_lowercase());
 
             if matches {
                 matched_item = Some(description.to_string());
@@ -728,7 +762,8 @@ fn get_remote_url(repo_path: &std::path::Path) -> Result<String, String> {
     }
 
     // Fall back to any remote
-    let remotes = repo.remotes()
+    let remotes = repo
+        .remotes()
         .map_err(|e| format!("Couldn't list remotes: {}", e))?;
 
     for name in remotes.iter().flatten() {
@@ -747,7 +782,8 @@ fn get_current_branch(repo_path: &std::path::Path) -> Result<String, String> {
     let repo = git2::Repository::discover(repo_path)
         .map_err(|e| format!("Not a git repository: {}", e))?;
 
-    let head = repo.head()
+    let head = repo
+        .head()
         .map_err(|e| format!("Couldn't get HEAD: {}", e))?;
 
     head.shorthand()

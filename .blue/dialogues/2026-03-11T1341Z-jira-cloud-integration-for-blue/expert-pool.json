@@ -1,0 +1,91 @@
+{
+  "domain": "Developer Tooling & Project Management Integration",
+  "question": "How should Blue integrate with Jira Cloud? What conventions should be enforced? How should the external project-management repo work as ground truth? How should RFCs map to Jira artifacts?",
+  "experts": [
+    {
+      "role": "Blue Platform Architect",
+      "tier": "core",
+      "relevance": 0.95
+    },
+    {
+      "role": "DevOps & CLI Tooling Engineer",
+      "tier": "core",
+      "relevance": 0.93
+    },
+    {
+      "role": "Project Management Specialist",
+      "tier": "core",
+      "relevance": 0.92
+    },
+    {
+      "role": "Developer Experience Engineer",
+      "tier": "core",
+      "relevance": 0.9
+    },
+    {
+      "role": "Security Engineer",
+      "tier": "adjacent",
+      "relevance": 0.85
+    },
+    {
+      "role": "Integration Architect",
+      "tier": "adjacent",
+      "relevance": 0.83
+    },
+    {
+      "role": "Convention & Standards Designer",
+      "tier": "adjacent",
+      "relevance": 0.8
+    },
+    {
+      "role": "Multi-Repo Strategist",
+      "tier": "adjacent",
+      "relevance": 0.78
+    },
+    {
+      "role": "Product Manager",
+      "tier": "adjacent",
+      "relevance": 0.75
+    },
+    {
+      "role": "Workflow Analyst",
+      "tier": "adjacent",
+      "relevance": 0.72
+    },
+    {
+      "role": "Enterprise Governance Architect",
+      "tier": "adjacent",
+      "relevance": 0.68
+    },
+    {
+      "role": "API Design Specialist",
+      "tier": "adjacent",
+      "relevance": 0.65
+    },
+    {
+      "role": "Minimalist Skeptic",
+      "tier": "wildcard",
+      "relevance": 0.4
+    },
+    {
+      "role": "Open Source Community Advocate",
+      "tier": "wildcard",
+      "relevance": 0.35
+    },
+    {
+      "role": "Data Integrity Specialist",
+      "tier": "wildcard",
+      "relevance": 0.3
+    },
+    {
+      "role": "Change Management Consultant",
+      "tier": "wildcard",
+      "relevance": 0.28
+    },
+    {
+      "role": "Documentation Strategist",
+      "tier": "wildcard",
+      "relevance": 0.25
+    }
+  ]
+}

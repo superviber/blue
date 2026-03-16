@@ -27,8 +27,7 @@ pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, Server
         .and_then(|v| v.as_str())
         .unwrap_or("Project audit");
 
-    let audit_type = AuditType::parse(audit_type_str)
-        .unwrap_or(AuditType::Custom);
+    let audit_type = AuditType::parse(audit_type_str).unwrap_or(AuditType::Custom);
 
     // Create the audit
     let audit = Audit::new(title, audit_type, scope);
@@ -165,8 +164,9 @@ pub fn handle_complete(state: &ProjectState, args: &Value) -> Result<Value, Serv
         .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
 
     // Rename file for new status (RFC 0031)
-    let final_path = blue_core::rename_for_status(&state.home.docs_path, &state.store, &doc, "complete")
-        .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+    let final_path =
+        blue_core::rename_for_status(&state.home.docs_path, &state.store, &doc, "complete")
+            .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
 
     // Update markdown at effective path
     let effective_path = final_path.as_deref().or(doc.file_path.as_deref());

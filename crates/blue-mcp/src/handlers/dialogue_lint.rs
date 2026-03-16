@@ -490,7 +490,10 @@ fn check_round_sequencing(parsed: &ParsedDialogue) -> CheckResult {
         severity: Severity::Major,
         pass,
         message: if pass {
-            format!("Rounds 0-{} sequential", parsed.rounds.len().saturating_sub(1))
+            format!(
+                "Rounds 0-{} sequential",
+                parsed.rounds.len().saturating_sub(1)
+            )
         } else {
             format!(
                 "Round sequence gap: found {:?}, expected {:?}",
