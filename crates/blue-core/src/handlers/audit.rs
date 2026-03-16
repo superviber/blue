@@ -2,10 +2,10 @@
 //!
 //! Checks project health and finds issues.
 
-use blue_core::{DocType, ProjectState};
+use crate::{DocType, ProjectState};
 use serde_json::{json, Value};
 
-use crate::error::ServerError;
+use crate::handler_error::HandlerError;
 
 /// Issue found during audit
 #[derive(Debug)]
@@ -17,7 +17,7 @@ struct AuditIssue {
 }
 
 /// Handle blue_audit
-pub fn handle_audit(state: &ProjectState) -> Result<Value, ServerError> {
+pub fn handle_audit(state: &ProjectState) -> Result<Value, HandlerError> {
     let mut issues: Vec<AuditIssue> = Vec::new();
     let mut recommendations: Vec<String> = Vec::new();
 
@@ -82,7 +82,7 @@ pub fn handle_audit(state: &ProjectState) -> Result<Value, ServerError> {
     // Check 4: Stale reminders (overdue by more than 7 days)
     if let Ok(reminders) = state
         .store
-        .list_reminders(Some(blue_core::ReminderStatus::Pending), false)
+        .list_reminders(Some(crate::ReminderStatus::Pending), false)
     {
         let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
         for reminder in reminders {
@@ -154,7 +154,7 @@ pub fn handle_audit(state: &ProjectState) -> Result<Value, ServerError> {
 
     Ok(json!({
         "status": "success",
-        "message": blue_core::voice::info(
+        "message": crate::voice::info(
             &format!("{} issues found", issues.len()),
             Some(&hint)
         ),

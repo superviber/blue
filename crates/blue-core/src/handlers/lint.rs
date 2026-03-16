@@ -9,7 +9,7 @@ use std::process::Command;
 use regex::Regex;
 use serde_json::{json, Value};
 
-use crate::error::ServerError;
+use crate::handler_error::HandlerError;
 
 /// Detected project type
 #[derive(Debug, Clone, Copy)]
@@ -44,7 +44,7 @@ struct LintResult {
 }
 
 /// Handle blue_lint
-pub fn handle_lint(args: &Value, repo_path: &Path) -> Result<Value, ServerError> {
+pub fn handle_lint(args: &Value, repo_path: &Path) -> Result<Value, HandlerError> {
     let fix = args.get("fix").and_then(|v| v.as_bool()).unwrap_or(false);
     let check_type = args.get("check").and_then(|v| v.as_str()).unwrap_or("all");
 
@@ -54,7 +54,7 @@ pub fn handle_lint(args: &Value, repo_path: &Path) -> Result<Value, ServerError>
     if project_types.is_empty() {
         return Ok(json!({
             "status": "error",
-            "message": blue_core::voice::error(
+            "message": crate::voice::error(
                 "No supported project type detected",
                 "Need Cargo.toml, package.json, pyproject.toml, or cdk.json"
             )
@@ -118,7 +118,7 @@ pub fn handle_lint(args: &Value, repo_path: &Path) -> Result<Value, ServerError>
 
     Ok(json!({
         "status": "success",
-        "message": blue_core::voice::info(
+        "message": crate::voice::info(
             &message_title,
             Some(&hint)
         ),
@@ -402,7 +402,7 @@ fn run_cdk_checks(path: &Path, check_type: &str) -> Vec<LintResult> {
 
 /// RFC 0017: Run RFC header checks
 fn run_rfc_checks(path: &Path, fix: bool, check_type: &str) -> Vec<LintResult> {
-    use blue_core::{convert_inline_to_table_header, validate_rfc_header, HeaderFormat};
+    use crate::{convert_inline_to_table_header, validate_rfc_header, HeaderFormat};
     use std::fs;
 
     let mut results = Vec::new();

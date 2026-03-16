@@ -5,17 +5,17 @@
 
 use std::fs;
 
-use blue_core::{title_to_slug, DocType, Document, ProjectState};
+use crate::{title_to_slug, DocType, Document, ProjectState};
 use serde_json::{json, Value};
 
-use crate::error::ServerError;
+use crate::handler_error::HandlerError;
 
 /// Handle blue_prd_create
-pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, ServerError> {
+pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, HandlerError> {
     let title = args
         .get("title")
         .and_then(|v| v.as_str())
-        .ok_or(ServerError::InvalidParams)?;
+        .ok_or(HandlerError::InvalidParams)?;
 
     let problem = args.get("problem").and_then(|v| v.as_str());
     let users = args.get("users").and_then(|v| v.as_str());
@@ -43,7 +43,7 @@ pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, Server
     let prd_number = state
         .store
         .next_number_with_fs(DocType::Prd, &state.home.docs_path)
-        .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+        .map_err(|e| HandlerError::StateLoadFailed(e.to_string()))?;
 
     // Generate file path
     let file_name = format!("{:04}-{}.draft.md", prd_number, title_to_slug(title));
@@ -51,7 +51,7 @@ pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, Server
 
     // Ensure directory exists
     if let Some(parent) = file_path.parent() {
-        fs::create_dir_all(parent).map_err(|e| ServerError::CommandFailed(e.to_string()))?;
+        fs::create_dir_all(parent).map_err(|e| HandlerError::CommandFailed(e.to_string()))?;
     }
 
     // Generate markdown
@@ -66,7 +66,7 @@ pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, Server
     );
 
     // Write file
-    fs::write(&file_path, &markdown).map_err(|e| ServerError::CommandFailed(e.to_string()))?;
+    fs::write(&file_path, &markdown).map_err(|e| HandlerError::CommandFailed(e.to_string()))?;
 
     // Add to store (RFC 0031: set file_path for rename support)
     let mut doc = Document::new(DocType::Prd, title, "draft");
@@ -74,11 +74,11 @@ pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, Server
     state
         .store
         .add_document(&doc)
-        .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+        .map_err(|e| HandlerError::StateLoadFailed(e.to_string()))?;
 
     Ok(json!({
         "status": "success",
-        "message": blue_core::voice::success(
+        "message": crate::voice::success(
             &format!("Created PRD {:04} '{}'", prd_number, title),
             Some("Add user stories with acceptance criteria, then use blue_prd_approve when ready.")
         ),
@@ -92,25 +92,25 @@ pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, Server
 }
 
 /// Handle blue_prd_get
-pub fn handle_get(state: &ProjectState, args: &Value) -> Result<Value, ServerError> {
+pub fn handle_get(state: &ProjectState, args: &Value) -> Result<Value, HandlerError> {
     let title = args
         .get("title")
         .and_then(|v| v.as_str())
-        .ok_or(ServerError::InvalidParams)?;
+        .ok_or(HandlerError::InvalidParams)?;
 
     let doc = state
         .store
         .find_document(DocType::Prd, title)
-        .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+        .map_err(|e| HandlerError::StateLoadFailed(e.to_string()))?;
 
     // Read file content
     let rel_path = doc
         .file_path
         .as_ref()
-        .ok_or_else(|| ServerError::CommandFailed("PRD file path not set".to_string()))?;
+        .ok_or_else(|| HandlerError::CommandFailed("PRD file path not set".to_string()))?;
     let file_path = state.home.docs_path.join(rel_path);
     let content = fs::read_to_string(&file_path)
-        .map_err(|e| ServerError::CommandFailed(format!("Couldn't read PRD: {}", e)))?;
+        .map_err(|e| HandlerError::CommandFailed(format!("Couldn't read PRD: {}", e)))?;
 
     // Parse acceptance criteria
     let criteria = parse_acceptance_criteria(&content);
@@ -119,7 +119,7 @@ pub fn handle_get(state: &ProjectState, args: &Value) -> Result<Value, ServerErr
 
     Ok(json!({
         "status": "success",
-        "message": blue_core::voice::info(
+        "message": crate::voice::info(
             &format!("PRD '{}' - {}", doc.title, doc.status),
             Some(&format!("{}/{} acceptance criteria met", checked, total))
         ),
@@ -142,21 +142,21 @@ pub fn handle_get(state: &ProjectState, args: &Value) -> Result<Value, ServerErr
 }
 
 /// Handle blue_prd_approve
-pub fn handle_approve(state: &ProjectState, args: &Value) -> Result<Value, ServerError> {
+pub fn handle_approve(state: &ProjectState, args: &Value) -> Result<Value, HandlerError> {
     let title = args
         .get("title")
         .and_then(|v| v.as_str())
-        .ok_or(ServerError::InvalidParams)?;
+        .ok_or(HandlerError::InvalidParams)?;
 
     let doc = state
         .store
         .find_document(DocType::Prd, title)
-        .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+        .map_err(|e| HandlerError::StateLoadFailed(e.to_string()))?;
 
     if doc.status != "draft" {
         return Ok(json!({
             "status": "error",
-            "message": blue_core::voice::error(
+            "message": crate::voice::error(
                 &format!("Can't approve - PRD is '{}'", doc.status),
                 "Can only approve from 'draft' status"
             )
@@ -166,22 +166,22 @@ pub fn handle_approve(state: &ProjectState, args: &Value) -> Result<Value, Serve
     state
         .store
         .update_document_status(DocType::Prd, title, "approved")
-        .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+        .map_err(|e| HandlerError::StateLoadFailed(e.to_string()))?;
 
     // Rename file for new status (RFC 0031)
     let final_path =
-        blue_core::rename_for_status(&state.home.docs_path, &state.store, &doc, "approved")
-            .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+        crate::rename_for_status(&state.home.docs_path, &state.store, &doc, "approved")
+            .map_err(|e| HandlerError::StateLoadFailed(e.to_string()))?;
 
     // Update markdown at effective path
     let effective_path = final_path.as_deref().or(doc.file_path.as_deref());
     if let Some(p) = effective_path {
-        let _ = blue_core::update_markdown_status(&state.home.docs_path.join(p), "approved");
+        let _ = crate::update_markdown_status(&state.home.docs_path.join(p), "approved");
     }
 
     Ok(json!({
         "status": "success",
-        "message": blue_core::voice::success(
+        "message": crate::voice::success(
             &format!("Approved PRD '{}'", title),
             Some("Create RFC(s) to implement: blue_rfc_create with source_prd")
         ),
@@ -193,21 +193,21 @@ pub fn handle_approve(state: &ProjectState, args: &Value) -> Result<Value, Serve
 }
 
 /// Handle blue_prd_complete
-pub fn handle_complete(state: &ProjectState, args: &Value) -> Result<Value, ServerError> {
+pub fn handle_complete(state: &ProjectState, args: &Value) -> Result<Value, HandlerError> {
     let title = args
         .get("title")
         .and_then(|v| v.as_str())
-        .ok_or(ServerError::InvalidParams)?;
+        .ok_or(HandlerError::InvalidParams)?;
 
     let doc = state
         .store
         .find_document(DocType::Prd, title)
-        .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+        .map_err(|e| HandlerError::StateLoadFailed(e.to_string()))?;
 
     if doc.status != "approved" {
         return Ok(json!({
             "status": "error",
-            "message": blue_core::voice::error(
+            "message": crate::voice::error(
                 &format!("Can't complete - PRD is '{}'", doc.status),
                 "Can only complete from 'approved' status"
             )
@@ -225,7 +225,7 @@ pub fn handle_complete(state: &ProjectState, args: &Value) -> Result<Value, Serv
     if !unchecked.is_empty() {
         return Ok(json!({
             "status": "blocked",
-            "message": blue_core::voice::error(
+            "message": crate::voice::error(
                 &format!("{} unchecked acceptance criteria", unchecked.len()),
                 "Mark them complete before finishing"
             ),
@@ -236,22 +236,22 @@ pub fn handle_complete(state: &ProjectState, args: &Value) -> Result<Value, Serv
     state
         .store
         .update_document_status(DocType::Prd, title, "implemented")
-        .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+        .map_err(|e| HandlerError::StateLoadFailed(e.to_string()))?;
 
     // Rename file for new status (RFC 0031)
     let final_path =
-        blue_core::rename_for_status(&state.home.docs_path, &state.store, &doc, "implemented")
-            .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+        crate::rename_for_status(&state.home.docs_path, &state.store, &doc, "implemented")
+            .map_err(|e| HandlerError::StateLoadFailed(e.to_string()))?;
 
     // Update markdown at effective path
     let effective_path = final_path.as_deref().or(doc.file_path.as_deref());
     if let Some(p) = effective_path {
-        let _ = blue_core::update_markdown_status(&state.home.docs_path.join(p), "implemented");
+        let _ = crate::update_markdown_status(&state.home.docs_path.join(p), "implemented");
     }
 
     Ok(json!({
         "status": "success",
-        "message": blue_core::voice::success(
+        "message": crate::voice::success(
             &format!("Completed PRD '{}'", title),
             Some("All acceptance criteria verified!")
         ),
@@ -263,13 +263,13 @@ pub fn handle_complete(state: &ProjectState, args: &Value) -> Result<Value, Serv
 }
 
 /// Handle blue_prd_list
-pub fn handle_list(state: &ProjectState, args: &Value) -> Result<Value, ServerError> {
+pub fn handle_list(state: &ProjectState, args: &Value) -> Result<Value, HandlerError> {
     let status_filter = args.get("status").and_then(|v| v.as_str());
 
     let docs = state
         .store
         .list_documents(DocType::Prd)
-        .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+        .map_err(|e| HandlerError::StateLoadFailed(e.to_string()))?;
 
     let filtered: Vec<_> = docs
         .into_iter()
@@ -288,7 +288,7 @@ pub fn handle_list(state: &ProjectState, args: &Value) -> Result<Value, ServerEr
 
     Ok(json!({
         "status": "success",
-        "message": blue_core::voice::info(
+        "message": crate::voice::info(
             &format!("{} PRD(s)", filtered.len()),
             Some(hint)
         ),

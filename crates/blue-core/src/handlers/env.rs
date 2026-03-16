@@ -12,8 +12,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::{json, Value};
 
-use crate::error::ServerError;
-use blue_core::BlueConfig;
+use crate::handler_error::HandlerError;
+use crate::BlueConfig;
 
 /// Detected external dependency
 #[derive(Debug)]
@@ -25,7 +25,7 @@ struct Dependency {
 }
 
 /// Handle blue_env_detect
-pub fn handle_detect(args: &Value, repo_path: &Path) -> Result<Value, ServerError> {
+pub fn handle_detect(args: &Value, repo_path: &Path) -> Result<Value, HandlerError> {
     let path = args
         .get("cwd")
         .and_then(|v| v.as_str())
@@ -43,7 +43,7 @@ pub fn handle_detect(args: &Value, repo_path: &Path) -> Result<Value, ServerErro
 
     Ok(json!({
         "status": "success",
-        "message": blue_core::voice::info(
+        "message": crate::voice::info(
             &format!("{} external dependencies detected", dependencies.len()),
             Some(hint)
         ),
@@ -64,7 +64,7 @@ pub fn handle_detect(args: &Value, repo_path: &Path) -> Result<Value, ServerErro
 /// Handle blue_env_mock
 ///
 /// RFC 0034: Includes AWS profile and worktree.env from .blue/config.yaml
-pub fn handle_mock(args: &Value, repo_path: &Path) -> Result<Value, ServerError> {
+pub fn handle_mock(args: &Value, repo_path: &Path) -> Result<Value, HandlerError> {
     let scan_path = args
         .get("cwd")
         .and_then(|v| v.as_str())
@@ -108,11 +108,11 @@ pub fn handle_mock(args: &Value, repo_path: &Path) -> Result<Value, ServerError>
     // Write file
     let env_file_path = worktree_path.join(".env.isolated");
     fs::write(&env_file_path, &env_content)
-        .map_err(|e| ServerError::CommandFailed(format!("Failed to write .env.isolated: {}", e)))?;
+        .map_err(|e| HandlerError::CommandFailed(format!("Failed to write .env.isolated: {}", e)))?;
 
     Ok(json!({
         "status": "success",
-        "message": blue_core::voice::success(
+        "message": crate::voice::success(
             &format!("Created .env.isolated with AGENT_ID={}", agent_id),
             Some("Source it before running: `source .env.isolated`")
         ),

@@ -2,19 +2,19 @@
 //!
 //! Handles file indexing, search, and impact analysis.
 
-use blue_core::store::{FileIndexEntry, SymbolIndexEntry, INDEX_PROMPT_VERSION};
-use blue_core::ProjectState;
+use crate::store::{FileIndexEntry, SymbolIndexEntry, INDEX_PROMPT_VERSION};
+use crate::ProjectState;
 use serde_json::{json, Value};
 
-use crate::error::ServerError;
+use crate::handler_error::HandlerError;
 
 /// Handle blue_index_status
-pub fn handle_status(state: &ProjectState) -> Result<Value, ServerError> {
+pub fn handle_status(state: &ProjectState) -> Result<Value, HandlerError> {
     let realm = "default";
     let (file_count, symbol_count) = state
         .store
         .get_index_stats(realm)
-        .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+        .map_err(|e| HandlerError::StateLoadFailed(e.to_string()))?;
 
     Ok(json!({
         "status": "success",
@@ -30,11 +30,11 @@ pub fn handle_status(state: &ProjectState) -> Result<Value, ServerError> {
 }
 
 /// Handle blue_index_search
-pub fn handle_search(state: &ProjectState, args: &Value) -> Result<Value, ServerError> {
+pub fn handle_search(state: &ProjectState, args: &Value) -> Result<Value, HandlerError> {
     let query = args
         .get("query")
         .and_then(|v| v.as_str())
-        .ok_or(ServerError::InvalidParams)?;
+        .ok_or(HandlerError::InvalidParams)?;
 
     let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(10) as usize;
 
@@ -49,7 +49,7 @@ pub fn handle_search(state: &ProjectState, args: &Value) -> Result<Value, Server
         let results = state
             .store
             .search_symbols(realm, query, limit)
-            .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+            .map_err(|e| HandlerError::StateLoadFailed(e.to_string()))?;
 
         let formatted: Vec<Value> = results
             .iter()
@@ -76,7 +76,7 @@ pub fn handle_search(state: &ProjectState, args: &Value) -> Result<Value, Server
         let results = state
             .store
             .search_file_index(realm, query, limit)
-            .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+            .map_err(|e| HandlerError::StateLoadFailed(e.to_string()))?;
 
         let formatted: Vec<Value> = results
             .iter()
@@ -101,11 +101,11 @@ pub fn handle_search(state: &ProjectState, args: &Value) -> Result<Value, Server
 }
 
 /// Handle blue_index_impact
-pub fn handle_impact(state: &ProjectState, args: &Value) -> Result<Value, ServerError> {
+pub fn handle_impact(state: &ProjectState, args: &Value) -> Result<Value, HandlerError> {
     let file_path = args
         .get("file")
         .and_then(|v| v.as_str())
-        .ok_or(ServerError::InvalidParams)?;
+        .ok_or(HandlerError::InvalidParams)?;
 
     let realm = "default";
 
@@ -113,7 +113,7 @@ pub fn handle_impact(state: &ProjectState, args: &Value) -> Result<Value, Server
     let entry = state
         .store
         .get_file_index(realm, realm, file_path)
-        .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+        .map_err(|e| HandlerError::StateLoadFailed(e.to_string()))?;
 
     match entry {
         Some(file_entry) => {
@@ -122,7 +122,7 @@ pub fn handle_impact(state: &ProjectState, args: &Value) -> Result<Value, Server
                 state
                     .store
                     .get_file_symbols(id)
-                    .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?
+                    .map_err(|e| HandlerError::StateLoadFailed(e.to_string()))?
             } else {
                 vec![]
             };
@@ -149,7 +149,7 @@ pub fn handle_impact(state: &ProjectState, args: &Value) -> Result<Value, Server
             let references = state
                 .store
                 .search_file_index(realm, filename, 20)
-                .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+                .map_err(|e| HandlerError::StateLoadFailed(e.to_string()))?;
 
             let referencing_files: Vec<String> = references
                 .into_iter()
@@ -176,16 +176,16 @@ pub fn handle_impact(state: &ProjectState, args: &Value) -> Result<Value, Server
 }
 
 /// Handle blue_index_file (store index data for a file)
-pub fn handle_index_file(state: &ProjectState, args: &Value) -> Result<Value, ServerError> {
+pub fn handle_index_file(state: &ProjectState, args: &Value) -> Result<Value, HandlerError> {
     let file_path = args
         .get("file_path")
         .and_then(|v| v.as_str())
-        .ok_or(ServerError::InvalidParams)?;
+        .ok_or(HandlerError::InvalidParams)?;
 
     let file_hash = args
         .get("file_hash")
         .and_then(|v| v.as_str())
-        .ok_or(ServerError::InvalidParams)?;
+        .ok_or(HandlerError::InvalidParams)?;
 
     let summary = args.get("summary").and_then(|v| v.as_str());
     let relationships = args.get("relationships").and_then(|v| v.as_str());
@@ -202,7 +202,7 @@ pub fn handle_index_file(state: &ProjectState, args: &Value) -> Result<Value, Se
     let file_id = state
         .store
         .upsert_file_index(&entry)
-        .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+        .map_err(|e| HandlerError::StateLoadFailed(e.to_string()))?;
 
     // Parse and store symbols if provided
     if let Some(symbols_array) = args.get("symbols").and_then(|v| v.as_array()) {
@@ -232,7 +232,7 @@ pub fn handle_index_file(state: &ProjectState, args: &Value) -> Result<Value, Se
         state
             .store
             .set_file_symbols(file_id, &symbols)
-            .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+            .map_err(|e| HandlerError::StateLoadFailed(e.to_string()))?;
 
         Ok(json!({
             "status": "success",
@@ -253,13 +253,13 @@ pub fn handle_index_file(state: &ProjectState, args: &Value) -> Result<Value, Se
 }
 
 /// Handle blue_index_realm (list all indexed files)
-pub fn handle_index_realm(state: &ProjectState, _args: &Value) -> Result<Value, ServerError> {
+pub fn handle_index_realm(state: &ProjectState, _args: &Value) -> Result<Value, HandlerError> {
     let realm = "default";
 
     let entries = state
         .store
         .list_file_index(realm, None)
-        .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+        .map_err(|e| HandlerError::StateLoadFailed(e.to_string()))?;
 
     let formatted: Vec<Value> = entries
         .iter()

@@ -2,22 +2,22 @@
 //!
 //! Handles session management for multi-agent coordination.
 
-use blue_core::{DocType, ProjectState, Session, SessionType};
+use crate::{DocType, ProjectState, Session, SessionType};
 use serde_json::{json, Value};
 
-use crate::error::ServerError;
+use crate::handler_error::HandlerError;
 
 /// Handle blue_session_ping
-pub fn handle_ping(state: &ProjectState, args: &Value) -> Result<Value, ServerError> {
+pub fn handle_ping(state: &ProjectState, args: &Value) -> Result<Value, HandlerError> {
     let title = args
         .get("title")
         .and_then(|v| v.as_str())
-        .ok_or(ServerError::InvalidParams)?;
+        .ok_or(HandlerError::InvalidParams)?;
 
     let action = args
         .get("action")
         .and_then(|v| v.as_str())
-        .ok_or(ServerError::InvalidParams)?;
+        .ok_or(HandlerError::InvalidParams)?;
 
     let session_type_str = args
         .get("session_type")
@@ -32,7 +32,7 @@ pub fn handle_ping(state: &ProjectState, args: &Value) -> Result<Value, ServerEr
         Err(_) => {
             return Ok(json!({
                 "status": "error",
-                "message": blue_core::voice::error(
+                "message": crate::voice::error(
                     &format!("Can't find RFC '{}'", title),
                     "Check the title's spelled right?"
                 )
@@ -46,7 +46,7 @@ pub fn handle_ping(state: &ProjectState, args: &Value) -> Result<Value, ServerEr
         "end" => handle_end(state, &rfc.title),
         _ => Ok(json!({
             "status": "error",
-            "message": blue_core::voice::error(
+            "message": crate::voice::error(
                 &format!("Unknown action '{}'", action),
                 "Use 'start', 'heartbeat', or 'end'"
             )
@@ -58,13 +58,13 @@ fn handle_start(
     state: &ProjectState,
     title: &str,
     session_type: SessionType,
-) -> Result<Value, ServerError> {
+) -> Result<Value, HandlerError> {
     // Check for existing session
     match state.store.get_active_session(title) {
         Ok(Some(existing)) => {
             return Ok(json!({
                 "status": "warning",
-                "message": blue_core::voice::info(
+                "message": crate::voice::info(
                     &format!("Session already active for '{}'", title),
                     Some(&format!("Started at {}, type: {}", existing.started_at, existing.session_type.as_str()))
                 ),
@@ -80,7 +80,7 @@ fn handle_start(
         Err(e) => {
             return Ok(json!({
                 "status": "error",
-                "message": blue_core::voice::error(
+                "message": crate::voice::error(
                     "Couldn't check for existing sessions",
                     &e.to_string()
                 )
@@ -100,7 +100,7 @@ fn handle_start(
     match state.store.upsert_session(&session) {
         Ok(_) => Ok(json!({
             "status": "success",
-            "message": blue_core::voice::success(
+            "message": crate::voice::success(
                 &format!("Started {} session for '{}'", session_type.as_str(), title),
                 Some("I'll keep an eye on things. Remember to send heartbeats!")
             ),
@@ -111,7 +111,7 @@ fn handle_start(
         })),
         Err(e) => Ok(json!({
             "status": "error",
-            "message": blue_core::voice::error(
+            "message": crate::voice::error(
                 "Couldn't start session",
                 &e.to_string()
             )
@@ -123,7 +123,7 @@ fn handle_heartbeat(
     state: &ProjectState,
     title: &str,
     session_type: SessionType,
-) -> Result<Value, ServerError> {
+) -> Result<Value, HandlerError> {
     let session = Session {
         id: None,
         rfc_title: title.to_string(),
@@ -136,7 +136,7 @@ fn handle_heartbeat(
     match state.store.upsert_session(&session) {
         Ok(_) => Ok(json!({
             "status": "success",
-            "message": blue_core::voice::success(
+            "message": crate::voice::success(
                 &format!("Heartbeat recorded for '{}'", title),
                 None::<&str>
             ),
@@ -147,7 +147,7 @@ fn handle_heartbeat(
         })),
         Err(e) => Ok(json!({
             "status": "error",
-            "message": blue_core::voice::error(
+            "message": crate::voice::error(
                 "Couldn't record heartbeat",
                 &e.to_string()
             )
@@ -155,18 +155,18 @@ fn handle_heartbeat(
     }
 }
 
-fn handle_end(state: &ProjectState, title: &str) -> Result<Value, ServerError> {
+fn handle_end(state: &ProjectState, title: &str) -> Result<Value, HandlerError> {
     match state.store.end_session(title) {
         Ok(_) => Ok(json!({
             "status": "success",
-            "message": blue_core::voice::success(
+            "message": crate::voice::success(
                 &format!("Session ended for '{}'", title),
                 Some("Good work! The RFC is free for others now.")
             )
         })),
         Err(e) => Ok(json!({
             "status": "error",
-            "message": blue_core::voice::error(
+            "message": crate::voice::error(
                 &format!("No active session for '{}'", title),
                 &e.to_string()
             )
@@ -175,7 +175,7 @@ fn handle_end(state: &ProjectState, title: &str) -> Result<Value, ServerError> {
 }
 
 /// Handle blue_session_list (list active sessions)
-pub fn handle_list(state: &ProjectState, _args: &Value) -> Result<Value, ServerError> {
+pub fn handle_list(state: &ProjectState, _args: &Value) -> Result<Value, HandlerError> {
     // First, clean up stale sessions (older than 5 minutes)
     let cleaned = state.store.cleanup_stale_sessions(5).unwrap_or(0);
 
@@ -184,7 +184,7 @@ pub fn handle_list(state: &ProjectState, _args: &Value) -> Result<Value, ServerE
     if sessions.is_empty() {
         return Ok(json!({
             "status": "success",
-            "message": blue_core::voice::info(
+            "message": crate::voice::info(
                 "No active sessions",
                 Some("The workspace is quiet. Good time to start something!")
             ),
@@ -207,7 +207,7 @@ pub fn handle_list(state: &ProjectState, _args: &Value) -> Result<Value, ServerE
 
     Ok(json!({
         "status": "success",
-        "message": blue_core::voice::info(
+        "message": crate::voice::info(
             &format!("{} active session{}", sessions.len(), if sessions.len() == 1 { "" } else { "s" }),
             None::<&str>
         ),
@@ -237,7 +237,7 @@ mod tests {
         let state = ProjectState::for_test();
 
         // Create an RFC first
-        let doc = blue_core::Document::new(DocType::Rfc, "test-rfc", "draft");
+        let doc = crate::Document::new(DocType::Rfc, "test-rfc", "draft");
         state.store.add_document(&doc).unwrap();
 
         let args = json!({

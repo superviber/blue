@@ -20,15 +20,15 @@
 //! - Schema hash detection in realm_check
 //! - 7-day expiration cleanup
 
-use blue_core::daemon::{DaemonDb, DaemonPaths};
-use blue_core::realm::{LocalRepoConfig, RealmService};
+use crate::daemon::{DaemonDb, DaemonPaths};
+use crate::realm::{LocalRepoConfig, RealmService};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::path::Path;
 
-use crate::error::ServerError;
+use crate::handler_error::HandlerError;
 
 /// Context detected from current working directory
 struct RealmContext {
@@ -38,23 +38,23 @@ struct RealmContext {
 }
 
 /// Detect realm context from cwd
-fn detect_context(cwd: Option<&Path>) -> Result<RealmContext, ServerError> {
-    let cwd = cwd.ok_or(ServerError::InvalidParams)?;
+fn detect_context(cwd: Option<&Path>) -> Result<RealmContext, HandlerError> {
+    let cwd = cwd.ok_or(HandlerError::InvalidParams)?;
 
     // Check for .blue/config.yaml
     let config_path = cwd.join(".blue").join("config.yaml");
     if !config_path.exists() {
-        return Err(ServerError::NotFound(
+        return Err(HandlerError::NotFound(
             "Not in a realm repo. Run 'blue realm admin join <realm>' first.".to_string(),
         ));
     }
 
     let local_config = LocalRepoConfig::load(&config_path).map_err(|e| {
-        ServerError::CommandFailed(format!("Failed to load .blue/config.yaml: {}", e))
+        HandlerError::CommandFailed(format!("Failed to load .blue/config.yaml: {}", e))
     })?;
 
     let paths = DaemonPaths::new()
-        .map_err(|e| ServerError::CommandFailed(format!("Failed to get daemon paths: {}", e)))?;
+        .map_err(|e| HandlerError::CommandFailed(format!("Failed to get daemon paths: {}", e)))?;
 
     let service = RealmService::new(paths.realms);
 
@@ -66,13 +66,13 @@ fn detect_context(cwd: Option<&Path>) -> Result<RealmContext, ServerError> {
 }
 
 /// Handle realm_status - get realm overview
-pub fn handle_status(cwd: Option<&Path>) -> Result<Value, ServerError> {
+pub fn handle_status(cwd: Option<&Path>) -> Result<Value, HandlerError> {
     let ctx = detect_context(cwd)?;
 
     let details = ctx
         .service
         .load_realm_details(&ctx.realm_name)
-        .map_err(|e| ServerError::CommandFailed(format!("Failed to load realm: {}", e)))?;
+        .map_err(|e| HandlerError::CommandFailed(format!("Failed to load realm: {}", e)))?;
 
     // Build repos list
     let repos: Vec<Value> = details
@@ -154,20 +154,20 @@ pub fn handle_status(cwd: Option<&Path>) -> Result<Value, ServerError> {
 }
 
 /// Handle realm_check - validate contracts/bindings
-pub fn handle_check(cwd: Option<&Path>, realm_arg: Option<&str>) -> Result<Value, ServerError> {
+pub fn handle_check(cwd: Option<&Path>, realm_arg: Option<&str>) -> Result<Value, HandlerError> {
     let ctx = detect_context(cwd)?;
     let realm_name = realm_arg.unwrap_or(&ctx.realm_name);
 
     let result = ctx
         .service
         .check_realm(realm_name)
-        .map_err(|e| ServerError::CommandFailed(format!("Failed to check realm: {}", e)))?;
+        .map_err(|e| HandlerError::CommandFailed(format!("Failed to check realm: {}", e)))?;
 
     // Load realm details for schema integrity check
     let details = ctx
         .service
         .load_realm_details(realm_name)
-        .map_err(|e| ServerError::CommandFailed(format!("Failed to load realm details: {}", e)))?;
+        .map_err(|e| HandlerError::CommandFailed(format!("Failed to load realm details: {}", e)))?;
 
     let errors: Vec<Value> = result
         .errors
@@ -236,20 +236,20 @@ pub fn handle_contract_get(
     cwd: Option<&Path>,
     domain_name: &str,
     contract_name: &str,
-) -> Result<Value, ServerError> {
+) -> Result<Value, HandlerError> {
     let ctx = detect_context(cwd)?;
 
     let details = ctx
         .service
         .load_realm_details(&ctx.realm_name)
-        .map_err(|e| ServerError::CommandFailed(format!("Failed to load realm: {}", e)))?;
+        .map_err(|e| HandlerError::CommandFailed(format!("Failed to load realm: {}", e)))?;
 
     // Find the domain
     let domain = details
         .domains
         .iter()
         .find(|d| d.domain.name == domain_name)
-        .ok_or_else(|| ServerError::NotFound(format!("Domain '{}' not found", domain_name)))?;
+        .ok_or_else(|| HandlerError::NotFound(format!("Domain '{}' not found", domain_name)))?;
 
     // Find the contract
     let contract = domain
@@ -257,7 +257,7 @@ pub fn handle_contract_get(
         .iter()
         .find(|c| c.name == contract_name)
         .ok_or_else(|| {
-            ServerError::NotFound(format!(
+            HandlerError::NotFound(format!(
                 "Contract '{}' not found in domain '{}'",
                 contract_name, domain_name
             ))
@@ -364,31 +364,31 @@ impl SessionState {
     }
 
     /// Save session to .blue/session file
-    pub fn save(&self, cwd: &Path) -> Result<(), ServerError> {
+    pub fn save(&self, cwd: &Path) -> Result<(), HandlerError> {
         let blue_dir = cwd.join(".blue");
         if !blue_dir.exists() {
-            return Err(ServerError::NotFound(
+            return Err(HandlerError::NotFound(
                 "Not in a realm repo. No .blue directory.".to_string(),
             ));
         }
 
         let session_path = blue_dir.join("session");
         let content = serde_yaml::to_string(self).map_err(|e| {
-            ServerError::CommandFailed(format!("Failed to serialize session: {}", e))
+            HandlerError::CommandFailed(format!("Failed to serialize session: {}", e))
         })?;
 
         std::fs::write(&session_path, content)
-            .map_err(|e| ServerError::CommandFailed(format!("Failed to write session: {}", e)))?;
+            .map_err(|e| HandlerError::CommandFailed(format!("Failed to write session: {}", e)))?;
 
         Ok(())
     }
 
     /// Delete session file
-    pub fn delete(cwd: &Path) -> Result<(), ServerError> {
+    pub fn delete(cwd: &Path) -> Result<(), HandlerError> {
         let session_path = cwd.join(".blue").join("session");
         if session_path.exists() {
             std::fs::remove_file(&session_path).map_err(|e| {
-                ServerError::CommandFailed(format!("Failed to delete session: {}", e))
+                HandlerError::CommandFailed(format!("Failed to delete session: {}", e))
             })?;
         }
         Ok(())
@@ -409,8 +409,8 @@ fn generate_session_id() -> String {
 pub fn handle_session_start(
     cwd: Option<&Path>,
     active_rfc: Option<&str>,
-) -> Result<Value, ServerError> {
-    let cwd = cwd.ok_or(ServerError::InvalidParams)?;
+) -> Result<Value, HandlerError> {
+    let cwd = cwd.ok_or(HandlerError::InvalidParams)?;
     let ctx = detect_context(Some(cwd))?;
 
     // Check for existing session
@@ -434,7 +434,7 @@ pub fn handle_session_start(
     let details = ctx
         .service
         .load_realm_details(&ctx.realm_name)
-        .map_err(|e| ServerError::CommandFailed(format!("Failed to load realm: {}", e)))?;
+        .map_err(|e| HandlerError::CommandFailed(format!("Failed to load realm: {}", e)))?;
 
     let active_domains: Vec<String> = details
         .domains
@@ -513,12 +513,12 @@ pub fn handle_session_start(
 }
 
 /// Handle session_stop - end session with summary
-pub fn handle_session_stop(cwd: Option<&Path>) -> Result<Value, ServerError> {
-    let cwd = cwd.ok_or(ServerError::InvalidParams)?;
+pub fn handle_session_stop(cwd: Option<&Path>) -> Result<Value, HandlerError> {
+    let cwd = cwd.ok_or(HandlerError::InvalidParams)?;
 
     // Load existing session
     let session = SessionState::load(cwd)
-        .ok_or_else(|| ServerError::NotFound("No active session. Nothing to stop.".to_string()))?;
+        .ok_or_else(|| HandlerError::NotFound("No active session. Nothing to stop.".to_string()))?;
 
     // Calculate session duration
     let duration = Utc::now().signed_duration_since(session.started_at);
@@ -565,15 +565,15 @@ pub fn handle_worktree_create(
     cwd: Option<&Path>,
     rfc: &str,
     repos: Option<Vec<&str>>,
-) -> Result<Value, ServerError> {
-    let cwd = cwd.ok_or(ServerError::InvalidParams)?;
+) -> Result<Value, HandlerError> {
+    let cwd = cwd.ok_or(HandlerError::InvalidParams)?;
     let ctx = detect_context(Some(cwd))?;
 
     // Load realm details to find domain peers
     let details = ctx
         .service
         .load_realm_details(&ctx.realm_name)
-        .map_err(|e| ServerError::CommandFailed(format!("Failed to load realm: {}", e)))?;
+        .map_err(|e| HandlerError::CommandFailed(format!("Failed to load realm: {}", e)))?;
 
     // Determine which repos to create worktrees for
     let (selected_repos, selection_reason) = if let Some(explicit_repos) = repos {
@@ -615,7 +615,7 @@ pub fn handle_worktree_create(
 
     // Get daemon paths for worktree location
     let paths = DaemonPaths::new()
-        .map_err(|e| ServerError::CommandFailed(format!("Failed to get daemon paths: {}", e)))?;
+        .map_err(|e| HandlerError::CommandFailed(format!("Failed to get daemon paths: {}", e)))?;
 
     // Create worktrees under ~/.blue/worktrees/<realm>/<rfc>/
     let worktree_base = paths.base.join("worktrees").join(&ctx.realm_name).join(rfc);
@@ -764,15 +764,15 @@ fn create_git_worktree(
 /// Handle pr_status - get PR readiness across realm repos
 ///
 /// Shows uncommitted changes, commits ahead, and PR status for each repo.
-pub fn handle_pr_status(cwd: Option<&Path>, rfc: Option<&str>) -> Result<Value, ServerError> {
-    let cwd = cwd.ok_or(ServerError::InvalidParams)?;
+pub fn handle_pr_status(cwd: Option<&Path>, rfc: Option<&str>) -> Result<Value, HandlerError> {
+    let cwd = cwd.ok_or(HandlerError::InvalidParams)?;
     let ctx = detect_context(Some(cwd))?;
 
     // Load realm details
     let details = ctx
         .service
         .load_realm_details(&ctx.realm_name)
-        .map_err(|e| ServerError::CommandFailed(format!("Failed to load realm: {}", e)))?;
+        .map_err(|e| HandlerError::CommandFailed(format!("Failed to load realm: {}", e)))?;
 
     let branch_name = rfc.map(|r| format!("rfc/{}", r));
     let mut repos_status: Vec<Value> = Vec::new();
@@ -940,16 +940,16 @@ fn get_pr_info(repo_path: &std::path::Path, branch_name: Option<&str>) -> Option
 pub fn handle_notifications_list(
     cwd: Option<&Path>,
     state_filter: Option<&str>,
-) -> Result<Value, ServerError> {
-    let cwd = cwd.ok_or(ServerError::InvalidParams)?;
+) -> Result<Value, HandlerError> {
+    let cwd = cwd.ok_or(HandlerError::InvalidParams)?;
     let ctx = detect_context(Some(cwd))?;
 
     // Open daemon database
     let paths = DaemonPaths::new()
-        .map_err(|e| ServerError::CommandFailed(format!("Failed to get daemon paths: {}", e)))?;
+        .map_err(|e| HandlerError::CommandFailed(format!("Failed to get daemon paths: {}", e)))?;
 
     let db = DaemonDb::open(&paths.database).map_err(|e| {
-        ServerError::CommandFailed(format!("Failed to open daemon database: {}", e))
+        HandlerError::CommandFailed(format!("Failed to open daemon database: {}", e))
     })?;
 
     // Clean up expired notifications (7+ days old)
@@ -958,13 +958,13 @@ pub fn handle_notifications_list(
     // Get notifications with state
     let notifications = db
         .list_notifications_with_state(&ctx.realm_name, &ctx.repo_name, state_filter)
-        .map_err(|e| ServerError::CommandFailed(format!("Failed to list notifications: {}", e)))?;
+        .map_err(|e| HandlerError::CommandFailed(format!("Failed to list notifications: {}", e)))?;
 
     // Filter to only domains the current repo participates in
     let details = ctx
         .service
         .load_realm_details(&ctx.realm_name)
-        .map_err(|e| ServerError::CommandFailed(format!("Failed to load realm: {}", e)))?;
+        .map_err(|e| HandlerError::CommandFailed(format!("Failed to load realm: {}", e)))?;
 
     let participating_domains: Vec<String> = details
         .domains
@@ -1069,7 +1069,7 @@ fn canonical_json(value: &Value) -> String {
 /// Computes schema hashes for contracts. Full comparison requires stored hashes
 /// which will be added in a future iteration.
 pub fn check_schema_integrity(
-    details: &blue_core::realm::RealmDetails,
+    details: &crate::realm::RealmDetails,
     repo_name: &str,
 ) -> Vec<Value> {
     let mut schema_info = Vec::new();
@@ -1148,7 +1148,7 @@ fn fetch_pending_notifications(ctx: &RealmContext) -> Vec<Value> {
 
 // ─── Phase 5: RFC Validation (RFC 0038) ─────────────────────────────────────
 
-use blue_core::realm::LocalRealmDependencies;
+use crate::realm::LocalRealmDependencies;
 
 /// RFC dependency status for cross-repo coordination
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1171,8 +1171,8 @@ pub struct RfcDepStatus {
 ///
 /// Loads .blue/realm.toml and checks status of cross-repo RFC dependencies.
 /// Returns a status matrix showing resolved/unresolved dependencies.
-pub fn handle_validate_realm(cwd: Option<&Path>, strict: bool) -> Result<Value, ServerError> {
-    let cwd = cwd.ok_or(ServerError::InvalidParams)?;
+pub fn handle_validate_realm(cwd: Option<&Path>, strict: bool) -> Result<Value, HandlerError> {
+    let cwd = cwd.ok_or(HandlerError::InvalidParams)?;
 
     // Check for .blue/realm.toml
     if !LocalRealmDependencies::exists(cwd) {
@@ -1191,7 +1191,7 @@ pub fn handle_validate_realm(cwd: Option<&Path>, strict: bool) -> Result<Value, 
 
     // Load realm dependencies
     let realm_deps = LocalRealmDependencies::load_from_blue(cwd).map_err(|e| {
-        ServerError::CommandFailed(format!("Failed to load .blue/realm.toml: {}", e))
+        HandlerError::CommandFailed(format!("Failed to load .blue/realm.toml: {}", e))
     })?;
 
     // Collect all dependencies across all RFCs

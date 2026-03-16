@@ -12,7 +12,6 @@ path = "src/main.rs"
 
 [dependencies]
 blue-core.workspace = true
-blue-mcp.workspace = true
 
 clap.workspace = true
 anyhow.workspace = true

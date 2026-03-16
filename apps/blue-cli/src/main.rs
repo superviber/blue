@@ -382,6 +382,92 @@ enum Commands {
         command: ReminderCommands,
     },
 
+    /// Delete a document
+    Delete {
+        /// Document type (rfc, spike, adr, decision, audit, prd, dialogue, postmortem, runbook)
+        #[arg(long)]
+        doc_type: String,
+        /// Document title
+        title: String,
+        /// Force delete without confirmation
+        #[arg(long)]
+        force: bool,
+        /// Permanently delete (skip trash)
+        #[arg(long)]
+        permanent: bool,
+    },
+    /// Restore a deleted document
+    Restore {
+        /// Document type
+        #[arg(long)]
+        doc_type: String,
+        /// Document title
+        title: String,
+    },
+    /// List deleted documents
+    DeletedList {
+        /// Filter by document type
+        #[arg(long)]
+        doc_type: Option<String>,
+    },
+    /// Purge old deleted documents
+    PurgeDeleted {
+        /// Days threshold (default 7)
+        #[arg(long, default_value = "7")]
+        days: u64,
+    },
+
+    /// Release management
+    Release {
+        #[command(subcommand)]
+        command: ReleaseCommands,
+    },
+    /// Post-mortem commands
+    Postmortem {
+        #[command(subcommand)]
+        command: PostmortemCommands,
+    },
+    /// Runbook commands
+    Runbook {
+        #[command(subcommand)]
+        command: RunbookCommands,
+    },
+    /// Decision commands
+    #[command(name = "decision")]
+    Decision {
+        #[command(subcommand)]
+        command: DecisionCommands,
+    },
+    /// Staging environment commands
+    Staging {
+        #[command(subcommand)]
+        command: StagingCommands,
+    },
+    /// Environment commands
+    Env {
+        #[command(subcommand)]
+        command: EnvCommands,
+    },
+    /// Interactive onboarding guide
+    Guide {
+        /// Action (start, resume, next, skip, reset, status)
+        #[arg(default_value = "start")]
+        action: String,
+        /// Choice for guided steps
+        #[arg(long)]
+        choice: Option<String>,
+    },
+    /// Project health check
+    HealthCheck,
+    /// Sync database with filesystem
+    #[command(name = "sync-db")]
+    SyncDb,
+    /// Notifications
+    Notifications {
+        #[command(subcommand)]
+        command: NotificationCommands,
+    },
+
     /// Jira integration commands (RFC 0063)
     Jira {
         #[command(subcommand)]
@@ -701,6 +787,39 @@ enum PrCommands {
         #[arg(long)]
         title: String,
     },
+    /// Verify PR test plan
+    Verify {
+        /// PR number
+        #[arg(long)]
+        pr_number: Option<u64>,
+    },
+    /// Check a test item as verified
+    CheckItem {
+        /// PR number
+        #[arg(long)]
+        pr_number: u64,
+        /// Item text
+        #[arg(long)]
+        item: String,
+        /// Verified by
+        #[arg(long)]
+        verified_by: Option<String>,
+    },
+    /// Check PR approvals
+    CheckApprovals {
+        /// PR number
+        #[arg(long)]
+        pr_number: Option<u64>,
+    },
+    /// Merge PR
+    Merge {
+        /// PR number
+        #[arg(long)]
+        pr_number: u64,
+        /// Use squash merge
+        #[arg(long, default_value = "true")]
+        squash: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -848,6 +967,81 @@ enum DialogueCommands {
         /// Panel specification as JSON array
         #[arg(long)]
         panel: String,
+    },
+    /// Lint a dialogue file
+    Lint {
+        /// File path
+        file: String,
+    },
+    /// Extract dialogue from JSONL
+    Extract {
+        /// File path or task ID
+        source: String,
+    },
+    /// Save dialogue
+    Save {
+        /// Dialogue title
+        title: String,
+        /// Source file path or task ID
+        #[arg(long)]
+        source: String,
+        /// Summary
+        #[arg(long)]
+        summary: Option<String>,
+        /// Linked RFC title
+        #[arg(long)]
+        rfc: Option<String>,
+    },
+    /// Get round context for convergence tracking
+    RoundContext {
+        /// Dialogue ID
+        #[arg(long)]
+        dialogue_id: String,
+        /// Round number
+        #[arg(long)]
+        round: u64,
+    },
+    /// Create a new expert mid-dialogue
+    ExpertCreate {
+        /// Dialogue ID
+        #[arg(long)]
+        dialogue_id: String,
+        /// Expert slug
+        #[arg(long)]
+        expert_slug: String,
+        /// Expert role
+        #[arg(long)]
+        role: String,
+        /// Expert tier
+        #[arg(long)]
+        tier: Option<String>,
+        /// Reason for creation
+        #[arg(long)]
+        creation_reason: Option<String>,
+        /// First round number
+        #[arg(long)]
+        first_round: Option<u64>,
+    },
+    /// Register round data
+    RoundRegister {
+        /// Dialogue ID
+        #[arg(long)]
+        dialogue_id: String,
+        /// Round number
+        #[arg(long)]
+        round: u64,
+        /// Round data as JSON
+        #[arg(long)]
+        data: String,
+    },
+    /// Register verdict
+    VerdictRegister {
+        /// Dialogue ID
+        #[arg(long)]
+        dialogue_id: String,
+        /// Verdict data as JSON
+        #[arg(long)]
+        data: String,
     },
     /// Sample a new panel from the expert pool
     SamplePanel {
@@ -1108,6 +1302,197 @@ enum OrgCommands {
     },
 }
 
+// ==================== RFC 0072: New Command Enums ====================
+
+#[derive(Subcommand)]
+enum ReleaseCommands {
+    /// Create a new release
+    Create {
+        /// Version (auto-detected if omitted)
+        version: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum PostmortemCommands {
+    /// Create a post-mortem
+    Create {
+        /// Title
+        title: String,
+        /// Severity (P1-P4)
+        #[arg(long)]
+        severity: String,
+        /// Summary
+        #[arg(long)]
+        summary: String,
+        /// Root cause
+        #[arg(long)]
+        root_cause: Option<String>,
+        /// Duration
+        #[arg(long)]
+        duration: Option<String>,
+        /// Impact
+        #[arg(long)]
+        impact: Option<String>,
+    },
+    /// Convert post-mortem action to RFC
+    ActionToRfc {
+        /// Post-mortem title
+        #[arg(long)]
+        postmortem: String,
+        /// Action description
+        #[arg(long)]
+        action: String,
+        /// RFC title (auto-generated if omitted)
+        #[arg(long)]
+        rfc_title: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum RunbookCommands {
+    /// Create a runbook
+    Create {
+        /// Runbook title
+        title: String,
+        /// Source RFC
+        #[arg(long)]
+        source_rfc: Option<String>,
+        /// Service name
+        #[arg(long)]
+        service: Option<String>,
+        /// Owner
+        #[arg(long)]
+        owner: Option<String>,
+    },
+    /// Update a runbook
+    Update {
+        /// Runbook title
+        title: String,
+        /// Add operation
+        #[arg(long)]
+        add_operation: Option<String>,
+        /// Add troubleshooting step
+        #[arg(long)]
+        add_troubleshooting: Option<String>,
+    },
+    /// Look up runbook by action
+    Lookup {
+        /// Action to look up
+        action: String,
+    },
+    /// List all registered actions
+    Actions,
+}
+
+#[derive(Subcommand)]
+enum DecisionCommands {
+    /// Create a decision record
+    Create {
+        /// Decision title
+        title: String,
+        /// The decision
+        #[arg(long)]
+        decision: String,
+        /// Rationale
+        #[arg(long)]
+        rationale: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum StagingCommands {
+    /// Lock a staging resource
+    Lock {
+        /// Resource name
+        resource: String,
+        /// Locked by
+        #[arg(long)]
+        locked_by: String,
+        /// Agent ID
+        #[arg(long)]
+        agent_id: Option<String>,
+        /// Duration in minutes
+        #[arg(long, default_value = "60")]
+        duration: u64,
+    },
+    /// Unlock a staging resource
+    Unlock {
+        /// Resource name
+        resource: String,
+        /// Locked by
+        #[arg(long)]
+        locked_by: String,
+    },
+    /// Show staging status
+    Status {
+        /// Resource name
+        resource: Option<String>,
+    },
+    /// Clean up expired locks
+    Cleanup,
+    /// List deployments
+    Deployments {
+        /// Filter by status
+        #[arg(long)]
+        status: Option<String>,
+        /// Check for expired
+        #[arg(long)]
+        check_expired: bool,
+    },
+    /// Create staging environment
+    Create {
+        /// Stack name
+        #[arg(long)]
+        stack: String,
+        /// Dry run
+        #[arg(long)]
+        dry_run: bool,
+        /// TTL in hours
+        #[arg(long, default_value = "24")]
+        ttl_hours: u64,
+    },
+    /// Destroy staging environment
+    Destroy {
+        /// Environment name
+        name: String,
+        /// Dry run
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Estimate staging costs
+    Cost {
+        /// Duration in hours
+        #[arg(long, default_value = "24")]
+        duration_hours: u64,
+    },
+}
+
+#[derive(Subcommand)]
+enum EnvCommands {
+    /// Detect external dependencies
+    Detect,
+    /// Generate isolated environment config
+    Mock {
+        /// Agent ID
+        #[arg(long)]
+        agent_id: Option<String>,
+        /// Worktree path
+        #[arg(long)]
+        worktree_path: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum NotificationCommands {
+    /// List notifications
+    List {
+        /// Filter by state (pending, seen, expired, all)
+        #[arg(long, default_value = "pending")]
+        state: String,
+    },
+}
+
 /// Entry point - handles guard synchronously before tokio (RFC 0049)
 fn main() {
     // RFC 0049: Handle guard command synchronously before tokio runtime
@@ -1153,7 +1538,7 @@ async fn tokio_main() -> Result<()> {
         Some(Commands::Status) => match get_project_state() {
             Ok(state) => {
                 let args = serde_json::json!({});
-                match blue_mcp::handlers::status::handle_status(&state, &args) {
+                match blue_core::handlers::status::handle_status(&state, &args) {
                     Ok(result) => {
                         let project = result
                             .get("project")
@@ -1289,7 +1674,7 @@ async fn tokio_main() -> Result<()> {
         Some(Commands::Next) => {
             let state = get_project_state()?;
             let args = serde_json::json!({});
-            match blue_mcp::handlers::status::handle_next(&state, &args) {
+            match blue_core::handlers::status::handle_next(&state, &args) {
                 Ok(result) => {
                     if let Some(recs) = result.get("recommendations").and_then(|v| v.as_array()) {
                         for rec in recs {
@@ -1306,7 +1691,8 @@ async fn tokio_main() -> Result<()> {
             }
         }
         Some(Commands::Mcp { .. }) => {
-            blue_mcp::run().await?;
+            eprintln!("MCP server removed (RFC 0072). Use `blue <command>` directly.");
+            std::process::exit(1);
         }
         Some(Commands::Daemon { command }) => {
             handle_daemon_command(command).await?;
@@ -1323,11 +1709,42 @@ async fn tokio_main() -> Result<()> {
         Some(Commands::Worktree { command }) => {
             handle_local_worktree_command(command).await?;
         }
-        Some(Commands::Pr { command }) => match command {
-            PrCommands::Create { title } => {
-                println!("Creating PR: {}", title);
+        Some(Commands::Pr { command }) => {
+            let state = get_project_state()?;
+            match command {
+                PrCommands::Create { title } => {
+                    println!("Creating PR: {}", title);
+                }
+                PrCommands::Verify { pr_number } => {
+                    let args = json!({ "pr_number": pr_number });
+                    match blue_core::handlers::pr::handle_verify(&state, &args) {
+                        Ok(result) => println!("{}", serde_json::to_string_pretty(&result)?),
+                        Err(e) => { eprintln!("Error: {}", e); std::process::exit(1); }
+                    }
+                }
+                PrCommands::CheckItem { pr_number, item, verified_by } => {
+                    let args = json!({ "pr_number": pr_number, "item": item, "verified_by": verified_by });
+                    match blue_core::handlers::pr::handle_check_item(&state, &args) {
+                        Ok(result) => println!("{}", serde_json::to_string_pretty(&result)?),
+                        Err(e) => { eprintln!("Error: {}", e); std::process::exit(1); }
+                    }
+                }
+                PrCommands::CheckApprovals { pr_number } => {
+                    let args = json!({ "pr_number": pr_number });
+                    match blue_core::handlers::pr::handle_check_approvals(&state, &args) {
+                        Ok(result) => println!("{}", serde_json::to_string_pretty(&result)?),
+                        Err(e) => { eprintln!("Error: {}", e); std::process::exit(1); }
+                    }
+                }
+                PrCommands::Merge { pr_number, squash } => {
+                    let args = json!({ "pr_number": pr_number, "squash": squash });
+                    match blue_core::handlers::pr::handle_merge(&state, &args) {
+                        Ok(result) => println!("{}", serde_json::to_string_pretty(&result)?),
+                        Err(e) => { eprintln!("Error: {}", e); std::process::exit(1); }
+                    }
+                }
             }
-        },
+        }
         Some(Commands::Lint) => {
             println!("Checking standards.\n");
 
@@ -1458,6 +1875,284 @@ async fn tokio_main() -> Result<()> {
         }
         Some(Commands::Reminder { command }) => {
             handle_reminder_command(command).await?;
+        }
+        // RFC 0072: Document deletion commands
+        Some(Commands::Delete { doc_type, title, force, permanent }) => {
+            let mut state = get_project_state()?;
+            let dt = blue_core::DocType::parse(&doc_type)
+                .ok_or_else(|| anyhow::anyhow!("Unknown doc type: {}", doc_type))?;
+            match blue_core::handlers::delete::handle_delete(&mut state, dt, &title, force, permanent) {
+                Ok(result) => println!("{}", serde_json::to_string_pretty(&result)?),
+                Err(e) => { eprintln!("Error: {}", e); std::process::exit(1); }
+            }
+        }
+        Some(Commands::Restore { doc_type, title }) => {
+            let mut state = get_project_state()?;
+            let dt = blue_core::DocType::parse(&doc_type)
+                .ok_or_else(|| anyhow::anyhow!("Unknown doc type: {}", doc_type))?;
+            match blue_core::handlers::delete::handle_restore(&mut state, dt, &title) {
+                Ok(result) => println!("{}", serde_json::to_string_pretty(&result)?),
+                Err(e) => { eprintln!("Error: {}", e); std::process::exit(1); }
+            }
+        }
+        Some(Commands::DeletedList { doc_type }) => {
+            let state = get_project_state()?;
+            let dt = doc_type.as_deref().and_then(blue_core::DocType::parse);
+            match blue_core::handlers::delete::handle_list_deleted(&state, dt) {
+                Ok(result) => println!("{}", serde_json::to_string_pretty(&result)?),
+                Err(e) => { eprintln!("Error: {}", e); std::process::exit(1); }
+            }
+        }
+        Some(Commands::PurgeDeleted { days }) => {
+            let mut state = get_project_state()?;
+            match blue_core::handlers::delete::handle_purge_deleted(&mut state, days as i64) {
+                Ok(result) => println!("{}", serde_json::to_string_pretty(&result)?),
+                Err(e) => { eprintln!("Error: {}", e); std::process::exit(1); }
+            }
+        }
+        // RFC 0072: Release commands
+        Some(Commands::Release { command }) => {
+            let state = get_project_state()?;
+            match command {
+                ReleaseCommands::Create { version } => {
+                    let args = json!({ "version": version });
+                    match blue_core::handlers::release::handle_create(&state, &args) {
+                        Ok(result) => println!("{}", serde_json::to_string_pretty(&result)?),
+                        Err(e) => { eprintln!("Error: {}", e); std::process::exit(1); }
+                    }
+                }
+            }
+        }
+        // RFC 0072: Post-mortem commands
+        Some(Commands::Postmortem { command }) => {
+            let mut state = get_project_state()?;
+            match command {
+                PostmortemCommands::Create { title, severity, summary, root_cause, duration, impact } => {
+                    let args = json!({
+                        "title": title,
+                        "severity": severity,
+                        "summary": summary,
+                        "root_cause": root_cause,
+                        "duration": duration,
+                        "impact": impact,
+                    });
+                    match blue_core::handlers::postmortem::handle_create(&mut state, &args) {
+                        Ok(result) => println!("{}", serde_json::to_string_pretty(&result)?),
+                        Err(e) => { eprintln!("Error: {}", e); std::process::exit(1); }
+                    }
+                }
+                PostmortemCommands::ActionToRfc { postmortem, action, rfc_title } => {
+                    let args = json!({
+                        "postmortem_title": postmortem,
+                        "action": action,
+                        "rfc_title": rfc_title,
+                    });
+                    match blue_core::handlers::postmortem::handle_action_to_rfc(&mut state, &args) {
+                        Ok(result) => println!("{}", serde_json::to_string_pretty(&result)?),
+                        Err(e) => { eprintln!("Error: {}", e); std::process::exit(1); }
+                    }
+                }
+            }
+        }
+        // RFC 0072: Runbook commands
+        Some(Commands::Runbook { command }) => {
+            let mut state = get_project_state()?;
+            match command {
+                RunbookCommands::Create { title, source_rfc, service, owner } => {
+                    let args = json!({
+                        "title": title,
+                        "source_rfc": source_rfc,
+                        "service": service,
+                        "owner": owner,
+                    });
+                    match blue_core::handlers::runbook::handle_create(&mut state, &args) {
+                        Ok(result) => println!("{}", serde_json::to_string_pretty(&result)?),
+                        Err(e) => { eprintln!("Error: {}", e); std::process::exit(1); }
+                    }
+                }
+                RunbookCommands::Update { title, add_operation, add_troubleshooting } => {
+                    let args = json!({
+                        "title": title,
+                        "add_operation": add_operation,
+                        "add_troubleshooting": add_troubleshooting,
+                    });
+                    match blue_core::handlers::runbook::handle_update(&mut state, &args) {
+                        Ok(result) => println!("{}", serde_json::to_string_pretty(&result)?),
+                        Err(e) => { eprintln!("Error: {}", e); std::process::exit(1); }
+                    }
+                }
+                RunbookCommands::Lookup { action } => {
+                    let args = json!({ "action": action });
+                    match blue_core::handlers::runbook::handle_lookup(&state, &args) {
+                        Ok(result) => println!("{}", serde_json::to_string_pretty(&result)?),
+                        Err(e) => { eprintln!("Error: {}", e); std::process::exit(1); }
+                    }
+                }
+                RunbookCommands::Actions => {
+                    match blue_core::handlers::runbook::handle_actions(&state) {
+                        Ok(result) => println!("{}", serde_json::to_string_pretty(&result)?),
+                        Err(e) => { eprintln!("Error: {}", e); std::process::exit(1); }
+                    }
+                }
+            }
+        }
+        // RFC 0072: Decision commands
+        Some(Commands::Decision { command }) => {
+            let state = get_project_state()?;
+            match command {
+                DecisionCommands::Create { title, decision, rationale } => {
+                    let args = json!({
+                        "title": title,
+                        "decision": decision,
+                        "rationale": rationale,
+                    });
+                    match blue_core::handlers::decision::handle_create(&state, &args) {
+                        Ok(result) => println!("{}", serde_json::to_string_pretty(&result)?),
+                        Err(e) => { eprintln!("Error: {}", e); std::process::exit(1); }
+                    }
+                }
+            }
+        }
+        // RFC 0072: Staging commands
+        Some(Commands::Staging { command }) => {
+            match command {
+                StagingCommands::Lock { resource, locked_by, agent_id, duration } => {
+                    let state = get_project_state()?;
+                    let args = json!({
+                        "resource": resource,
+                        "locked_by": locked_by,
+                        "agent_id": agent_id,
+                        "duration_minutes": duration,
+                    });
+                    match blue_core::handlers::staging::handle_lock(&state, &args) {
+                        Ok(result) => println!("{}", serde_json::to_string_pretty(&result)?),
+                        Err(e) => { eprintln!("Error: {}", e); std::process::exit(1); }
+                    }
+                }
+                StagingCommands::Unlock { resource, locked_by } => {
+                    let state = get_project_state()?;
+                    let args = json!({ "resource": resource, "locked_by": locked_by });
+                    match blue_core::handlers::staging::handle_unlock(&state, &args) {
+                        Ok(result) => println!("{}", serde_json::to_string_pretty(&result)?),
+                        Err(e) => { eprintln!("Error: {}", e); std::process::exit(1); }
+                    }
+                }
+                StagingCommands::Status { resource } => {
+                    let state = get_project_state()?;
+                    let args = json!({ "resource": resource });
+                    match blue_core::handlers::staging::handle_status(&state, &args) {
+                        Ok(result) => println!("{}", serde_json::to_string_pretty(&result)?),
+                        Err(e) => { eprintln!("Error: {}", e); std::process::exit(1); }
+                    }
+                }
+                StagingCommands::Cleanup => {
+                    let state = get_project_state()?;
+                    let args = json!({});
+                    match blue_core::handlers::staging::handle_cleanup(&state, &args) {
+                        Ok(result) => println!("{}", serde_json::to_string_pretty(&result)?),
+                        Err(e) => { eprintln!("Error: {}", e); std::process::exit(1); }
+                    }
+                }
+                StagingCommands::Deployments { status, check_expired } => {
+                    let state = get_project_state()?;
+                    let args = json!({ "status": status, "check_expired": check_expired });
+                    match blue_core::handlers::staging::handle_deployments(&state, &args) {
+                        Ok(result) => println!("{}", serde_json::to_string_pretty(&result)?),
+                        Err(e) => { eprintln!("Error: {}", e); std::process::exit(1); }
+                    }
+                }
+                StagingCommands::Create { stack, dry_run, ttl_hours } => {
+                    let cwd = std::env::current_dir()?;
+                    let args = json!({ "stack": stack, "dry_run": dry_run, "ttl_hours": ttl_hours });
+                    match blue_core::handlers::staging::handle_create(&args, &cwd) {
+                        Ok(result) => println!("{}", serde_json::to_string_pretty(&result)?),
+                        Err(e) => { eprintln!("Error: {}", e); std::process::exit(1); }
+                    }
+                }
+                StagingCommands::Destroy { name, dry_run } => {
+                    let cwd = std::env::current_dir()?;
+                    let args = json!({ "name": name, "dry_run": dry_run });
+                    match blue_core::handlers::staging::handle_destroy(&args, &cwd) {
+                        Ok(result) => println!("{}", serde_json::to_string_pretty(&result)?),
+                        Err(e) => { eprintln!("Error: {}", e); std::process::exit(1); }
+                    }
+                }
+                StagingCommands::Cost { duration_hours } => {
+                    let cwd = std::env::current_dir()?;
+                    let args = json!({ "duration_hours": duration_hours });
+                    match blue_core::handlers::staging::handle_cost(&args, &cwd) {
+                        Ok(result) => println!("{}", serde_json::to_string_pretty(&result)?),
+                        Err(e) => { eprintln!("Error: {}", e); std::process::exit(1); }
+                    }
+                }
+            }
+        }
+        // RFC 0072: Environment commands
+        Some(Commands::Env { command }) => {
+            let cwd = std::env::current_dir()?;
+            match command {
+                EnvCommands::Detect => {
+                    let args = json!({});
+                    match blue_core::handlers::env::handle_detect(&args, &cwd) {
+                        Ok(result) => println!("{}", serde_json::to_string_pretty(&result)?),
+                        Err(e) => { eprintln!("Error: {}", e); std::process::exit(1); }
+                    }
+                }
+                EnvCommands::Mock { agent_id, worktree_path } => {
+                    let args = json!({ "agent_id": agent_id, "worktree_path": worktree_path });
+                    match blue_core::handlers::env::handle_mock(&args, &cwd) {
+                        Ok(result) => println!("{}", serde_json::to_string_pretty(&result)?),
+                        Err(e) => { eprintln!("Error: {}", e); std::process::exit(1); }
+                    }
+                }
+            }
+        }
+        // RFC 0072: Guide command
+        Some(Commands::Guide { action, choice }) => {
+            let cwd = std::env::current_dir()?;
+            let blue_path = cwd.join(".blue");
+            let args = json!({ "action": action, "choice": choice });
+            match blue_core::handlers::guide::handle_guide(&args, &blue_path) {
+                Ok(result) => println!("{}", serde_json::to_string_pretty(&result)?),
+                Err(e) => { eprintln!("Error: {}", e); std::process::exit(1); }
+            }
+        }
+        // RFC 0072: Health check
+        Some(Commands::HealthCheck) => {
+            let state = get_project_state()?;
+            let args = json!({});
+            match blue_core::handlers::status::handle_status(&state, &args) {
+                Ok(result) => {
+                    println!("{}", serde_json::to_string_pretty(&result)?);
+                }
+                Err(e) => { eprintln!("Error: {}", e); std::process::exit(1); }
+            }
+        }
+        // RFC 0072: Sync database with filesystem
+        Some(Commands::SyncDb) => {
+            let cwd = std::env::current_dir()?;
+            println!("Syncing database with filesystem...");
+            let args = json!({});
+            match blue_core::handlers::lint::handle_lint(&args, &cwd) {
+                Ok(result) => {
+                    println!("Sync complete.");
+                    println!("{}", serde_json::to_string_pretty(&result)?);
+                }
+                Err(e) => { eprintln!("Error: {}", e); std::process::exit(1); }
+            }
+        }
+        // RFC 0072: Notifications
+        Some(Commands::Notifications { command }) => {
+            match command {
+                NotificationCommands::List { state } => {
+                    let cwd = std::env::current_dir()?;
+                    let filter = if state == "all" { None } else { Some(state.as_str()) };
+                    match blue_core::handlers::realm::handle_notifications_list(Some(&cwd), filter) {
+                        Ok(result) => println!("{}", serde_json::to_string_pretty(&result)?),
+                        Err(e) => { eprintln!("Error: {}", e); std::process::exit(1); }
+                    }
+                }
+            }
         }
         Some(Commands::Jira { command }) => {
             handle_jira_command(command).await?;
@@ -3035,7 +3730,7 @@ blue guard --path="$FILE_PATH"
 async fn handle_install_command(
     hooks_only: bool,
     skills_only: bool,
-    mcp_only: bool,
+    _mcp_only: bool,
     force: bool,
 ) -> Result<()> {
     let cwd = std::env::current_dir()?;
@@ -3043,7 +3738,7 @@ async fn handle_install_command(
 
     println!("Installing Blue for Claude Code...\n");
 
-    let install_all = !hooks_only && !skills_only && !mcp_only;
+    let install_all = !hooks_only && !skills_only;
 
     // Install hooks
     if install_all || hooks_only {
@@ -3057,10 +3752,9 @@ async fn handle_install_command(
         install_skills(&cwd, &home)?;
     }
 
-    // Install MCP server
-    if install_all || mcp_only {
-        println!("\nMCP Server:");
-        install_mcp_server(&cwd, &home)?;
+    // RFC 0072: Clean up legacy MCP config if present
+    if install_all {
+        cleanup_legacy_mcp(&home)?;
     }
 
     println!("\nBlue installed. Restart Claude Code to activate.");
@@ -3182,32 +3876,25 @@ fn install_skills(project_dir: &std::path::Path, home: &std::path::Path) -> Resu
     Ok(())
 }
 
-fn install_mcp_server(project_dir: &std::path::Path, home: &std::path::Path) -> Result<()> {
-    use serde_json::json;
-
+/// RFC 0072: Remove stale MCP server config from ~/.claude.json
+fn cleanup_legacy_mcp(home: &std::path::Path) -> Result<()> {
     let config_path = home.join(".claude.json");
 
-    let mut config: serde_json::Value = if config_path.exists() {
-        let content = std::fs::read_to_string(&config_path)?;
-        serde_json::from_str(&content).unwrap_or_else(|_| json!({}))
-    } else {
-        json!({})
-    };
-
-    // Ensure mcpServers object exists
-    if config.get("mcpServers").is_none() {
-        config["mcpServers"] = json!({});
+    if config_path.exists() {
+        if let Ok(content) = std::fs::read_to_string(&config_path) {
+            if let Ok(mut config) = serde_json::from_str::<serde_json::Value>(&content) {
+                if let Some(servers) = config.get_mut("mcpServers") {
+                    if let Some(obj) = servers.as_object_mut() {
+                        if obj.remove("blue").is_some() {
+                            std::fs::write(&config_path, serde_json::to_string_pretty(&config)?)?;
+                            println!("\nLegacy MCP:");
+                            println!("  ✓ Removed stale blue MCP server from ~/.claude.json (RFC 0072)");
+                        }
+                    }
+                }
+            }
+        }
     }
-
-    // Add/update blue MCP server
-    let binary_path = project_dir.join("target").join("release").join("blue");
-    config["mcpServers"]["blue"] = json!({
-        "command": binary_path.to_string_lossy(),
-        "args": ["mcp"]
-    });
-
-    std::fs::write(&config_path, serde_json::to_string_pretty(&config)?)?;
-    println!("  ✓ ~/.claude.json (blue server configured)");
 
     Ok(())
 }
@@ -3226,9 +3913,8 @@ async fn handle_uninstall_command() -> Result<()> {
     println!("\nSkills:");
     uninstall_skills(&cwd, &home)?;
 
-    // Remove MCP server
-    println!("\nMCP Server:");
-    uninstall_mcp_server(&home)?;
+    // RFC 0072: Clean up any legacy MCP config
+    cleanup_legacy_mcp(&home)?;
 
     println!("\nBlue uninstalled.");
     Ok(())
@@ -3311,25 +3997,6 @@ fn uninstall_skills(project_dir: &std::path::Path, home: &std::path::Path) -> Re
     Ok(())
 }
 
-fn uninstall_mcp_server(home: &std::path::Path) -> Result<()> {
-    let config_path = home.join(".claude.json");
-
-    if config_path.exists() {
-        if let Ok(content) = std::fs::read_to_string(&config_path) {
-            if let Ok(mut config) = serde_json::from_str::<serde_json::Value>(&content) {
-                if let Some(servers) = config.get_mut("mcpServers") {
-                    if let Some(obj) = servers.as_object_mut() {
-                        obj.remove("blue");
-                    }
-                }
-                std::fs::write(&config_path, serde_json::to_string_pretty(&config)?)?;
-                println!("  ✓ Removed blue from ~/.claude.json");
-            }
-        }
-    }
-
-    Ok(())
-}
 
 async fn handle_doctor_command() -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
@@ -3516,38 +4183,21 @@ async fn handle_doctor_command() -> Result<()> {
         println!("  - No skills directory");
     }
 
-    // Check MCP server
-    println!("\nMCP Server:");
+    // RFC 0072: Check for stale MCP config
     let config_path = home.join(".claude.json");
     if config_path.exists() {
         if let Ok(content) = std::fs::read_to_string(&config_path) {
             if let Ok(config) = serde_json::from_str::<serde_json::Value>(&content) {
                 if let Some(servers) = config.get("mcpServers") {
                     if servers.get("blue").is_some() {
-                        println!("  ✓ blue configured in ~/.claude.json");
-
-                        // Check if binary path is correct
-                        if let Some(cmd) = servers["blue"].get("command").and_then(|c| c.as_str()) {
-                            if std::path::Path::new(cmd).exists() {
-                                println!("  ✓ Binary path valid");
-                            } else {
-                                println!("  ✗ Binary path invalid: {}", cmd);
-                                issues += 1;
-                            }
-                        }
-                    } else {
-                        println!("  ✗ blue not configured in ~/.claude.json");
+                        println!("\nLegacy:");
+                        println!("  ⚠ Stale blue MCP server in ~/.claude.json (RFC 0072)");
+                        println!("    hint: Run `blue install` to clean up");
                         issues += 1;
                     }
-                } else {
-                    println!("  ✗ No mcpServers in ~/.claude.json");
-                    issues += 1;
                 }
             }
         }
-    } else {
-        println!("  ✗ ~/.claude.json not found");
-        issues += 1;
     }
 
     // Summary
@@ -3613,7 +4263,7 @@ async fn handle_dialogue_command(command: DialogueCommands) -> Result<()> {
             if !source.is_empty() {
                 args["sources"] = json!(source);
             }
-            match blue_mcp::handlers::dialogue::handle_create(&mut state, &args) {
+            match blue_core::handlers::dialogue::handle_create(&mut state, &args) {
                 Ok(result) => {
                     if let Some(msg) = result.get("message").and_then(|v| v.as_str()) {
                         println!("{}", msg);
@@ -3634,7 +4284,7 @@ async fn handle_dialogue_command(command: DialogueCommands) -> Result<()> {
         }
         DialogueCommands::Get { title } => {
             let args = json!({ "title": title });
-            match blue_mcp::handlers::dialogue::handle_get(&state, &args) {
+            match blue_core::handlers::dialogue::handle_get(&state, &args) {
                 Ok(result) => {
                     println!("{}", serde_json::to_string_pretty(&result)?);
                 }
@@ -3646,7 +4296,7 @@ async fn handle_dialogue_command(command: DialogueCommands) -> Result<()> {
         }
         DialogueCommands::List => {
             let args = json!({});
-            match blue_mcp::handlers::dialogue::handle_list(&state, &args) {
+            match blue_core::handlers::dialogue::handle_list(&state, &args) {
                 Ok(result) => {
                     if let Some(dialogues) = result.get("dialogues").and_then(|v| v.as_array()) {
                         if dialogues.is_empty() {
@@ -3675,7 +4325,7 @@ async fn handle_dialogue_command(command: DialogueCommands) -> Result<()> {
             if let Some(path) = output {
                 args["output_path"] = json!(path);
             }
-            match blue_mcp::handlers::dialogue::handle_export(&state, &args) {
+            match blue_core::handlers::dialogue::handle_export(&state, &args) {
                 Ok(result) => {
                     if let Some(msg) = result.get("message").and_then(|v| v.as_str()) {
                         println!("{}", msg);
@@ -3713,7 +4363,7 @@ async fn handle_dialogue_command(command: DialogueCommands) -> Result<()> {
             if let Some(ref f) = focus {
                 args["focus"] = json!(f);
             }
-            match blue_mcp::handlers::dialogue::handle_round_prompt(&args) {
+            match blue_core::handlers::dialogue::handle_round_prompt(&args) {
                 Ok(result) => {
                     // Print the prompt to stdout (primary output)
                     if let Some(prompt) = result.get("prompt").and_then(|v| v.as_str()) {
@@ -3745,7 +4395,7 @@ async fn handle_dialogue_command(command: DialogueCommands) -> Result<()> {
                 "round": round,
                 "panel": panel_value,
             });
-            match blue_mcp::handlers::dialogue::handle_evolve_panel(&args) {
+            match blue_core::handlers::dialogue::handle_evolve_panel(&args) {
                 Ok(result) => {
                     println!(
                         "{}",
@@ -3756,6 +4406,86 @@ async fn handle_dialogue_command(command: DialogueCommands) -> Result<()> {
                     eprintln!("Error: {}", e);
                     std::process::exit(1);
                 }
+            }
+        }
+        DialogueCommands::Lint { file } => {
+            let args = json!({ "file_path": file });
+            match blue_core::handlers::dialogue_lint::handle_dialogue_lint(&args) {
+                Ok(result) => println!("{}", serde_json::to_string_pretty(&result)?),
+                Err(e) => { eprintln!("Error: {}", e); std::process::exit(1); }
+            }
+        }
+        DialogueCommands::Extract { source } => {
+            // Try as file path first, then as task ID
+            let args = if std::path::Path::new(&source).exists() {
+                json!({ "file_path": source })
+            } else {
+                json!({ "task_id": source })
+            };
+            match blue_core::handlers::dialogue::handle_extract_dialogue(&args) {
+                Ok(result) => println!("{}", serde_json::to_string_pretty(&result)?),
+                Err(e) => { eprintln!("Error: {}", e); std::process::exit(1); }
+            }
+        }
+        DialogueCommands::Save { title, source, summary, rfc } => {
+            let args = if std::path::Path::new(&source).exists() {
+                json!({ "title": title, "file_path": source, "summary": summary, "rfc_title": rfc })
+            } else {
+                json!({ "title": title, "task_id": source, "summary": summary, "rfc_title": rfc })
+            };
+            match blue_core::handlers::dialogue::handle_save(&mut state, &args) {
+                Ok(result) => println!("{}", serde_json::to_string_pretty(&result)?),
+                Err(e) => { eprintln!("Error: {}", e); std::process::exit(1); }
+            }
+        }
+        DialogueCommands::RoundContext { dialogue_id, round } => {
+            let args = json!({ "dialogue_id": dialogue_id, "round": round });
+            match blue_core::handlers::dialogue::handle_round_context(&state, &args) {
+                Ok(result) => println!("{}", serde_json::to_string_pretty(&result)?),
+                Err(e) => { eprintln!("Error: {}", e); std::process::exit(1); }
+            }
+        }
+        DialogueCommands::ExpertCreate { dialogue_id, expert_slug, role, tier, creation_reason, first_round } => {
+            let args = json!({
+                "dialogue_id": dialogue_id,
+                "expert_slug": expert_slug,
+                "role": role,
+                "tier": tier,
+                "creation_reason": creation_reason,
+                "first_round": first_round,
+            });
+            match blue_core::handlers::dialogue::handle_expert_create(&state, &args) {
+                Ok(result) => println!("{}", serde_json::to_string_pretty(&result)?),
+                Err(e) => { eprintln!("Error: {}", e); std::process::exit(1); }
+            }
+        }
+        DialogueCommands::RoundRegister { dialogue_id, round, data } => {
+            let data_value: serde_json::Value = serde_json::from_str(&data)
+                .map_err(|e| anyhow::anyhow!("Invalid round data JSON: {}", e))?;
+            let mut args = json!({ "dialogue_id": dialogue_id, "round": round });
+            // Merge data fields into args
+            if let Some(obj) = data_value.as_object() {
+                for (k, v) in obj {
+                    args[k] = v.clone();
+                }
+            }
+            match blue_core::handlers::dialogue::handle_round_register(&state, &args) {
+                Ok(result) => println!("{}", serde_json::to_string_pretty(&result)?),
+                Err(e) => { eprintln!("Error: {}", e); std::process::exit(1); }
+            }
+        }
+        DialogueCommands::VerdictRegister { dialogue_id, data } => {
+            let data_value: serde_json::Value = serde_json::from_str(&data)
+                .map_err(|e| anyhow::anyhow!("Invalid verdict data JSON: {}", e))?;
+            let mut args = json!({ "dialogue_id": dialogue_id });
+            if let Some(obj) = data_value.as_object() {
+                for (k, v) in obj {
+                    args[k] = v.clone();
+                }
+            }
+            match blue_core::handlers::dialogue::handle_verdict_register(&state, &args) {
+                Ok(result) => println!("{}", serde_json::to_string_pretty(&result)?),
+                Err(e) => { eprintln!("Error: {}", e); std::process::exit(1); }
             }
         }
         DialogueCommands::SamplePanel {
@@ -3774,7 +4504,7 @@ async fn handle_dialogue_command(command: DialogueCommands) -> Result<()> {
             if !exclude.is_empty() {
                 args["exclude"] = json!(exclude);
             }
-            match blue_mcp::handlers::dialogue::handle_sample_panel(&args) {
+            match blue_core::handlers::dialogue::handle_sample_panel(&args) {
                 Ok(result) => {
                     println!(
                         "{}",
@@ -3798,7 +4528,7 @@ async fn handle_adr_command(command: AdrCommands) -> Result<()> {
     match command {
         AdrCommands::Create { title } => {
             let args = json!({ "title": title });
-            match blue_mcp::handlers::adr::handle_create(&mut state, &args) {
+            match blue_core::handlers::adr::handle_create(&mut state, &args) {
                 Ok(result) => {
                     if let Some(msg) = result.get("message").and_then(|v| v.as_str()) {
                         println!("{}", msg);
@@ -3812,7 +4542,7 @@ async fn handle_adr_command(command: AdrCommands) -> Result<()> {
         }
         AdrCommands::Get { title } => {
             let args = json!({ "title": title });
-            match blue_mcp::handlers::adr::handle_get(&state, &args) {
+            match blue_core::handlers::adr::handle_get(&state, &args) {
                 Ok(result) => {
                     println!("{}", serde_json::to_string_pretty(&result)?);
                 }
@@ -3822,7 +4552,7 @@ async fn handle_adr_command(command: AdrCommands) -> Result<()> {
                 }
             }
         }
-        AdrCommands::List => match blue_mcp::handlers::adr::handle_list(&state) {
+        AdrCommands::List => match blue_core::handlers::adr::handle_list(&state) {
             Ok(result) => {
                 if let Some(adrs) = result.get("adrs").and_then(|v| v.as_array()) {
                     if adrs.is_empty() {
@@ -3850,7 +4580,7 @@ async fn handle_adr_command(command: AdrCommands) -> Result<()> {
             println!("To change ADR status, edit the ADR file directly.");
             println!("Looking for ADR '{}'...", title);
             let args = json!({ "title": title });
-            if let Ok(result) = blue_mcp::handlers::adr::handle_get(&state, &args) {
+            if let Ok(result) = blue_core::handlers::adr::handle_get(&state, &args) {
                 if let Some(file) = result.get("file_path").and_then(|v| v.as_str()) {
                     println!("File: {}", file);
                 }
@@ -3867,7 +4597,7 @@ async fn handle_spike_command(command: SpikeCommands) -> Result<()> {
     match command {
         SpikeCommands::Create { title, budget } => {
             let args = json!({ "title": title, "budget_hours": budget });
-            match blue_mcp::handlers::spike::handle_create(&mut state, &args) {
+            match blue_core::handlers::spike::handle_create(&mut state, &args) {
                 Ok(result) => {
                     if let Some(msg) = result.get("message").and_then(|v| v.as_str()) {
                         println!("{}", msg);
@@ -3903,7 +4633,7 @@ async fn handle_spike_command(command: SpikeCommands) -> Result<()> {
         }
         SpikeCommands::Complete { title, outcome } => {
             let args = json!({ "title": title, "outcome": outcome });
-            match blue_mcp::handlers::spike::handle_complete(&mut state, &args) {
+            match blue_core::handlers::spike::handle_complete(&mut state, &args) {
                 Ok(result) => {
                     if let Some(msg) = result.get("message").and_then(|v| v.as_str()) {
                         println!("{}", msg);
@@ -3926,7 +4656,7 @@ async fn handle_audit_command(command: AuditCommands) -> Result<()> {
     match command {
         AuditCommands::Create { title } => {
             let args = json!({ "title": title });
-            match blue_mcp::handlers::audit_doc::handle_create(&state, &args) {
+            match blue_core::handlers::audit_doc::handle_create(&state, &args) {
                 Ok(result) => {
                     if let Some(msg) = result.get("message").and_then(|v| v.as_str()) {
                         println!("{}", msg);
@@ -3940,7 +4670,7 @@ async fn handle_audit_command(command: AuditCommands) -> Result<()> {
         }
         AuditCommands::Get { title } => {
             let args = json!({ "title": title });
-            match blue_mcp::handlers::audit_doc::handle_get(&state, &args) {
+            match blue_core::handlers::audit_doc::handle_get(&state, &args) {
                 Ok(result) => {
                     println!("{}", serde_json::to_string_pretty(&result)?);
                 }
@@ -3950,7 +4680,7 @@ async fn handle_audit_command(command: AuditCommands) -> Result<()> {
                 }
             }
         }
-        AuditCommands::List => match blue_mcp::handlers::audit_doc::handle_list(&state) {
+        AuditCommands::List => match blue_core::handlers::audit_doc::handle_list(&state) {
             Ok(result) => {
                 if let Some(audits) = result.get("audits").and_then(|v| v.as_array()) {
                     if audits.is_empty() {
@@ -3980,7 +4710,7 @@ async fn handle_prd_command(command: PrdCommands) -> Result<()> {
     match command {
         PrdCommands::Create { title } => {
             let args = json!({ "title": title });
-            match blue_mcp::handlers::prd::handle_create(&state, &args) {
+            match blue_core::handlers::prd::handle_create(&state, &args) {
                 Ok(result) => {
                     if let Some(msg) = result.get("message").and_then(|v| v.as_str()) {
                         println!("{}", msg);
@@ -3994,7 +4724,7 @@ async fn handle_prd_command(command: PrdCommands) -> Result<()> {
         }
         PrdCommands::Get { title } => {
             let args = json!({ "title": title });
-            match blue_mcp::handlers::prd::handle_get(&state, &args) {
+            match blue_core::handlers::prd::handle_get(&state, &args) {
                 Ok(result) => {
                     println!("{}", serde_json::to_string_pretty(&result)?);
                 }
@@ -4006,7 +4736,7 @@ async fn handle_prd_command(command: PrdCommands) -> Result<()> {
         }
         PrdCommands::List => {
             let args = json!({});
-            match blue_mcp::handlers::prd::handle_list(&state, &args) {
+            match blue_core::handlers::prd::handle_list(&state, &args) {
                 Ok(result) => {
                     if let Some(prds) = result.get("prds").and_then(|v| v.as_array()) {
                         if prds.is_empty() {
@@ -4038,7 +4768,7 @@ async fn handle_reminder_command(command: ReminderCommands) -> Result<()> {
     match command {
         ReminderCommands::Create { message, when } => {
             let args = json!({ "message": message, "when": when });
-            match blue_mcp::handlers::reminder::handle_create(&state, &args) {
+            match blue_core::handlers::reminder::handle_create(&state, &args) {
                 Ok(result) => {
                     if let Some(msg) = result.get("message").and_then(|v| v.as_str()) {
                         println!("{}", msg);
@@ -4052,7 +4782,7 @@ async fn handle_reminder_command(command: ReminderCommands) -> Result<()> {
         }
         ReminderCommands::List => {
             let args = json!({});
-            match blue_mcp::handlers::reminder::handle_list(&state, &args) {
+            match blue_core::handlers::reminder::handle_list(&state, &args) {
                 Ok(result) => {
                     if let Some(reminders) = result.get("reminders").and_then(|v| v.as_array()) {
                         if reminders.is_empty() {
@@ -4075,7 +4805,7 @@ async fn handle_reminder_command(command: ReminderCommands) -> Result<()> {
         }
         ReminderCommands::Snooze { id, until } => {
             let args = json!({ "id": id, "until": until });
-            match blue_mcp::handlers::reminder::handle_snooze(&state, &args) {
+            match blue_core::handlers::reminder::handle_snooze(&state, &args) {
                 Ok(result) => {
                     if let Some(msg) = result.get("message").and_then(|v| v.as_str()) {
                         println!("{}", msg);
@@ -4089,7 +4819,7 @@ async fn handle_reminder_command(command: ReminderCommands) -> Result<()> {
         }
         ReminderCommands::Dismiss { id } => {
             let args = json!({ "id": id });
-            match blue_mcp::handlers::reminder::handle_clear(&state, &args) {
+            match blue_core::handlers::reminder::handle_clear(&state, &args) {
                 Ok(result) => {
                     if let Some(msg) = result.get("message").and_then(|v| v.as_str()) {
                         println!("{}", msg);
@@ -4122,7 +4852,7 @@ async fn handle_rfc_command(command: RfcCommands) -> Result<()> {
             if let Some(s) = source_spike {
                 args["source_spike"] = json!(s);
             }
-            match blue_mcp::handlers::rfc::handle_create(&mut state, &args) {
+            match blue_core::handlers::rfc::handle_create(&mut state, &args) {
                 Ok(result) => {
                     if let Some(msg) = result.get("message").and_then(|v| v.as_str()) {
                         println!("{}", msg);
@@ -4142,7 +4872,7 @@ async fn handle_rfc_command(command: RfcCommands) -> Result<()> {
                 Some(s) => json!({ "status": s }),
                 None => json!({}),
             };
-            match blue_mcp::handlers::rfc::handle_list(&state, &args) {
+            match blue_core::handlers::rfc::handle_list(&state, &args) {
                 Ok(result) => {
                     if let Some(rfcs) = result.get("rfcs").and_then(|v| v.as_array()) {
                         if rfcs.is_empty() {
@@ -4166,7 +4896,7 @@ async fn handle_rfc_command(command: RfcCommands) -> Result<()> {
         }
         RfcCommands::Get { title } => {
             let args = json!({ "title": title });
-            match blue_mcp::handlers::rfc::handle_get(&state, &args) {
+            match blue_core::handlers::rfc::handle_get(&state, &args) {
                 Ok(result) => {
                     println!("{}", serde_json::to_string_pretty(&result)?);
                 }
@@ -4178,7 +4908,7 @@ async fn handle_rfc_command(command: RfcCommands) -> Result<()> {
         }
         RfcCommands::Status { title, set } => {
             let args = json!({ "title": title, "status": set });
-            match blue_mcp::handlers::rfc::handle_update_status(&state, &args) {
+            match blue_core::handlers::rfc::handle_update_status(&state, &args) {
                 Ok(result) => {
                     if let Some(msg) = result.get("message").and_then(|v| v.as_str()) {
                         println!("{}", msg);
@@ -4192,7 +4922,7 @@ async fn handle_rfc_command(command: RfcCommands) -> Result<()> {
         }
         RfcCommands::Plan { title, task } => {
             let args = json!({ "title": title, "tasks": task });
-            match blue_mcp::handlers::rfc::handle_plan(&state, &args) {
+            match blue_core::handlers::rfc::handle_plan(&state, &args) {
                 Ok(result) => {
                     if let Some(msg) = result.get("message").and_then(|v| v.as_str()) {
                         println!("{}", msg);
@@ -4209,7 +4939,7 @@ async fn handle_rfc_command(command: RfcCommands) -> Result<()> {
         }
         RfcCommands::Complete { title } => {
             let args = json!({ "title": title });
-            match blue_mcp::handlers::rfc::handle_complete(&state, &args) {
+            match blue_core::handlers::rfc::handle_complete(&state, &args) {
                 Ok(result) => {
                     if let Some(msg) = result.get("message").and_then(|v| v.as_str()) {
                         println!("{}", msg);
@@ -4232,7 +4962,7 @@ async fn handle_local_worktree_command(command: WorktreeCommands) -> Result<()> 
     match command {
         WorktreeCommands::Create { title } => {
             let args = json!({ "rfc_title": title });
-            match blue_mcp::handlers::worktree::handle_create(&state, &args) {
+            match blue_core::handlers::worktree::handle_create(&state, &args) {
                 Ok(result) => {
                     if let Some(msg) = result.get("message").and_then(|v| v.as_str()) {
                         println!("{}", msg);
@@ -4250,7 +4980,7 @@ async fn handle_local_worktree_command(command: WorktreeCommands) -> Result<()> 
                 }
             }
         }
-        WorktreeCommands::List => match blue_mcp::handlers::worktree::handle_list(&state) {
+        WorktreeCommands::List => match blue_core::handlers::worktree::handle_list(&state) {
             Ok(result) => {
                 if let Some(worktrees) = result.get("worktrees").and_then(|v| v.as_array()) {
                     if worktrees.is_empty() {
@@ -4272,7 +5002,7 @@ async fn handle_local_worktree_command(command: WorktreeCommands) -> Result<()> 
         },
         WorktreeCommands::Remove { title } => {
             let args = json!({ "name": title });
-            match blue_mcp::handlers::worktree::handle_remove(&state, &args) {
+            match blue_core::handlers::worktree::handle_remove(&state, &args) {
                 Ok(result) => {
                     if let Some(msg) = result.get("message").and_then(|v| v.as_str()) {
                         println!("{}", msg);

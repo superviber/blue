@@ -5,10 +5,10 @@
 use std::fs;
 use std::path::PathBuf;
 
-use blue_core::{title_to_slug, DocType, Document, ProjectState, Rfc};
+use crate::{title_to_slug, DocType, Document, ProjectState, Rfc};
 use serde_json::{json, Value};
 
-use crate::error::ServerError;
+use crate::handler_error::HandlerError;
 
 /// Severity levels for post-mortems
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -41,19 +41,19 @@ impl Severity {
 }
 
 /// Handle blue_postmortem_create
-pub fn handle_create(state: &mut ProjectState, args: &Value) -> Result<Value, ServerError> {
+pub fn handle_create(state: &mut ProjectState, args: &Value) -> Result<Value, HandlerError> {
     let title = args
         .get("title")
         .and_then(|v| v.as_str())
-        .ok_or(ServerError::InvalidParams)?;
+        .ok_or(HandlerError::InvalidParams)?;
 
     let severity_str = args
         .get("severity")
         .and_then(|v| v.as_str())
-        .ok_or(ServerError::InvalidParams)?;
+        .ok_or(HandlerError::InvalidParams)?;
 
     let severity = Severity::parse(severity_str).ok_or_else(|| {
-        ServerError::CommandFailed(format!(
+        HandlerError::CommandFailed(format!(
             "Invalid severity '{}'. Use P1, P2, P3, or P4.",
             severity_str
         ))
@@ -77,10 +77,10 @@ pub fn handle_create(state: &mut ProjectState, args: &Value) -> Result<Value, Se
     let pm_number = state
         .store
         .next_number_with_fs(DocType::Postmortem, &state.home.docs_path)
-        .map_err(|e| ServerError::CommandFailed(e.to_string()))?;
+        .map_err(|e| HandlerError::CommandFailed(e.to_string()))?;
 
     // Generate file path with ISO 8601 timestamp prefix (RFC 0031)
-    let timestamp = blue_core::utc_timestamp();
+    let timestamp = crate::utc_timestamp();
     let file_name = format!("{}-{}.open.md", timestamp, title_to_slug(title));
     let file_path = PathBuf::from("postmortems").join(&file_name);
     let docs_path = state.home.docs_path.clone();
@@ -92,12 +92,12 @@ pub fn handle_create(state: &mut ProjectState, args: &Value) -> Result<Value, Se
 
     // Create postmortems directory if it doesn't exist
     if let Some(parent) = pm_path.parent() {
-        fs::create_dir_all(parent).map_err(|e| ServerError::CommandFailed(e.to_string()))?;
+        fs::create_dir_all(parent).map_err(|e| HandlerError::CommandFailed(e.to_string()))?;
     }
 
     // Overwrite protection (RFC 0031)
     if pm_path.exists() {
-        return Err(ServerError::CommandFailed(format!(
+        return Err(HandlerError::CommandFailed(format!(
             "File already exists: {}",
             pm_path.display()
         )));
@@ -114,21 +114,21 @@ pub fn handle_create(state: &mut ProjectState, args: &Value) -> Result<Value, Se
         created_at: None,
         updated_at: None,
         deleted_at: None,
-        content_hash: Some(blue_core::store::hash_content(&markdown)),
+        content_hash: Some(crate::store::hash_content(&markdown)),
         indexed_at: None,
     };
     state
         .store
         .add_document(&doc)
-        .map_err(|e| ServerError::CommandFailed(e.to_string()))?;
+        .map_err(|e| HandlerError::CommandFailed(e.to_string()))?;
 
-    fs::write(&pm_path, &markdown).map_err(|e| ServerError::CommandFailed(e.to_string()))?;
+    fs::write(&pm_path, &markdown).map_err(|e| HandlerError::CommandFailed(e.to_string()))?;
 
     let hint = "Post-mortem created. Fill in the timeline and lessons learned sections.";
 
     Ok(json!({
         "status": "success",
-        "message": blue_core::voice::info(
+        "message": crate::voice::info(
             &format!("Post-mortem created: {}", title),
             Some(hint)
         ),
@@ -140,16 +140,16 @@ pub fn handle_create(state: &mut ProjectState, args: &Value) -> Result<Value, Se
 }
 
 /// Handle blue_postmortem_action_to_rfc
-pub fn handle_action_to_rfc(state: &mut ProjectState, args: &Value) -> Result<Value, ServerError> {
+pub fn handle_action_to_rfc(state: &mut ProjectState, args: &Value) -> Result<Value, HandlerError> {
     let postmortem_title = args
         .get("postmortem_title")
         .and_then(|v| v.as_str())
-        .ok_or(ServerError::InvalidParams)?;
+        .ok_or(HandlerError::InvalidParams)?;
 
     let action = args
         .get("action")
         .and_then(|v| v.as_str())
-        .ok_or(ServerError::InvalidParams)?;
+        .ok_or(HandlerError::InvalidParams)?;
 
     let rfc_title_override = args.get("rfc_title").and_then(|v| v.as_str());
 
@@ -158,18 +158,18 @@ pub fn handle_action_to_rfc(state: &mut ProjectState, args: &Value) -> Result<Va
         .store
         .find_document(DocType::Postmortem, postmortem_title)
         .map_err(|_| {
-            ServerError::NotFound(format!("Post-mortem '{}' not found", postmortem_title))
+            HandlerError::NotFound(format!("Post-mortem '{}' not found", postmortem_title))
         })?;
 
     let pm_file_path = pm_doc
         .file_path
         .as_ref()
-        .ok_or_else(|| ServerError::CommandFailed("Post-mortem has no file path".to_string()))?;
+        .ok_or_else(|| HandlerError::CommandFailed("Post-mortem has no file path".to_string()))?;
 
     let docs_path = state.home.docs_path.clone();
     let pm_path = docs_path.join(pm_file_path);
     let pm_content = fs::read_to_string(&pm_path)
-        .map_err(|e| ServerError::CommandFailed(format!("Failed to read post-mortem: {}", e)))?;
+        .map_err(|e| HandlerError::CommandFailed(format!("Failed to read post-mortem: {}", e)))?;
 
     // Find the action item
     let (action_idx, action_description) = find_action_item(&pm_content, action)?;
@@ -195,7 +195,7 @@ pub fn handle_action_to_rfc(state: &mut ProjectState, args: &Value) -> Result<Va
     let rfc_number = state
         .store
         .next_number_with_fs(DocType::Rfc, &state.home.docs_path)
-        .map_err(|e| ServerError::CommandFailed(e.to_string()))?;
+        .map_err(|e| HandlerError::CommandFailed(e.to_string()))?;
 
     // Generate file path
     let rfc_file_name = format!("{:04}-{}.draft.md", rfc_number, title_to_slug(&rfc_title));
@@ -227,19 +227,19 @@ pub fn handle_action_to_rfc(state: &mut ProjectState, args: &Value) -> Result<Va
         created_at: None,
         updated_at: None,
         deleted_at: None,
-        content_hash: Some(blue_core::store::hash_content(&markdown)),
+        content_hash: Some(crate::store::hash_content(&markdown)),
         indexed_at: None,
     };
     state
         .store
         .add_document(&rfc_doc)
-        .map_err(|e| ServerError::CommandFailed(e.to_string()))?;
+        .map_err(|e| HandlerError::CommandFailed(e.to_string()))?;
 
     // Write RFC file
     if let Some(parent) = rfc_path.parent() {
-        fs::create_dir_all(parent).map_err(|e| ServerError::CommandFailed(e.to_string()))?;
+        fs::create_dir_all(parent).map_err(|e| HandlerError::CommandFailed(e.to_string()))?;
     }
-    fs::write(&rfc_path, &markdown).map_err(|e| ServerError::CommandFailed(e.to_string()))?;
+    fs::write(&rfc_path, &markdown).map_err(|e| HandlerError::CommandFailed(e.to_string()))?;
 
     // Update post-mortem action item with RFC link
     let updated_pm_content = update_action_item_with_rfc(
@@ -248,7 +248,7 @@ pub fn handle_action_to_rfc(state: &mut ProjectState, args: &Value) -> Result<Va
         &format!("RFC {:04}: {}", rfc_number, rfc_title),
     );
     fs::write(&pm_path, updated_pm_content)
-        .map_err(|e| ServerError::CommandFailed(format!("Failed to update post-mortem: {}", e)))?;
+        .map_err(|e| HandlerError::CommandFailed(format!("Failed to update post-mortem: {}", e)))?;
 
     let hint = format!(
         "RFC created from post-mortem action item. Review and expand the design: {}",
@@ -257,7 +257,7 @@ pub fn handle_action_to_rfc(state: &mut ProjectState, args: &Value) -> Result<Va
 
     Ok(json!({
         "status": "success",
-        "message": blue_core::voice::info(
+        "message": crate::voice::info(
             &format!("RFC {:04} created from post-mortem", rfc_number),
             Some(&hint)
         ),
@@ -271,7 +271,7 @@ pub fn handle_action_to_rfc(state: &mut ProjectState, args: &Value) -> Result<Va
 }
 
 /// Find action item by index or substring
-fn find_action_item(content: &str, identifier: &str) -> Result<(usize, String), ServerError> {
+fn find_action_item(content: &str, identifier: &str) -> Result<(usize, String), HandlerError> {
     let actions = parse_all_actions(content);
 
     // Try to parse as index first
@@ -279,7 +279,7 @@ fn find_action_item(content: &str, identifier: &str) -> Result<(usize, String), 
         if idx > 0 && idx <= actions.len() {
             return Ok((idx, actions[idx - 1].clone()));
         }
-        return Err(ServerError::NotFound(format!(
+        return Err(HandlerError::NotFound(format!(
             "Action item #{} not found. Found {} action items.",
             idx,
             actions.len()
@@ -293,7 +293,7 @@ fn find_action_item(content: &str, identifier: &str) -> Result<(usize, String), 
         }
     }
 
-    Err(ServerError::NotFound(format!(
+    Err(HandlerError::NotFound(format!(
         "No action item matching '{}' found",
         identifier
     )))

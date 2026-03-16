@@ -2,10 +2,10 @@
 //!
 //! Handles release creation with semantic versioning analysis.
 
-use blue_core::{DocType, ProjectState};
+use crate::{DocType, ProjectState};
 use serde_json::{json, Value};
 
-use crate::error::ServerError;
+use crate::handler_error::HandlerError;
 
 /// Semantic version bump type
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -26,7 +26,7 @@ impl VersionBump {
 }
 
 /// Handle blue_release_create
-pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, ServerError> {
+pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, HandlerError> {
     let version_override = args.get("version").and_then(|v| v.as_str());
 
     // Check for in-progress work
@@ -42,7 +42,7 @@ pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, Server
         let titles: Vec<_> = in_progress.iter().map(|d| d.title.as_str()).collect();
         return Ok(json!({
             "status": "blocked",
-            "message": blue_core::voice::error(
+            "message": crate::voice::error(
                 &format!("Can't release with in-progress work: {}", titles.join(", ")),
                 "Complete or defer these RFCs first"
             ),
@@ -90,7 +90,7 @@ pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, Server
             "tag": format!("git tag v{}", version),
             "push_tag": format!("git push origin v{}", version)
         },
-        "message": blue_core::voice::success(
+        "message": crate::voice::success(
             &format!("Ready to release {} ({} bump)", version, suggested_bump.as_str()),
             Some(&format!("{} RFCs included. Follow the commands to complete.", implemented.len()))
         )
@@ -98,7 +98,7 @@ pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, Server
 }
 
 /// Analyze implemented RFCs to determine version bump
-fn analyze_version_bump(rfcs: &[blue_core::Document]) -> VersionBump {
+fn analyze_version_bump(rfcs: &[crate::Document]) -> VersionBump {
     let mut max_bump = VersionBump::Patch;
 
     for rfc in rfcs {

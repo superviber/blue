@@ -6,10 +6,10 @@
 use std::fs;
 use std::path::Path;
 
-use blue_core::{title_to_slug, Adr, DocType, Document, ProjectState};
+use crate::{title_to_slug, Adr, DocType, Document, ProjectState};
 use serde_json::{json, Value};
 
-use crate::error::ServerError;
+use crate::handler_error::HandlerError;
 
 /// ADR summary for listing and relevance matching
 #[derive(Debug, Clone)]
@@ -23,11 +23,11 @@ struct AdrSummary {
 }
 
 /// Handle blue_adr_create
-pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, ServerError> {
+pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, HandlerError> {
     let title = args
         .get("title")
         .and_then(|v| v.as_str())
-        .ok_or(ServerError::InvalidParams)?;
+        .ok_or(HandlerError::InvalidParams)?;
 
     let source_rfc = args.get("rfc").and_then(|v| v.as_str());
     let context = args.get("context").and_then(|v| v.as_str());
@@ -49,7 +49,7 @@ pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, Server
                 if doc.status != "implemented" {
                     return Ok(json!({
                         "status": "error",
-                        "message": blue_core::voice::error(
+                        "message": crate::voice::error(
                             &format!("RFC '{}' isn't implemented yet (status: {})", rfc_title, doc.status),
                             "ADRs document decisions from implemented RFCs"
                         )
@@ -59,7 +59,7 @@ pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, Server
             Err(_) => {
                 return Ok(json!({
                     "status": "error",
-                    "message": blue_core::voice::error(
+                    "message": crate::voice::error(
                         &format!("Can't find RFC '{}'", rfc_title),
                         "Check the title's spelled right"
                     )
@@ -72,7 +72,7 @@ pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, Server
     let number = state
         .store
         .next_number_with_fs(DocType::Adr, &state.home.docs_path)
-        .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+        .map_err(|e| HandlerError::StateLoadFailed(e.to_string()))?;
 
     // Create ADR
     let mut adr = Adr::new(title);
@@ -98,9 +98,9 @@ pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, Server
     let docs_path = state.home.docs_path.clone();
     let adr_path = docs_path.join(&file_path);
     if let Some(parent) = adr_path.parent() {
-        fs::create_dir_all(parent).map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+        fs::create_dir_all(parent).map_err(|e| HandlerError::StateLoadFailed(e.to_string()))?;
     }
-    fs::write(&adr_path, &markdown).map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+    fs::write(&adr_path, &markdown).map_err(|e| HandlerError::StateLoadFailed(e.to_string()))?;
 
     // Add to store
     let mut doc = Document::new(DocType::Adr, title, "accepted");
@@ -110,7 +110,7 @@ pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, Server
     let id = state
         .store
         .add_document(&doc)
-        .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+        .map_err(|e| HandlerError::StateLoadFailed(e.to_string()))?;
 
     // Link to RFC if provided
     if let Some(rfc_title) = source_rfc {
@@ -118,7 +118,7 @@ pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, Server
             if let (Some(rfc_id), Some(adr_id)) = (rfc_doc.id, Some(id)) {
                 let _ = state
                     .store
-                    .link_documents(rfc_id, adr_id, blue_core::LinkType::RfcToAdr);
+                    .link_documents(rfc_id, adr_id, crate::LinkType::RfcToAdr);
             }
         }
     }
@@ -131,7 +131,7 @@ pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, Server
         "file": adr_path.display().to_string(),
         "markdown": markdown,
         "linked_rfc": source_rfc,
-        "message": blue_core::voice::success(
+        "message": crate::voice::success(
             &format!("Created ADR {:04}: '{}'", number, title),
             Some("Decision documented.")
         )
@@ -143,7 +143,7 @@ pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, Server
 /// Handle blue_adr_list
 ///
 /// List all ADRs with summaries.
-pub fn handle_list(state: &ProjectState) -> Result<Value, ServerError> {
+pub fn handle_list(state: &ProjectState) -> Result<Value, HandlerError> {
     let adrs = load_adr_summaries(state)?;
 
     let adr_list: Vec<Value> = adrs
@@ -160,7 +160,7 @@ pub fn handle_list(state: &ProjectState) -> Result<Value, ServerError> {
     Ok(json!({
         "adrs": adr_list,
         "count": adr_list.len(),
-        "message": blue_core::voice::info(
+        "message": crate::voice::info(
             &format!("{} ADR(s) found", adr_list.len()),
             Some("Use blue_adr_get to view details")
         )
@@ -170,31 +170,31 @@ pub fn handle_list(state: &ProjectState) -> Result<Value, ServerError> {
 /// Handle blue_adr_get
 ///
 /// Get full ADR content with referenced_by information.
-pub fn handle_get(state: &ProjectState, args: &Value) -> Result<Value, ServerError> {
+pub fn handle_get(state: &ProjectState, args: &Value) -> Result<Value, HandlerError> {
     let number = args
         .get("number")
         .and_then(|v| v.as_i64())
-        .ok_or(ServerError::InvalidParams)?;
+        .ok_or(HandlerError::InvalidParams)?;
 
     // Find ADR document
     let docs = state
         .store
         .list_documents(DocType::Adr)
-        .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+        .map_err(|e| HandlerError::StateLoadFailed(e.to_string()))?;
 
     let adr_doc = docs
         .into_iter()
         .find(|d| d.number == Some(number as i32))
-        .ok_or_else(|| ServerError::StateLoadFailed(format!("ADR {} not found", number)))?;
+        .ok_or_else(|| HandlerError::StateLoadFailed(format!("ADR {} not found", number)))?;
 
     // Read content
     let file_path = adr_doc
         .file_path
         .as_ref()
-        .ok_or(ServerError::InvalidParams)?;
+        .ok_or(HandlerError::InvalidParams)?;
     let full_path = state.home.docs_path.join(file_path);
     let content = fs::read_to_string(&full_path)
-        .map_err(|e| ServerError::CommandFailed(format!("Couldn't read ADR: {}", e)))?;
+        .map_err(|e| HandlerError::CommandFailed(format!("Couldn't read ADR: {}", e)))?;
 
     // Find documents that reference this ADR
     let referenced_by = find_adr_references(state, adr_doc.id)?;
@@ -217,7 +217,7 @@ pub fn handle_get(state: &ProjectState, args: &Value) -> Result<Value, ServerErr
         "applies_when": metadata.applies_when,
         "anti_patterns": metadata.anti_patterns,
         "referenced_by": referenced_by,
-        "message": blue_core::voice::info(
+        "message": crate::voice::info(
             &format!("ADR {:04}: {}", number, adr_doc.title),
             ref_hint.as_deref()
         )
@@ -228,11 +228,11 @@ pub fn handle_get(state: &ProjectState, args: &Value) -> Result<Value, ServerErr
 ///
 /// Find relevant ADRs based on context using keyword matching.
 /// Will be upgraded to AI matching when LLM integration is available (RFC 0005).
-pub fn handle_relevant(state: &ProjectState, args: &Value) -> Result<Value, ServerError> {
+pub fn handle_relevant(state: &ProjectState, args: &Value) -> Result<Value, HandlerError> {
     let context = args
         .get("context")
         .and_then(|v| v.as_str())
-        .ok_or(ServerError::InvalidParams)?
+        .ok_or(HandlerError::InvalidParams)?
         .to_lowercase();
 
     let adrs = load_adr_summaries(state)?;
@@ -276,9 +276,9 @@ pub fn handle_relevant(state: &ProjectState, args: &Value) -> Result<Value, Serv
         "cached": false,
         "relevant": relevant,
         "message": if relevant.is_empty() {
-            blue_core::voice::info("No strongly relevant ADRs found", Some("Proceed with judgment"))
+            crate::voice::info("No strongly relevant ADRs found", Some("Proceed with judgment"))
         } else {
-            blue_core::voice::info(
+            crate::voice::info(
                 &format!("{} relevant ADR(s) found", relevant.len()),
                 Some("Consider these beliefs in your work")
             )
@@ -294,7 +294,7 @@ pub fn handle_relevant(state: &ProjectState, args: &Value) -> Result<Value, Serv
 /// Handle blue_adr_audit
 ///
 /// Scan for potential ADR violations. Only for testable ADRs.
-pub fn handle_audit(state: &ProjectState) -> Result<Value, ServerError> {
+pub fn handle_audit(state: &ProjectState) -> Result<Value, HandlerError> {
     let mut findings: Vec<Value> = Vec::new();
     let mut passed: Vec<Value> = Vec::new();
 
@@ -346,7 +346,7 @@ pub fn handle_audit(state: &ProjectState) -> Result<Value, ServerError> {
     Ok(json!({
         "findings": findings,
         "passed": passed,
-        "message": blue_core::voice::info(
+        "message": crate::voice::info(
             &format!("{} finding(s), {} passed", findings.len(), passed.len()),
             if findings.is_empty() {
                 Some("All testable ADRs satisfied")
@@ -360,7 +360,7 @@ pub fn handle_audit(state: &ProjectState) -> Result<Value, ServerError> {
 // ===== Helper Functions =====
 
 /// Load ADR summaries from the docs/adrs directory
-fn load_adr_summaries(state: &ProjectState) -> Result<Vec<AdrSummary>, ServerError> {
+fn load_adr_summaries(state: &ProjectState) -> Result<Vec<AdrSummary>, HandlerError> {
     let adrs_path = state.home.docs_path.join("adrs");
     let mut summaries = Vec::new();
 
@@ -369,7 +369,7 @@ fn load_adr_summaries(state: &ProjectState) -> Result<Vec<AdrSummary>, ServerErr
     }
 
     let entries = fs::read_dir(&adrs_path)
-        .map_err(|e| ServerError::CommandFailed(format!("Couldn't read ADRs directory: {}", e)))?;
+        .map_err(|e| HandlerError::CommandFailed(format!("Couldn't read ADRs directory: {}", e)))?;
 
     for entry in entries.flatten() {
         let path = entry.path();
@@ -664,7 +664,7 @@ fn calculate_relevance_score(context_words: &[&str], adr: &AdrSummary) -> (f64, 
 fn find_adr_references(
     state: &ProjectState,
     adr_id: Option<i64>,
-) -> Result<Vec<Value>, ServerError> {
+) -> Result<Vec<Value>, HandlerError> {
     let mut references = Vec::new();
 
     let Some(id) = adr_id else {
@@ -681,7 +681,7 @@ fn find_adr_references(
     let conn = state.store.conn();
     let mut stmt = conn
         .prepare(query)
-        .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+        .map_err(|e| HandlerError::StateLoadFailed(e.to_string()))?;
 
     let rows = stmt
         .query_map(rusqlite::params![id], |row| {
@@ -691,7 +691,7 @@ fn find_adr_references(
                 row.get::<_, Option<String>>(3)?, // created_at
             ))
         })
-        .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+        .map_err(|e| HandlerError::StateLoadFailed(e.to_string()))?;
 
     for row in rows.flatten() {
         let (doc_type, title, created_at) = row;

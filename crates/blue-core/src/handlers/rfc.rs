@@ -3,22 +3,22 @@
 //! Standalone functions for RFC lifecycle operations.
 //! Called by both MCP server and CLI.
 
-use blue_core::{
+use crate::{
     title_to_slug, validate_rfc_transition, DocType, Document, ProjectState, Rfc, RfcStatus,
 };
 use serde_json::{json, Value};
 use std::fs;
 
-use crate::error::ServerError;
+use crate::handler_error::HandlerError;
 
 /// Handle blue_rfc_create
 ///
 /// Creates a new RFC with optional problem statement and source spike.
-pub fn handle_create(state: &mut ProjectState, args: &Value) -> Result<Value, ServerError> {
+pub fn handle_create(state: &mut ProjectState, args: &Value) -> Result<Value, HandlerError> {
     let title = args
         .get("title")
         .and_then(|v| v.as_str())
-        .ok_or(ServerError::InvalidParams)?;
+        .ok_or(HandlerError::InvalidParams)?;
 
     let problem = args.get("problem").and_then(|v| v.as_str());
     let source_spike = args.get("source_spike").and_then(|v| v.as_str());
@@ -27,7 +27,7 @@ pub fn handle_create(state: &mut ProjectState, args: &Value) -> Result<Value, Se
     let number = state
         .store
         .next_number_with_fs(DocType::Rfc, &state.home.docs_path)
-        .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+        .map_err(|e| HandlerError::StateLoadFailed(e.to_string()))?;
 
     // Generate markdown
     let mut rfc = Rfc::new(title);
@@ -55,9 +55,9 @@ pub fn handle_create(state: &mut ProjectState, args: &Value) -> Result<Value, Se
     let docs_path = state.home.docs_path.clone();
     let rfc_path = docs_path.join(&filename);
     if let Some(parent) = rfc_path.parent() {
-        fs::create_dir_all(parent).map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+        fs::create_dir_all(parent).map_err(|e| HandlerError::StateLoadFailed(e.to_string()))?;
     }
-    fs::write(&rfc_path, &markdown).map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+    fs::write(&rfc_path, &markdown).map_err(|e| HandlerError::StateLoadFailed(e.to_string()))?;
 
     // Create document in store with file path
     let mut doc = Document::new(DocType::Rfc, title, "draft");
@@ -67,7 +67,7 @@ pub fn handle_create(state: &mut ProjectState, args: &Value) -> Result<Value, Se
     let id = state
         .store
         .add_document(&doc)
-        .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+        .map_err(|e| HandlerError::StateLoadFailed(e.to_string()))?;
 
     Ok(json!({
         "status": "success",
@@ -76,7 +76,7 @@ pub fn handle_create(state: &mut ProjectState, args: &Value) -> Result<Value, Se
         "title": title,
         "file": rfc_path.display().to_string(),
         "markdown": markdown,
-        "message": blue_core::voice::success(
+        "message": crate::voice::success(
             &format!("Created RFC {:04}: '{}'", number, title),
             Some("Want me to help fill in the details?")
         )
@@ -86,22 +86,22 @@ pub fn handle_create(state: &mut ProjectState, args: &Value) -> Result<Value, Se
 /// Handle blue_rfc_get
 ///
 /// Retrieves RFC details including tasks and progress.
-pub fn handle_get(state: &ProjectState, args: &Value) -> Result<Value, ServerError> {
+pub fn handle_get(state: &ProjectState, args: &Value) -> Result<Value, HandlerError> {
     let title = args
         .get("title")
         .and_then(|v| v.as_str())
-        .ok_or(ServerError::InvalidParams)?;
+        .ok_or(HandlerError::InvalidParams)?;
 
     let doc = state
         .store
         .find_document(DocType::Rfc, title)
-        .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+        .map_err(|e| HandlerError::StateLoadFailed(e.to_string()))?;
 
     let doc_id = doc.id;
     let rfc_number = doc.number.unwrap_or(0);
 
     // RFC 0017: Check if plan file exists and cache is stale - rebuild if needed
-    let plan_path = blue_core::plan_file_path(&state.home.docs_path, title, rfc_number);
+    let plan_path = crate::plan_file_path(&state.home.docs_path, title, rfc_number);
     let mut cache_rebuilt = false;
 
     if let Some(id) = doc_id {
@@ -109,24 +109,24 @@ pub fn handle_get(state: &ProjectState, args: &Value) -> Result<Value, ServerErr
             let cache_mtime = state
                 .store
                 .get_plan_cache_mtime(id)
-                .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+                .map_err(|e| HandlerError::StateLoadFailed(e.to_string()))?;
 
-            if blue_core::is_cache_stale(&plan_path, cache_mtime.as_deref()) {
+            if crate::is_cache_stale(&plan_path, cache_mtime.as_deref()) {
                 // Rebuild cache from plan file
-                let plan = blue_core::read_plan_file(&plan_path)
-                    .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+                let plan = crate::read_plan_file(&plan_path)
+                    .map_err(|e| HandlerError::StateLoadFailed(e.to_string()))?;
 
                 state
                     .store
                     .rebuild_tasks_from_plan(id, &plan.tasks)
-                    .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+                    .map_err(|e| HandlerError::StateLoadFailed(e.to_string()))?;
 
                 // Update cache mtime
                 let mtime = chrono::Utc::now().to_rfc3339();
                 state
                     .store
                     .update_plan_cache_mtime(id, &mtime)
-                    .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+                    .map_err(|e| HandlerError::StateLoadFailed(e.to_string()))?;
 
                 cache_rebuilt = true;
             }
@@ -198,19 +198,19 @@ pub fn handle_get(state: &ProjectState, args: &Value) -> Result<Value, ServerErr
 /// Handle blue_rfc_list
 ///
 /// Lists all RFCs with optional status filter.
-pub fn handle_list(state: &ProjectState, args: &Value) -> Result<Value, ServerError> {
+pub fn handle_list(state: &ProjectState, args: &Value) -> Result<Value, HandlerError> {
     let status_filter = args.get("status").and_then(|v| v.as_str());
 
     let docs = if let Some(status) = status_filter {
         state
             .store
             .list_documents_by_status(DocType::Rfc, status)
-            .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?
+            .map_err(|e| HandlerError::StateLoadFailed(e.to_string()))?
     } else {
         state
             .store
             .list_documents(DocType::Rfc)
-            .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?
+            .map_err(|e| HandlerError::StateLoadFailed(e.to_string()))?
     };
 
     let rfcs: Vec<_> = docs
@@ -236,32 +236,32 @@ pub fn handle_list(state: &ProjectState, args: &Value) -> Result<Value, ServerEr
 /// Handle blue_rfc_update_status
 ///
 /// Updates RFC status with validation.
-pub fn handle_update_status(state: &ProjectState, args: &Value) -> Result<Value, ServerError> {
+pub fn handle_update_status(state: &ProjectState, args: &Value) -> Result<Value, HandlerError> {
     let title = args
         .get("title")
         .and_then(|v| v.as_str())
-        .ok_or(ServerError::InvalidParams)?;
+        .ok_or(HandlerError::InvalidParams)?;
 
     let status_str = args
         .get("status")
         .and_then(|v| v.as_str())
-        .ok_or(ServerError::InvalidParams)?;
+        .ok_or(HandlerError::InvalidParams)?;
 
     // Find the document to get its file path and current status
     let doc = state
         .store
         .find_document(DocType::Rfc, title)
-        .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+        .map_err(|e| HandlerError::StateLoadFailed(e.to_string()))?;
 
     // Parse statuses and validate transition (RFC 0014)
     let current_status =
-        RfcStatus::parse(&doc.status).map_err(|e| ServerError::Workflow(e.to_string()))?;
+        RfcStatus::parse(&doc.status).map_err(|e| HandlerError::Workflow(e.to_string()))?;
     let target_status =
-        RfcStatus::parse(status_str).map_err(|e| ServerError::Workflow(e.to_string()))?;
+        RfcStatus::parse(status_str).map_err(|e| HandlerError::Workflow(e.to_string()))?;
 
     // Validate the transition
     validate_rfc_transition(current_status, target_status)
-        .map_err(|e| ServerError::Workflow(e.to_string()))?;
+        .map_err(|e| HandlerError::Workflow(e.to_string()))?;
 
     // Check for worktree if going to in-progress (RFC 0011)
     let has_worktree = state.has_worktree(title);
@@ -275,18 +275,18 @@ pub fn handle_update_status(state: &ProjectState, args: &Value) -> Result<Value,
     state
         .store
         .update_document_status(DocType::Rfc, title, status_str)
-        .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+        .map_err(|e| HandlerError::StateLoadFailed(e.to_string()))?;
 
     // Rename file for new status (RFC 0031)
     let final_path =
-        blue_core::rename_for_status(&state.home.docs_path, &state.store, &doc, status_str)
-            .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+        crate::rename_for_status(&state.home.docs_path, &state.store, &doc, status_str)
+            .map_err(|e| HandlerError::StateLoadFailed(e.to_string()))?;
 
     // Update markdown file (RFC 0008) at effective path
     let effective_path = final_path.as_deref().or(doc.file_path.as_deref());
     let file_updated = if let Some(p) = effective_path {
         let full_path = state.home.docs_path.join(p);
-        blue_core::update_markdown_status(&full_path, status_str).unwrap_or(false)
+        crate::update_markdown_status(&full_path, status_str).unwrap_or(false)
     } else {
         false
     };
@@ -324,7 +324,7 @@ pub fn handle_update_status(state: &ProjectState, args: &Value) -> Result<Value,
         "title": title,
         "new_status": status_str,
         "file_updated": file_updated,
-        "message": blue_core::voice::success(
+        "message": crate::voice::success(
             &format!("Updated '{}' to {}", title, status_str),
             hint
         )
@@ -344,11 +344,11 @@ pub fn handle_update_status(state: &ProjectState, args: &Value) -> Result<Value,
 /// Handle blue_rfc_plan
 ///
 /// Creates or updates a plan for an RFC.
-pub fn handle_plan(state: &ProjectState, args: &Value) -> Result<Value, ServerError> {
+pub fn handle_plan(state: &ProjectState, args: &Value) -> Result<Value, HandlerError> {
     let title = args
         .get("title")
         .and_then(|v| v.as_str())
-        .ok_or(ServerError::InvalidParams)?;
+        .ok_or(HandlerError::InvalidParams)?;
 
     let tasks: Vec<String> = args
         .get("tasks")
@@ -363,67 +363,67 @@ pub fn handle_plan(state: &ProjectState, args: &Value) -> Result<Value, ServerEr
     let doc = state
         .store
         .find_document(DocType::Rfc, title)
-        .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+        .map_err(|e| HandlerError::StateLoadFailed(e.to_string()))?;
 
-    let doc_id = doc.id.ok_or(ServerError::InvalidParams)?;
+    let doc_id = doc.id.ok_or(HandlerError::InvalidParams)?;
 
     // RFC 0017: Status gating - only allow planning for accepted or in-progress RFCs
     let status_lower = doc.status.to_lowercase();
     if status_lower != "accepted" && status_lower != "in-progress" {
-        return Err(ServerError::Workflow(format!(
+        return Err(HandlerError::Workflow(format!(
             "RFC must be 'accepted' or 'in-progress' to create a plan (current: {})",
             doc.status
         )));
     }
 
     // RFC 0017: Write .plan.md file as authoritative source
-    let plan_tasks: Vec<blue_core::PlanTask> = tasks
+    let plan_tasks: Vec<crate::PlanTask> = tasks
         .iter()
-        .map(|desc| blue_core::PlanTask {
+        .map(|desc| crate::PlanTask {
             description: desc.clone(),
             completed: false,
         })
         .collect();
 
-    let plan = blue_core::PlanFile {
+    let plan = crate::PlanFile {
         rfc_title: title.to_string(),
-        status: blue_core::PlanStatus::InProgress,
+        status: crate::PlanStatus::InProgress,
         updated_at: chrono::Utc::now().to_rfc3339(),
         tasks: plan_tasks.clone(),
     };
 
     let rfc_number = doc.number.unwrap_or(0);
-    let plan_path = blue_core::plan_file_path(&state.home.docs_path, title, rfc_number);
+    let plan_path = crate::plan_file_path(&state.home.docs_path, title, rfc_number);
 
     // Ensure parent directory exists
     if let Some(parent) = plan_path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| {
-            ServerError::StateLoadFailed(format!("Failed to create directory: {}", e))
+            HandlerError::StateLoadFailed(format!("Failed to create directory: {}", e))
         })?;
     }
 
-    blue_core::write_plan_file(&plan_path, &plan)
-        .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+    crate::write_plan_file(&plan_path, &plan)
+        .map_err(|e| HandlerError::StateLoadFailed(e.to_string()))?;
 
     // Update SQLite cache
     state
         .store
         .set_tasks(doc_id, &tasks)
-        .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+        .map_err(|e| HandlerError::StateLoadFailed(e.to_string()))?;
 
     // Update cache mtime
     let mtime = chrono::Utc::now().to_rfc3339();
     state
         .store
         .update_plan_cache_mtime(doc_id, &mtime)
-        .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+        .map_err(|e| HandlerError::StateLoadFailed(e.to_string()))?;
 
     Ok(json!({
         "status": "success",
         "title": title,
         "task_count": tasks.len(),
         "plan_file": plan_path.display().to_string(),
-        "message": blue_core::voice::success(
+        "message": crate::voice::success(
             &format!("Set {} tasks for '{}'. Plan file created.", tasks.len(), title),
             Some("Mark them complete as you go with blue_rfc_task_complete.")
         )
@@ -436,26 +436,26 @@ pub fn handle_plan(state: &ProjectState, args: &Value) -> Result<Value, ServerEr
 /// - 100%: Plan complete, ready for PR
 /// - 70-99%: Core complete, follow-up tasks identified
 /// - <70%: Not ready - complete more tasks first
-pub fn handle_complete(state: &ProjectState, args: &Value) -> Result<Value, ServerError> {
+pub fn handle_complete(state: &ProjectState, args: &Value) -> Result<Value, HandlerError> {
     let title = args
         .get("title")
         .and_then(|v| v.as_str())
-        .ok_or(ServerError::InvalidParams)?;
+        .ok_or(HandlerError::InvalidParams)?;
 
     // Find the RFC
     let doc = state
         .store
         .find_document(DocType::Rfc, title)
-        .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+        .map_err(|e| HandlerError::StateLoadFailed(e.to_string()))?;
 
-    let doc_id = doc.id.ok_or(ServerError::InvalidParams)?;
+    let doc_id = doc.id.ok_or(HandlerError::InvalidParams)?;
 
     // Check current status
     match doc.status.as_str() {
         "draft" => {
             return Ok(json!({
                 "status": "error",
-                "message": blue_core::voice::error(
+                "message": crate::voice::error(
                     "Can't complete a draft RFC",
                     "Accept it first with blue_rfc_update_status"
                 )
@@ -466,7 +466,7 @@ pub fn handle_complete(state: &ProjectState, args: &Value) -> Result<Value, Serv
                 "status": "success",
                 "title": title,
                 "already_implemented": true,
-                "message": blue_core::voice::info(
+                "message": crate::voice::info(
                     &format!("'{}' is already implemented", title),
                     None::<&str>
                 )
@@ -475,7 +475,7 @@ pub fn handle_complete(state: &ProjectState, args: &Value) -> Result<Value, Serv
         "superseded" => {
             return Ok(json!({
                 "status": "error",
-                "message": blue_core::voice::error(
+                "message": crate::voice::error(
                     "Can't complete a superseded RFC",
                     "This RFC was replaced by another"
                 )
@@ -488,7 +488,7 @@ pub fn handle_complete(state: &ProjectState, args: &Value) -> Result<Value, Serv
     let progress = state
         .store
         .get_task_progress(doc_id)
-        .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+        .map_err(|e| HandlerError::StateLoadFailed(e.to_string()))?;
 
     // No tasks = assume complete
     let (completed, total, percentage) = if progress.total == 0 {
@@ -501,7 +501,7 @@ pub fn handle_complete(state: &ProjectState, args: &Value) -> Result<Value, Serv
     if percentage < 70 {
         return Ok(json!({
             "status": "error",
-            "message": blue_core::voice::error(
+            "message": crate::voice::error(
                 &format!("Only {}/{} tasks done ({}%)", completed, total, percentage),
                 "Need at least 70% to mark as implemented"
             ),
@@ -519,24 +519,24 @@ pub fn handle_complete(state: &ProjectState, args: &Value) -> Result<Value, Serv
         state
             .store
             .update_document_status(DocType::Rfc, title, "in-progress")
-            .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+            .map_err(|e| HandlerError::StateLoadFailed(e.to_string()))?;
     }
 
     // Update to implemented
     state
         .store
         .update_document_status(DocType::Rfc, title, "implemented")
-        .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+        .map_err(|e| HandlerError::StateLoadFailed(e.to_string()))?;
 
     // Rename file for new status (RFC 0031)
     let final_path =
-        blue_core::rename_for_status(&state.home.docs_path, &state.store, &doc, "implemented")
-            .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+        crate::rename_for_status(&state.home.docs_path, &state.store, &doc, "implemented")
+            .map_err(|e| HandlerError::StateLoadFailed(e.to_string()))?;
 
     // Update markdown at effective path
     let effective_path = final_path.as_deref().or(doc.file_path.as_deref());
     if let Some(p) = effective_path {
-        let _ = blue_core::update_markdown_status(&state.home.docs_path.join(p), "implemented");
+        let _ = crate::update_markdown_status(&state.home.docs_path.join(p), "implemented");
     }
 
     // Determine follow-up needs
@@ -582,7 +582,7 @@ pub fn handle_complete(state: &ProjectState, args: &Value) -> Result<Value, Serv
         "status": "success",
         "title": title,
         "new_status": "implemented",
-        "message": blue_core::voice::success(
+        "message": crate::voice::success(
             &format!("Marked '{}' as implemented", title),
             Some(&hint)
         ),

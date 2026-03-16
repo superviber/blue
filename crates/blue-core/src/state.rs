@@ -197,26 +197,26 @@ impl ProjectState {
 
         if !stalled.is_empty() {
             return format!(
-                "'{}' is in-progress but has no worktree. Use blue_worktree_create to work in isolation.",
+                "'{}' is in-progress but has no worktree. Use `blue worktree create` to work in isolation.",
                 stalled[0].title
             );
         }
 
         if !ready.is_empty() {
             return format!(
-                "'{}' is ready to implement. Use blue_worktree_create to begin.",
+                "'{}' is ready to implement. Use `blue worktree create` to begin.",
                 ready[0].title
             );
         }
 
         if !active.is_empty() {
             return format!(
-                "{} item(s) in progress. Use blue_rfc_complete when done.",
+                "{} item(s) in progress. Use `blue rfc complete` when done.",
                 active.len()
             );
         }
 
-        "Nothing in flight. Use blue_rfc_create to start something new.".to_string()
+        "Nothing in flight. Use `blue rfc create` to start something new.".to_string()
     }
 
     /// Get project status summary

@@ -13,6 +13,8 @@
 // Blue's true name, between friends
 const _BLUE_SECRET_NAME: &str = "Sheepey"; // pronounced "Shee-paay"
 
+pub mod handler_error;
+pub mod handlers;
 pub mod alignment;
 pub mod alignment_db;
 pub mod daemon;
@@ -91,6 +93,7 @@ pub use org::{
     MigrationMove, Org, OrgError, Provider,
 };
 pub use uri::{estimate_tokens, read_uri_content, BlueUri, UriError};
+pub use handler_error::HandlerError;
 pub use voice::*;
 pub use workflow::{
     validate_rfc_transition, PrdStatus, RfcStatus, SpikeOutcome as WorkflowSpikeOutcome,

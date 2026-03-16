@@ -3,15 +3,15 @@
 //! Standalone functions for project status.
 //! Called by both MCP server and CLI.
 
-use blue_core::{DocType, ProjectState};
+use crate::{DocType, ProjectState};
 use serde_json::{json, Value};
 
-use crate::error::ServerError;
+use crate::handler_error::HandlerError;
 
 /// Handle blue_status
 ///
 /// Returns project status summary including active, ready, stalled, and draft items.
-pub fn handle_status(state: &ProjectState, _args: &Value) -> Result<Value, ServerError> {
+pub fn handle_status(state: &ProjectState, _args: &Value) -> Result<Value, HandlerError> {
     let summary = state.status_summary();
 
     // Check for index drift across all doc types
@@ -55,7 +55,7 @@ pub fn handle_status(state: &ProjectState, _args: &Value) -> Result<Value, Serve
         response["index_drift"] = json!({
             "total": total_drift,
             "by_type": drift_details,
-            "hint": "Run blue_sync to reconcile."
+            "hint": "Run `blue sync` to reconcile."
         });
     }
 
@@ -65,7 +65,7 @@ pub fn handle_status(state: &ProjectState, _args: &Value) -> Result<Value, Serve
 /// Handle blue_next
 ///
 /// Returns recommendations for what to do next.
-pub fn handle_next(state: &ProjectState, _args: &Value) -> Result<Value, ServerError> {
+pub fn handle_next(state: &ProjectState, _args: &Value) -> Result<Value, HandlerError> {
     let summary = state.status_summary();
 
     let recommendations = if !summary.stalled.is_empty() {
@@ -75,7 +75,7 @@ pub fn handle_next(state: &ProjectState, _args: &Value) -> Result<Value, ServerE
         )]
     } else if !summary.ready.is_empty() {
         vec![format!(
-            "'{}' is ready to implement. Use blue_worktree_create to begin.",
+            "'{}' is ready to implement. Use `blue worktree create` to begin.",
             summary.ready[0].title
         )]
     } else if !summary.active.is_empty() {
@@ -89,7 +89,7 @@ pub fn handle_next(state: &ProjectState, _args: &Value) -> Result<Value, ServerE
             summary.drafts[0].title
         )]
     } else {
-        vec!["Nothing in flight. Use blue_rfc_create to start something new.".to_string()]
+        vec!["Nothing in flight. Use `blue rfc create` to start something new.".to_string()]
     };
 
     Ok(json!({

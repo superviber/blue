@@ -17,7 +17,7 @@ impl GitHubForge {
     pub fn new(token: String) -> Self {
         let client = reqwest::blocking::Client::builder()
             .timeout(std::time::Duration::from_secs(30))
-            .user_agent("blue-mcp/0.1")
+            .user_agent("blue/0.1")
             .build()
             .expect("Failed to create HTTP client");
 

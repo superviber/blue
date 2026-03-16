@@ -7,7 +7,7 @@ use regex::Regex;
 use serde::Serialize;
 use serde_json::{json, Value};
 
-use crate::error::ServerError;
+use crate::handler_error::HandlerError;
 
 /// A single verification step for Playwright execution
 #[derive(Debug, Clone, Serialize)]
@@ -43,16 +43,16 @@ pub enum UrlSafetyLevel {
 }
 
 /// Handle blue_playwright_verify
-pub fn handle_verify(args: &Value) -> Result<Value, ServerError> {
+pub fn handle_verify(args: &Value) -> Result<Value, HandlerError> {
     let task = args
         .get("task")
         .and_then(|v| v.as_str())
-        .ok_or(ServerError::InvalidParams)?;
+        .ok_or(HandlerError::InvalidParams)?;
 
     let base_url = args
         .get("base_url")
         .and_then(|v| v.as_str())
-        .ok_or(ServerError::InvalidParams)?;
+        .ok_or(HandlerError::InvalidParams)?;
 
     let path = args.get("path").and_then(|v| v.as_str());
     let allow_staging = args
@@ -95,7 +95,7 @@ pub fn handle_verify(args: &Value) -> Result<Value, ServerError> {
 
     Ok(json!({
         "status": "success",
-        "message": blue_core::voice::info(
+        "message": crate::voice::info(
             &format!("{} verification steps generated", steps.len()),
             Some(&hint)
         ),
@@ -191,24 +191,24 @@ fn classify_url_safety(url: &str) -> UrlSafetyLevel {
 fn validate_url_safety(
     safety_level: &UrlSafetyLevel,
     allow_staging: bool,
-) -> Result<(), ServerError> {
+) -> Result<(), HandlerError> {
     match safety_level {
         UrlSafetyLevel::Localhost | UrlSafetyLevel::Development => Ok(()),
         UrlSafetyLevel::Staging => {
             if allow_staging {
                 Ok(())
             } else {
-                Err(ServerError::CommandFailed(
+                Err(HandlerError::CommandFailed(
                     "Staging URLs require explicit approval. Pass allow_staging=true to proceed."
                         .to_string(),
                 ))
             }
         }
-        UrlSafetyLevel::Production => Err(ServerError::CommandFailed(
+        UrlSafetyLevel::Production => Err(HandlerError::CommandFailed(
             "Cannot run Playwright verification against production URLs. Use localhost or staging."
                 .to_string(),
         )),
-        UrlSafetyLevel::Unknown => Err(ServerError::CommandFailed(
+        UrlSafetyLevel::Unknown => Err(HandlerError::CommandFailed(
             "Unknown URL safety level. Use localhost for testing or explicitly allow staging."
                 .to_string(),
         )),

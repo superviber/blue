@@ -8,7 +8,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::error::ServerError;
+use crate::handler_error::HandlerError;
 
 /// Guide progress tracking
 #[derive(Debug, Serialize, Deserialize, Default)]
@@ -24,7 +24,7 @@ struct GuideProgress {
 const SECTIONS: &[&str] = &["intro", "workflow", "documents", "implementation", "ready"];
 
 /// Handle blue_guide
-pub fn handle_guide(args: &Value, blue_path: &Path) -> Result<Value, ServerError> {
+pub fn handle_guide(args: &Value, blue_path: &Path) -> Result<Value, HandlerError> {
     let action = args
         .get("action")
         .and_then(|v| v.as_str())
@@ -90,7 +90,7 @@ pub fn handle_guide(args: &Value, blue_path: &Path) -> Result<Value, ServerError
 
             Ok(json!({
                 "status": "success",
-                "message": blue_core::voice::info(
+                "message": crate::voice::info(
                     "Guide skipped",
                     Some("Use blue_guide action='start' anytime to restart")
                 ),
@@ -104,7 +104,7 @@ pub fn handle_guide(args: &Value, blue_path: &Path) -> Result<Value, ServerError
 
             Ok(json!({
                 "status": "success",
-                "message": blue_core::voice::success(
+                "message": crate::voice::success(
                     "Guide reset",
                     Some("Use blue_guide action='start' to begin fresh")
                 )
@@ -121,7 +121,7 @@ pub fn handle_guide(args: &Value, blue_path: &Path) -> Result<Value, ServerError
 
             Ok(json!({
                 "status": "success",
-                "message": blue_core::voice::info(
+                "message": crate::voice::info(
                     &format!("Guide {}% complete", percentage),
                     if progress.completed_at.is_some() {
                         Some("Guide completed!")
@@ -142,7 +142,7 @@ pub fn handle_guide(args: &Value, blue_path: &Path) -> Result<Value, ServerError
                 }
             }))
         }
-        _ => Err(ServerError::InvalidParams),
+        _ => Err(HandlerError::InvalidParams),
     }
 }
 
@@ -157,24 +157,24 @@ fn load_progress(path: &Path) -> GuideProgress {
     }
 }
 
-fn save_progress(path: &Path, progress: &GuideProgress) -> Result<(), ServerError> {
+fn save_progress(path: &Path, progress: &GuideProgress) -> Result<(), HandlerError> {
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|e| ServerError::CommandFailed(e.to_string()))?;
+        fs::create_dir_all(parent).map_err(|e| HandlerError::CommandFailed(e.to_string()))?;
     }
     let json = serde_json::to_string_pretty(progress)
-        .map_err(|e| ServerError::CommandFailed(e.to_string()))?;
-    fs::write(path, json).map_err(|e| ServerError::CommandFailed(e.to_string()))?;
+        .map_err(|e| HandlerError::CommandFailed(e.to_string()))?;
+    fs::write(path, json).map_err(|e| HandlerError::CommandFailed(e.to_string()))?;
     Ok(())
 }
 
-fn render_section(section: &str, progress: &GuideProgress) -> Result<Value, ServerError> {
+fn render_section(section: &str, progress: &GuideProgress) -> Result<Value, HandlerError> {
     let content = get_section_content(section);
     let current_idx = SECTIONS.iter().position(|&s| s == section).unwrap_or(0);
     let total = SECTIONS.len();
 
     Ok(json!({
         "status": "success",
-        "message": blue_core::voice::info(
+        "message": crate::voice::info(
             &format!("Guide section {}/{}", current_idx + 1, total),
             Some("Read the content and use blue_guide action='next' to continue")
         ),
@@ -188,10 +188,10 @@ fn render_section(section: &str, progress: &GuideProgress) -> Result<Value, Serv
     }))
 }
 
-fn render_completion() -> Result<Value, ServerError> {
+fn render_completion() -> Result<Value, HandlerError> {
     Ok(json!({
         "status": "success",
-        "message": blue_core::voice::success(
+        "message": crate::voice::success(
             "Guide complete!",
             Some("You're ready to start working with Blue")
         ),

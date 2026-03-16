@@ -6,21 +6,21 @@ use serde_json::{json, Value};
 use std::fs;
 use std::path::Path;
 
-use blue_core::store::DocType;
-use blue_core::ProjectState;
+use crate::store::DocType;
+use crate::ProjectState;
 
-use crate::ServerError;
+use crate::handler_error::HandlerError;
 
 /// Check what would be deleted (dry run)
 pub fn handle_delete_dry_run(
     state: &ProjectState,
     doc_type: DocType,
     title: &str,
-) -> Result<Value, ServerError> {
+) -> Result<Value, HandlerError> {
     let doc = state
         .store
         .find_document(doc_type, title)
-        .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+        .map_err(|e| HandlerError::StateLoadFailed(e.to_string()))?;
 
     let doc_id = doc.id.unwrap();
 
@@ -28,19 +28,19 @@ pub fn handle_delete_dry_run(
     let adr_dependents = state
         .store
         .has_adr_dependents(doc_id)
-        .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+        .map_err(|e| HandlerError::StateLoadFailed(e.to_string()))?;
 
     // Check for active sessions
     let active_session = state
         .store
         .get_active_session(&doc.title)
-        .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+        .map_err(|e| HandlerError::StateLoadFailed(e.to_string()))?;
 
     // Check for worktree
     let worktree = state
         .store
         .get_worktree(doc_id)
-        .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+        .map_err(|e| HandlerError::StateLoadFailed(e.to_string()))?;
 
     // Find companion files
     let mut companion_files = Vec::new();
@@ -115,12 +115,12 @@ pub fn handle_delete(
     title: &str,
     force: bool,
     permanent: bool,
-) -> Result<Value, ServerError> {
+) -> Result<Value, HandlerError> {
     // Find the document
     let doc = state
         .store
         .find_document(doc_type, title)
-        .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+        .map_err(|e| HandlerError::StateLoadFailed(e.to_string()))?;
 
     let doc_id = doc.id.unwrap();
 
@@ -128,7 +128,7 @@ pub fn handle_delete(
     let adr_dependents = state
         .store
         .has_adr_dependents(doc_id)
-        .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+        .map_err(|e| HandlerError::StateLoadFailed(e.to_string()))?;
 
     if !adr_dependents.is_empty() {
         let adr_titles: Vec<_> = adr_dependents.iter().map(|d| d.title.clone()).collect();
@@ -170,7 +170,7 @@ pub fn handle_delete(
     let active_session = state
         .store
         .get_active_session(&doc.title)
-        .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+        .map_err(|e| HandlerError::StateLoadFailed(e.to_string()))?;
 
     if let Some(session) = active_session.as_ref().filter(|_| !force) {
         return Ok(json!({
@@ -237,12 +237,12 @@ pub fn handle_delete(
         state
             .store
             .delete_document(doc_type, &doc.title)
-            .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+            .map_err(|e| HandlerError::StateLoadFailed(e.to_string()))?;
     } else {
         state
             .store
             .soft_delete_document(doc_type, &doc.title)
-            .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+            .map_err(|e| HandlerError::StateLoadFailed(e.to_string()))?;
     }
 
     let action = if permanent {
@@ -272,18 +272,18 @@ pub fn handle_restore(
     state: &mut ProjectState,
     doc_type: DocType,
     title: &str,
-) -> Result<Value, ServerError> {
+) -> Result<Value, HandlerError> {
     // Check if document exists and is soft-deleted
     let doc = state
         .store
         .get_deleted_document(doc_type, title)
-        .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+        .map_err(|e| HandlerError::StateLoadFailed(e.to_string()))?;
 
     // Restore the document
     state
         .store
         .restore_document(doc_type, &doc.title)
-        .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+        .map_err(|e| HandlerError::StateLoadFailed(e.to_string()))?;
 
     Ok(json!({
         "status": "success",
@@ -298,11 +298,11 @@ pub fn handle_restore(
 pub fn handle_list_deleted(
     state: &ProjectState,
     doc_type: Option<DocType>,
-) -> Result<Value, ServerError> {
+) -> Result<Value, HandlerError> {
     let deleted = state
         .store
         .list_deleted_documents(doc_type)
-        .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+        .map_err(|e| HandlerError::StateLoadFailed(e.to_string()))?;
 
     let docs: Vec<_> = deleted
         .iter()
@@ -325,11 +325,11 @@ pub fn handle_list_deleted(
 }
 
 /// Purge old soft-deleted documents
-pub fn handle_purge_deleted(state: &mut ProjectState, days: i64) -> Result<Value, ServerError> {
+pub fn handle_purge_deleted(state: &mut ProjectState, days: i64) -> Result<Value, HandlerError> {
     let purged = state
         .store
         .purge_old_deleted_documents(days)
-        .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+        .map_err(|e| HandlerError::StateLoadFailed(e.to_string()))?;
 
     Ok(json!({
         "status": "success",

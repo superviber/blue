@@ -6,20 +6,20 @@
 use std::fs;
 use std::path::PathBuf;
 
-use blue_core::{title_to_slug, DocType, Document, ProjectState};
+use crate::{title_to_slug, DocType, Document, ProjectState};
 use serde_json::{json, Value};
 
-use crate::error::ServerError;
+use crate::handler_error::HandlerError;
 
 /// Metadata key for storing runbook actions
 const ACTION_KEY: &str = "action";
 
 /// Handle blue_runbook_create
-pub fn handle_create(state: &mut ProjectState, args: &Value) -> Result<Value, ServerError> {
+pub fn handle_create(state: &mut ProjectState, args: &Value) -> Result<Value, HandlerError> {
     let title = args
         .get("title")
         .and_then(|v| v.as_str())
-        .ok_or(ServerError::InvalidParams)?;
+        .ok_or(HandlerError::InvalidParams)?;
 
     let source_rfc = args.get("source_rfc").and_then(|v| v.as_str());
     let service_name = args.get("service_name").and_then(|v| v.as_str());
@@ -53,7 +53,7 @@ pub fn handle_create(state: &mut ProjectState, args: &Value) -> Result<Value, Se
                 .store
                 .find_document(DocType::Rfc, rfc_title)
                 .map_err(|_| {
-                    ServerError::NotFound(format!("Source RFC '{}' not found", rfc_title))
+                    HandlerError::NotFound(format!("Source RFC '{}' not found", rfc_title))
                 })?,
         )
     } else {
@@ -64,7 +64,7 @@ pub fn handle_create(state: &mut ProjectState, args: &Value) -> Result<Value, Se
     let runbook_number = state
         .store
         .next_number_with_fs(DocType::Runbook, &state.home.docs_path)
-        .map_err(|e| ServerError::CommandFailed(e.to_string()))?;
+        .map_err(|e| HandlerError::CommandFailed(e.to_string()))?;
 
     // Generate file path
     let file_name = format!("{}.active.md", title_to_slug(title));
@@ -93,13 +93,13 @@ pub fn handle_create(state: &mut ProjectState, args: &Value) -> Result<Value, Se
         created_at: None,
         updated_at: None,
         deleted_at: None,
-        content_hash: Some(blue_core::store::hash_content(&markdown)),
+        content_hash: Some(crate::store::hash_content(&markdown)),
         indexed_at: None,
     };
     let doc_id = state
         .store
         .add_document(&doc)
-        .map_err(|e| ServerError::CommandFailed(e.to_string()))?;
+        .map_err(|e| HandlerError::CommandFailed(e.to_string()))?;
 
     // Store actions in metadata table (RFC 0002)
     for action in &actions {
@@ -111,9 +111,9 @@ pub fn handle_create(state: &mut ProjectState, args: &Value) -> Result<Value, Se
 
     // Write the markdown file
     if let Some(parent) = runbook_path.parent() {
-        fs::create_dir_all(parent).map_err(|e| ServerError::CommandFailed(e.to_string()))?;
+        fs::create_dir_all(parent).map_err(|e| HandlerError::CommandFailed(e.to_string()))?;
     }
-    fs::write(&runbook_path, &markdown).map_err(|e| ServerError::CommandFailed(e.to_string()))?;
+    fs::write(&runbook_path, &markdown).map_err(|e| HandlerError::CommandFailed(e.to_string()))?;
 
     // Update source RFC with runbook link if provided
     if let Some(ref rfc_doc) = source_rfc_doc {
@@ -145,7 +145,7 @@ pub fn handle_create(state: &mut ProjectState, args: &Value) -> Result<Value, Se
 
     Ok(json!({
         "status": "success",
-        "message": blue_core::voice::info(
+        "message": crate::voice::info(
             &format!("Runbook created: {}", title),
             Some(hint)
         ),
@@ -157,11 +157,11 @@ pub fn handle_create(state: &mut ProjectState, args: &Value) -> Result<Value, Se
 }
 
 /// Handle blue_runbook_update
-pub fn handle_update(state: &mut ProjectState, args: &Value) -> Result<Value, ServerError> {
+pub fn handle_update(state: &mut ProjectState, args: &Value) -> Result<Value, HandlerError> {
     let title = args
         .get("title")
         .and_then(|v| v.as_str())
-        .ok_or(ServerError::InvalidParams)?;
+        .ok_or(HandlerError::InvalidParams)?;
 
     let add_operation = args.get("add_operation").and_then(|v| v.as_str());
     let add_troubleshooting = args.get("add_troubleshooting").and_then(|v| v.as_str());
@@ -170,17 +170,17 @@ pub fn handle_update(state: &mut ProjectState, args: &Value) -> Result<Value, Se
     let doc = state
         .store
         .find_document(DocType::Runbook, title)
-        .map_err(|_| ServerError::NotFound(format!("Runbook '{}' not found", title)))?;
+        .map_err(|_| HandlerError::NotFound(format!("Runbook '{}' not found", title)))?;
 
     let runbook_file_path = doc
         .file_path
         .as_ref()
-        .ok_or_else(|| ServerError::CommandFailed("Runbook has no file path".to_string()))?;
+        .ok_or_else(|| HandlerError::CommandFailed("Runbook has no file path".to_string()))?;
 
     let docs_path = state.home.docs_path.clone();
     let runbook_path = docs_path.join(runbook_file_path);
     let mut content = fs::read_to_string(&runbook_path)
-        .map_err(|e| ServerError::CommandFailed(format!("Failed to read runbook: {}", e)))?;
+        .map_err(|e| HandlerError::CommandFailed(format!("Failed to read runbook: {}", e)))?;
 
     let mut changes = Vec::new();
 
@@ -231,13 +231,13 @@ pub fn handle_update(state: &mut ProjectState, args: &Value) -> Result<Value, Se
 
     // Write updated content
     fs::write(&runbook_path, &content)
-        .map_err(|e| ServerError::CommandFailed(format!("Failed to write runbook: {}", e)))?;
+        .map_err(|e| HandlerError::CommandFailed(format!("Failed to write runbook: {}", e)))?;
 
     let hint = "Runbook updated. Review the changes and fill in details.";
 
     Ok(json!({
         "status": "success",
-        "message": blue_core::voice::info(
+        "message": crate::voice::info(
             &format!("Runbook updated: {}", title),
             Some(hint)
         ),
@@ -360,18 +360,18 @@ fn to_title_case(s: &str) -> String {
 /// Handle blue_runbook_lookup
 ///
 /// Find runbook by action query using word-based matching.
-pub fn handle_lookup(state: &ProjectState, args: &Value) -> Result<Value, ServerError> {
+pub fn handle_lookup(state: &ProjectState, args: &Value) -> Result<Value, HandlerError> {
     let action_query = args
         .get("action")
         .and_then(|v| v.as_str())
-        .ok_or(ServerError::InvalidParams)?
+        .ok_or(HandlerError::InvalidParams)?
         .to_lowercase();
 
     // Get all runbooks with actions from metadata
     let runbooks = state
         .store
         .list_documents(DocType::Runbook)
-        .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+        .map_err(|e| HandlerError::StateLoadFailed(e.to_string()))?;
 
     // Find best match
     let mut best_match: Option<(Document, Vec<String>, i32)> = None;
@@ -435,11 +435,11 @@ pub fn handle_lookup(state: &ProjectState, args: &Value) -> Result<Value, Server
 /// Handle blue_runbook_actions
 ///
 /// List all registered actions across runbooks.
-pub fn handle_actions(state: &ProjectState) -> Result<Value, ServerError> {
+pub fn handle_actions(state: &ProjectState) -> Result<Value, HandlerError> {
     let runbooks = state
         .store
         .list_documents(DocType::Runbook)
-        .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+        .map_err(|e| HandlerError::StateLoadFailed(e.to_string()))?;
 
     let mut all_actions: Vec<Value> = Vec::new();
 
@@ -462,7 +462,7 @@ pub fn handle_actions(state: &ProjectState) -> Result<Value, ServerError> {
 }
 
 /// Get actions for a runbook from metadata table
-fn get_runbook_actions(store: &blue_core::DocumentStore, doc_id: i64) -> Vec<String> {
+fn get_runbook_actions(store: &crate::DocumentStore, doc_id: i64) -> Vec<String> {
     let mut actions = Vec::new();
 
     if let Ok(mut stmt) = store

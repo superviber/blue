@@ -2,17 +2,17 @@
 //!
 //! Handles reminder CRUD with gates, snoozing, and clearing.
 
-use blue_core::{DocType, ProjectState, Reminder, ReminderStatus};
+use crate::{DocType, ProjectState, Reminder, ReminderStatus};
 use serde_json::{json, Value};
 
-use crate::error::ServerError;
+use crate::handler_error::HandlerError;
 
 /// Handle blue_reminder_create
-pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, ServerError> {
+pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, HandlerError> {
     let title = args
         .get("title")
         .and_then(|v| v.as_str())
-        .ok_or(ServerError::InvalidParams)?;
+        .ok_or(HandlerError::InvalidParams)?;
 
     let context = args.get("context").and_then(|v| v.as_str());
     let gate = args.get("gate").and_then(|v| v.as_str());
@@ -34,7 +34,7 @@ pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, Server
             Err(_) => {
                 return Ok(json!({
                     "status": "error",
-                    "message": blue_core::voice::error(
+                    "message": crate::voice::error(
                         &format!("Can't find document '{}'", link_title),
                         "Check the title's spelled right?"
                     )
@@ -67,7 +67,7 @@ pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, Server
 
             Ok(json!({
                 "status": "success",
-                "message": blue_core::voice::success(
+                "message": crate::voice::success(
                     &format!("Created reminder: '{}'", title),
                     Some(&hint)
                 ),
@@ -83,7 +83,7 @@ pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, Server
         }
         Err(e) => Ok(json!({
             "status": "error",
-            "message": blue_core::voice::error(
+            "message": crate::voice::error(
                 "Couldn't create reminder",
                 &e.to_string()
             )
@@ -92,7 +92,7 @@ pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, Server
 }
 
 /// Handle blue_reminder_list
-pub fn handle_list(state: &ProjectState, args: &Value) -> Result<Value, ServerError> {
+pub fn handle_list(state: &ProjectState, args: &Value) -> Result<Value, HandlerError> {
     let status_filter = args.get("status").and_then(|v| v.as_str());
     let include_future = args
         .get("include_future")
@@ -120,7 +120,7 @@ pub fn handle_list(state: &ProjectState, args: &Value) -> Result<Value, ServerEr
         };
         return Ok(json!({
             "status": "success",
-            "message": blue_core::voice::info(msg, Some("Clear skies ahead!")),
+            "message": crate::voice::info(msg, Some("Clear skies ahead!")),
             "reminders": []
         }));
     }
@@ -166,7 +166,7 @@ pub fn handle_list(state: &ProjectState, args: &Value) -> Result<Value, ServerEr
 
     Ok(json!({
         "status": "success",
-        "message": blue_core::voice::info(
+        "message": crate::voice::info(
             &format!("{} reminder{}", reminders.len(), if reminders.len() == 1 { "" } else { "s" }),
             hint.as_deref()
         ),
@@ -177,11 +177,11 @@ pub fn handle_list(state: &ProjectState, args: &Value) -> Result<Value, ServerEr
 }
 
 /// Handle blue_reminder_snooze
-pub fn handle_snooze(state: &ProjectState, args: &Value) -> Result<Value, ServerError> {
+pub fn handle_snooze(state: &ProjectState, args: &Value) -> Result<Value, HandlerError> {
     let until = args
         .get("until")
         .and_then(|v| v.as_str())
-        .ok_or(ServerError::InvalidParams)?;
+        .ok_or(HandlerError::InvalidParams)?;
 
     // Find reminder by ID or title
     let reminder = if let Some(id) = args.get("id").and_then(|v| v.as_i64()) {
@@ -189,7 +189,7 @@ pub fn handle_snooze(state: &ProjectState, args: &Value) -> Result<Value, Server
     } else if let Some(title) = args.get("title").and_then(|v| v.as_str()) {
         state.store.find_reminder(title)
     } else {
-        return Err(ServerError::InvalidParams);
+        return Err(HandlerError::InvalidParams);
     };
 
     let reminder = match reminder {
@@ -197,7 +197,7 @@ pub fn handle_snooze(state: &ProjectState, args: &Value) -> Result<Value, Server
         Err(e) => {
             return Ok(json!({
                 "status": "error",
-                "message": blue_core::voice::error(
+                "message": crate::voice::error(
                     "Can't find that reminder",
                     &e.to_string()
                 )
@@ -210,7 +210,7 @@ pub fn handle_snooze(state: &ProjectState, args: &Value) -> Result<Value, Server
     match state.store.snooze_reminder(id, until) {
         Ok(_) => Ok(json!({
             "status": "success",
-            "message": blue_core::voice::success(
+            "message": crate::voice::success(
                 &format!("Snoozed '{}' until {}", reminder.title, until),
                 Some("I'll remind you then!")
             ),
@@ -222,7 +222,7 @@ pub fn handle_snooze(state: &ProjectState, args: &Value) -> Result<Value, Server
         })),
         Err(e) => Ok(json!({
             "status": "error",
-            "message": blue_core::voice::error(
+            "message": crate::voice::error(
                 "Couldn't snooze reminder",
                 &e.to_string()
             )
@@ -231,7 +231,7 @@ pub fn handle_snooze(state: &ProjectState, args: &Value) -> Result<Value, Server
 }
 
 /// Handle blue_reminder_clear
-pub fn handle_clear(state: &ProjectState, args: &Value) -> Result<Value, ServerError> {
+pub fn handle_clear(state: &ProjectState, args: &Value) -> Result<Value, HandlerError> {
     let resolution = args.get("resolution").and_then(|v| v.as_str());
 
     // Find reminder by ID or title
@@ -240,7 +240,7 @@ pub fn handle_clear(state: &ProjectState, args: &Value) -> Result<Value, ServerE
     } else if let Some(title) = args.get("title").and_then(|v| v.as_str()) {
         state.store.find_reminder(title)
     } else {
-        return Err(ServerError::InvalidParams);
+        return Err(HandlerError::InvalidParams);
     };
 
     let reminder = match reminder {
@@ -248,7 +248,7 @@ pub fn handle_clear(state: &ProjectState, args: &Value) -> Result<Value, ServerE
         Err(e) => {
             return Ok(json!({
                 "status": "error",
-                "message": blue_core::voice::error(
+                "message": crate::voice::error(
                     "Can't find that reminder",
                     &e.to_string()
                 )
@@ -263,7 +263,7 @@ pub fn handle_clear(state: &ProjectState, args: &Value) -> Result<Value, ServerE
             let hint = resolution.map(|r| format!("Resolution: {}", r));
             Ok(json!({
                 "status": "success",
-                "message": blue_core::voice::success(
+                "message": crate::voice::success(
                     &format!("Cleared '{}'", reminder.title),
                     hint.as_deref()
                 ),
@@ -276,7 +276,7 @@ pub fn handle_clear(state: &ProjectState, args: &Value) -> Result<Value, ServerE
         }
         Err(e) => Ok(json!({
             "status": "error",
-            "message": blue_core::voice::error(
+            "message": crate::voice::error(
                 "Couldn't clear reminder",
                 &e.to_string()
             )

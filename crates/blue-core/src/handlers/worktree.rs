@@ -9,10 +9,10 @@
 
 use std::path::Path;
 
-use blue_core::{DocType, ProjectState, Worktree as StoreWorktree};
+use crate::{DocType, ProjectState, Worktree as StoreWorktree};
 use serde_json::{json, Value};
 
-use crate::error::ServerError;
+use crate::handler_error::HandlerError;
 
 /// Detect the appropriate install command for a project
 ///
@@ -140,23 +140,23 @@ fn slugify(title: &str) -> String {
 }
 
 /// Handle blue_worktree_create
-pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, ServerError> {
+pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, HandlerError> {
     let title = args
         .get("title")
         .and_then(|v| v.as_str())
-        .ok_or(ServerError::InvalidParams)?;
+        .ok_or(HandlerError::InvalidParams)?;
 
     // Find the RFC
     let doc = state
         .store
         .find_document(DocType::Rfc, title)
-        .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+        .map_err(|e| HandlerError::StateLoadFailed(e.to_string()))?;
 
     // Check RFC is accepted or in-progress
     if doc.status != "accepted" && doc.status != "in-progress" {
         return Ok(json!({
             "status": "error",
-            "message": blue_core::voice::error(
+            "message": crate::voice::error(
                 &format!("RFC '{}' is {} - can't create worktree", title, doc.status),
                 "Accept the RFC first with blue_rfc_update_status"
             )
@@ -164,16 +164,16 @@ pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, Server
     }
 
     // Check RFC has a plan (RFC 0014: plan enforcement)
-    let doc_id = doc.id.ok_or(ServerError::InvalidParams)?;
+    let doc_id = doc.id.ok_or(HandlerError::InvalidParams)?;
     let tasks = state
         .store
         .get_tasks(doc_id)
-        .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+        .map_err(|e| HandlerError::StateLoadFailed(e.to_string()))?;
 
     if tasks.is_empty() {
         return Ok(json!({
             "status": "error",
-            "message": blue_core::voice::error(
+            "message": crate::voice::error(
                 &format!("RFC '{}' needs a plan before creating worktree", title),
                 "Create a plan first with blue_rfc_plan"
             ),
@@ -189,7 +189,7 @@ pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, Server
     if let Ok(Some(_existing)) = state.store.get_worktree(doc_id) {
         return Ok(json!({
             "status": "error",
-            "message": blue_core::voice::error(
+            "message": crate::voice::error(
                 &format!("Worktree for '{}' already exists", title),
                 "Use blue_worktree_list to see active worktrees"
             )
@@ -206,7 +206,7 @@ pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, Server
     let repo_path = state.home.root.clone();
     match git2::Repository::open(&repo_path) {
         Ok(repo) => {
-            match blue_core::repo::create_worktree(&repo, &branch_name, &worktree_path) {
+            match crate::repo::create_worktree(&repo, &branch_name, &worktree_path) {
                 Ok(()) => {
                     // Record in store
                     let wt = StoreWorktree {
@@ -252,7 +252,7 @@ pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, Server
                         "path": worktree_path.display().to_string(),
                         "install_command": install_command,
                         "setup_script": setup_script,
-                        "message": blue_core::voice::success(
+                        "message": crate::voice::success(
                             &format!("Created worktree for '{}'", title),
                             Some(hint.trim())
                         ),
@@ -274,7 +274,7 @@ pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, Server
                 }
                 Err(e) => Ok(json!({
                     "status": "error",
-                    "message": blue_core::voice::error(
+                    "message": crate::voice::error(
                         &format!("Couldn't create worktree: {}", e),
                         "Check git status and try again"
                     )
@@ -283,7 +283,7 @@ pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, Server
         }
         Err(e) => Ok(json!({
             "status": "error",
-            "message": blue_core::voice::error(
+            "message": crate::voice::error(
                 &format!("Couldn't open repository: {}", e),
                 "Make sure you're in a git repository"
             )
@@ -292,12 +292,12 @@ pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, Server
 }
 
 /// Handle blue_worktree_list
-pub fn handle_list(state: &ProjectState) -> Result<Value, ServerError> {
+pub fn handle_list(state: &ProjectState) -> Result<Value, HandlerError> {
     // Get worktrees from store
     let worktrees = state
         .store
         .list_worktrees()
-        .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+        .map_err(|e| HandlerError::StateLoadFailed(e.to_string()))?;
 
     // Enrich with document info
     let enriched: Vec<Value> = worktrees
@@ -337,11 +337,11 @@ pub fn handle_list(state: &ProjectState) -> Result<Value, ServerError> {
 /// 2. Remove worktree
 /// 3. Delete local branch
 /// 4. Return commands for switching to develop
-pub fn handle_cleanup(state: &ProjectState, args: &Value) -> Result<Value, ServerError> {
+pub fn handle_cleanup(state: &ProjectState, args: &Value) -> Result<Value, HandlerError> {
     let title = args
         .get("title")
         .and_then(|v| v.as_str())
-        .ok_or(ServerError::InvalidParams)?;
+        .ok_or(HandlerError::InvalidParams)?;
 
     // Support both old and new naming conventions - slugify for feature/ branches
     let (stripped_name, _) = strip_rfc_number_prefix(title);
@@ -352,9 +352,9 @@ pub fn handle_cleanup(state: &ProjectState, args: &Value) -> Result<Value, Serve
     let doc = state
         .store
         .find_document(DocType::Rfc, title)
-        .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+        .map_err(|e| HandlerError::StateLoadFailed(e.to_string()))?;
 
-    let doc_id = doc.id.ok_or(ServerError::InvalidParams)?;
+    let doc_id = doc.id.ok_or(HandlerError::InvalidParams)?;
 
     // Get worktree info
     let worktree = state.store.get_worktree(doc_id).ok().flatten();
@@ -366,7 +366,7 @@ pub fn handle_cleanup(state: &ProjectState, args: &Value) -> Result<Value, Serve
         Err(e) => {
             return Ok(json!({
                 "status": "error",
-                "message": blue_core::voice::error(
+                "message": crate::voice::error(
                     &format!("Couldn't open repository: {}", e),
                     "Make sure you're in a git repository"
                 )
@@ -375,14 +375,14 @@ pub fn handle_cleanup(state: &ProjectState, args: &Value) -> Result<Value, Serve
     };
 
     // Check if branch is merged
-    let is_merged = blue_core::repo::is_branch_merged(&repo, &branch_name, "develop")
-        .or_else(|_| blue_core::repo::is_branch_merged(&repo, &branch_name, "main"))
+    let is_merged = crate::repo::is_branch_merged(&repo, &branch_name, "develop")
+        .or_else(|_| crate::repo::is_branch_merged(&repo, &branch_name, "main"))
         .unwrap_or(false);
 
     if !is_merged {
         return Ok(json!({
             "status": "error",
-            "message": blue_core::voice::error(
+            "message": crate::voice::error(
                 "PR doesn't appear to be merged yet",
                 "Complete the merge first with blue_pr_merge"
             )
@@ -392,7 +392,7 @@ pub fn handle_cleanup(state: &ProjectState, args: &Value) -> Result<Value, Serve
     // Remove worktree from git
     let worktree_removed = if let Some(ref wt) = worktree {
         let wt_path = Path::new(&wt.worktree_path);
-        blue_core::repo::remove_worktree(&repo, wt_path).is_ok()
+        crate::repo::remove_worktree(&repo, wt_path).is_ok()
     } else {
         false
     };
@@ -421,7 +421,7 @@ pub fn handle_cleanup(state: &ProjectState, args: &Value) -> Result<Value, Serve
         "title": title,
         "worktree_removed": worktree_removed,
         "branch_deleted": branch_deleted,
-        "message": blue_core::voice::success(
+        "message": crate::voice::success(
             &format!("Cleaned up after '{}'", title),
             Some(&hint)
         ),
@@ -434,11 +434,11 @@ pub fn handle_cleanup(state: &ProjectState, args: &Value) -> Result<Value, Serve
 }
 
 /// Handle blue_worktree_remove
-pub fn handle_remove(state: &ProjectState, args: &Value) -> Result<Value, ServerError> {
+pub fn handle_remove(state: &ProjectState, args: &Value) -> Result<Value, HandlerError> {
     let title = args
         .get("title")
         .and_then(|v| v.as_str())
-        .ok_or(ServerError::InvalidParams)?;
+        .ok_or(HandlerError::InvalidParams)?;
 
     let force = args.get("force").and_then(|v| v.as_bool()).unwrap_or(false);
 
@@ -446,30 +446,30 @@ pub fn handle_remove(state: &ProjectState, args: &Value) -> Result<Value, Server
     let doc = state
         .store
         .find_document(DocType::Rfc, title)
-        .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+        .map_err(|e| HandlerError::StateLoadFailed(e.to_string()))?;
 
-    let doc_id = doc.id.ok_or(ServerError::InvalidParams)?;
+    let doc_id = doc.id.ok_or(HandlerError::InvalidParams)?;
 
     // Get worktree info
     let worktree = state
         .store
         .get_worktree(doc_id)
-        .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?
-        .ok_or_else(|| ServerError::StateLoadFailed(format!("No worktree for '{}'", title)))?;
+        .map_err(|e| HandlerError::StateLoadFailed(e.to_string()))?
+        .ok_or_else(|| HandlerError::StateLoadFailed(format!("No worktree for '{}'", title)))?;
 
     // Check if branch is merged (unless force)
     if !force {
         let repo_path = state.home.root.clone();
         if let Ok(repo) = git2::Repository::open(&repo_path) {
             if let Ok(false) =
-                blue_core::repo::is_branch_merged(&repo, &worktree.branch_name, "main")
+                crate::repo::is_branch_merged(&repo, &worktree.branch_name, "main")
             {
                 if let Ok(false) =
-                    blue_core::repo::is_branch_merged(&repo, &worktree.branch_name, "develop")
+                    crate::repo::is_branch_merged(&repo, &worktree.branch_name, "develop")
                 {
                     return Ok(json!({
                         "status": "error",
-                        "message": blue_core::voice::error(
+                        "message": crate::voice::error(
                             &format!("Branch '{}' isn't merged yet", worktree.branch_name),
                             "Merge first, or use force=true to remove anyway"
                         )
@@ -483,10 +483,10 @@ pub fn handle_remove(state: &ProjectState, args: &Value) -> Result<Value, Server
     let repo_path = state.home.root.clone();
     let wt_path = Path::new(&worktree.worktree_path);
     if let Ok(repo) = git2::Repository::open(&repo_path) {
-        if let Err(e) = blue_core::repo::remove_worktree(&repo, wt_path) {
+        if let Err(e) = crate::repo::remove_worktree(&repo, wt_path) {
             return Ok(json!({
                 "status": "error",
-                "message": blue_core::voice::error(
+                "message": crate::voice::error(
                     &format!("Couldn't remove worktree: {}", e),
                     "Try removing manually with 'git worktree remove'"
                 )
@@ -498,13 +498,13 @@ pub fn handle_remove(state: &ProjectState, args: &Value) -> Result<Value, Server
     state
         .store
         .remove_worktree(doc_id)
-        .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+        .map_err(|e| HandlerError::StateLoadFailed(e.to_string()))?;
 
     Ok(json!({
         "status": "success",
         "title": title,
         "branch": worktree.branch_name,
-        "message": blue_core::voice::success(
+        "message": crate::voice::success(
             &format!("Removed worktree for '{}'", title),
             None
         )
@@ -584,7 +584,7 @@ mod tests {
 
     #[test]
     fn test_worktree_requires_plan() {
-        use blue_core::{Document, ProjectState};
+        use crate::{Document, ProjectState};
 
         let state = ProjectState::for_test();
 

@@ -14,13 +14,13 @@
 
 use std::process::Command;
 
-use blue_core::{
+use crate::{
     create_forge_cached, detect_forge_type_cached, parse_git_url, CreatePrOpts, DocType,
     MergeStrategy, ProjectState,
 };
 use serde_json::{json, Value};
 
-use crate::error::ServerError;
+use crate::handler_error::HandlerError;
 use crate::handlers::worktree::strip_rfc_number_prefix;
 
 /// Task category for test plan items
@@ -40,7 +40,7 @@ pub enum TaskCategory {
 /// will be formatted as "RFC 0007: Consistent Branch Naming" per RFC 0007.
 ///
 /// Uses native REST API for the detected forge (GitHub or Forgejo/Gitea).
-pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, ServerError> {
+pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, HandlerError> {
     let rfc = args.get("rfc").and_then(|v| v.as_str());
 
     // If RFC is provided, validate workflow state (RFC 0014)
@@ -51,7 +51,7 @@ pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, Server
             if doc.status != "implemented" && doc.status != "in-progress" {
                 return Ok(json!({
                     "status": "error",
-                    "message": blue_core::voice::error(
+                    "message": crate::voice::error(
                         &format!("RFC '{}' is {} - complete implementation first", rfc_title, doc.status),
                         "Use blue_rfc_complete after finishing work"
                     )
@@ -63,7 +63,7 @@ pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, Server
                 if state.store.get_worktree(doc_id).ok().flatten().is_none() {
                     return Ok(json!({
                         "status": "warning",
-                        "message": blue_core::voice::error(
+                        "message": crate::voice::error(
                             "No worktree for this RFC",
                             "PRs usually come from worktrees. Proceed with caution."
                         )
@@ -85,7 +85,7 @@ pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, Server
     } else {
         args.get("title")
             .and_then(|v| v.as_str())
-            .ok_or(ServerError::InvalidParams)?
+            .ok_or(HandlerError::InvalidParams)?
             .to_string()
     };
 
@@ -101,7 +101,7 @@ pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, Server
     if base == "main" || base == "master" {
         return Ok(json!({
             "status": "error",
-            "message": blue_core::voice::error(
+            "message": crate::voice::error(
                 "Can't target main directly",
                 "Use 'develop' as base branch, then release to main"
             )
@@ -114,7 +114,7 @@ pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, Server
         Err(e) => {
             return Ok(json!({
                 "status": "error",
-                "message": blue_core::voice::error(
+                "message": crate::voice::error(
                     "Couldn't detect git remote",
                     &e
                 )
@@ -132,7 +132,7 @@ pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, Server
         Err(e) => {
             return Ok(json!({
                 "status": "error",
-                "message": blue_core::voice::error(
+                "message": crate::voice::error(
                     "Couldn't get current branch",
                     &e
                 )
@@ -146,7 +146,7 @@ pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, Server
         Err(e) => {
             return Ok(json!({
                 "status": "error",
-                "message": blue_core::voice::error(
+                "message": crate::voice::error(
                     "Couldn't create forge client",
                     &format!("{}", e)
                 )
@@ -172,7 +172,7 @@ pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, Server
             "forge": forge_type.to_string(),
             "base_branch": base,
             "title": title,
-            "message": blue_core::voice::success(
+            "message": crate::voice::success(
                 &format!("Created PR #{}", pr.number),
                 Some(&pr.url)
             ),
@@ -182,7 +182,7 @@ pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, Server
         })),
         Err(e) => Ok(json!({
             "status": "error",
-            "message": blue_core::voice::error(
+            "message": crate::voice::error(
                 "Failed to create PR",
                 &format!("{}", e)
             )
@@ -191,7 +191,7 @@ pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, Server
 }
 
 /// Handle blue_pr_verify
-pub fn handle_verify(_state: &ProjectState, args: &Value) -> Result<Value, ServerError> {
+pub fn handle_verify(_state: &ProjectState, args: &Value) -> Result<Value, HandlerError> {
     let pr_number = args
         .get("pr_number")
         .and_then(|v| v.as_u64())
@@ -242,7 +242,7 @@ pub fn handle_verify(_state: &ProjectState, args: &Value) -> Result<Value, Serve
             "truly_manual": manual_tasks
         },
         "message": if all_verified {
-            blue_core::voice::success(
+            crate::voice::success(
                 &format!("PR #{}: All {} items verified", pr_data.number, items.len()),
                 Some("Ready to check approvals with blue_pr_check_approvals.")
             )
@@ -257,11 +257,11 @@ pub fn handle_verify(_state: &ProjectState, args: &Value) -> Result<Value, Serve
 }
 
 /// Handle blue_pr_check_item
-pub fn handle_check_item(_state: &ProjectState, args: &Value) -> Result<Value, ServerError> {
+pub fn handle_check_item(_state: &ProjectState, args: &Value) -> Result<Value, HandlerError> {
     let item = args
         .get("item")
         .and_then(|v| v.as_str())
-        .ok_or(ServerError::InvalidParams)?;
+        .ok_or(HandlerError::InvalidParams)?;
 
     let pr_number = args
         .get("pr_number")
@@ -288,7 +288,7 @@ pub fn handle_check_item(_state: &ProjectState, args: &Value) -> Result<Value, S
         "verified_by": verified_by,
         "remaining_unchecked": unchecked_count,
         "all_verified": unchecked_count == 0,
-        "message": blue_core::voice::success(
+        "message": crate::voice::success(
             &format!("Checked: '{}'", matched_item),
             Some(&format!("{} items remaining.", unchecked_count))
         )
@@ -296,7 +296,7 @@ pub fn handle_check_item(_state: &ProjectState, args: &Value) -> Result<Value, S
 }
 
 /// Handle blue_pr_check_approvals
-pub fn handle_check_approvals(_state: &ProjectState, args: &Value) -> Result<Value, ServerError> {
+pub fn handle_check_approvals(_state: &ProjectState, args: &Value) -> Result<Value, HandlerError> {
     let pr_number = args
         .get("pr_number")
         .and_then(|v| v.as_u64())
@@ -329,12 +329,12 @@ pub fn handle_check_approvals(_state: &ProjectState, args: &Value) -> Result<Val
         "ready_to_merge": ready_to_merge,
         "blocking_reasons": blocking_reasons,
         "message": if ready_to_merge {
-            blue_core::voice::success(
+            crate::voice::success(
                 "PR approved and verified",
                 Some("Ready to merge with blue_pr_merge.")
             )
         } else {
-            blue_core::voice::error(
+            crate::voice::error(
                 "Not ready to merge",
                 &blocking_reasons.join(". ")
             )
@@ -345,7 +345,7 @@ pub fn handle_check_approvals(_state: &ProjectState, args: &Value) -> Result<Val
 /// Handle blue_pr_merge
 ///
 /// Merges a PR using the detected forge's native API.
-pub fn handle_merge(state: &ProjectState, args: &Value) -> Result<Value, ServerError> {
+pub fn handle_merge(state: &ProjectState, args: &Value) -> Result<Value, HandlerError> {
     let pr_number = args.get("pr_number").and_then(|v| v.as_u64());
     let squash = args.get("squash").and_then(|v| v.as_bool()).unwrap_or(true);
 
@@ -355,7 +355,7 @@ pub fn handle_merge(state: &ProjectState, args: &Value) -> Result<Value, ServerE
         Err(e) => {
             return Ok(json!({
                 "status": "error",
-                "message": blue_core::voice::error(
+                "message": crate::voice::error(
                     "Couldn't detect git remote",
                     &e
                 )
@@ -372,7 +372,7 @@ pub fn handle_merge(state: &ProjectState, args: &Value) -> Result<Value, ServerE
         Err(e) => {
             return Ok(json!({
                 "status": "error",
-                "message": blue_core::voice::error(
+                "message": crate::voice::error(
                     "Couldn't create forge client",
                     &format!("{}", e)
                 )
@@ -400,7 +400,7 @@ pub fn handle_merge(state: &ProjectState, args: &Value) -> Result<Value, ServerE
         if !args.get("force").and_then(|v| v.as_bool()).unwrap_or(false) {
             return Ok(json!({
                 "status": "warning",
-                "message": blue_core::voice::error(
+                "message": crate::voice::error(
                     "Couldn't verify preconditions",
                     &format!("{}. Use force=true to merge anyway.", precondition_error)
                 ),
@@ -422,7 +422,7 @@ pub fn handle_merge(state: &ProjectState, args: &Value) -> Result<Value, ServerE
             "pr_number": number,
             "forge": forge_type.to_string(),
             "strategy": if squash { "squash" } else { "merge" },
-            "message": blue_core::voice::success(
+            "message": crate::voice::success(
                 &format!("Merged PR #{}", number),
                 Some("Run blue_worktree_cleanup to clean up local worktree.")
             ),
@@ -432,7 +432,7 @@ pub fn handle_merge(state: &ProjectState, args: &Value) -> Result<Value, ServerE
         })),
         Err(e) => Ok(json!({
             "status": "error",
-            "message": blue_core::voice::error(
+            "message": crate::voice::error(
                 "Merge failed",
                 &format!("{}", e)
             )
@@ -475,7 +475,7 @@ struct PrData {
     state: String,
 }
 
-fn fetch_pr_data(pr_number: Option<u32>) -> Result<PrData, ServerError> {
+fn fetch_pr_data(pr_number: Option<u32>) -> Result<PrData, HandlerError> {
     let mut args = vec!["pr", "view", "--json", "number,body,state"];
 
     let pr_num_str;
@@ -487,18 +487,18 @@ fn fetch_pr_data(pr_number: Option<u32>) -> Result<PrData, ServerError> {
     let output = Command::new("gh")
         .args(&args)
         .output()
-        .map_err(|e| ServerError::CommandFailed(format!("Failed to run gh: {}", e)))?;
+        .map_err(|e| HandlerError::CommandFailed(format!("Failed to run gh: {}", e)))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(ServerError::CommandFailed(format!(
+        return Err(HandlerError::CommandFailed(format!(
             "gh pr view failed: {}",
             stderr
         )));
     }
 
     let data: serde_json::Value = serde_json::from_slice(&output.stdout)
-        .map_err(|e| ServerError::CommandFailed(format!("Failed to parse PR data: {}", e)))?;
+        .map_err(|e| HandlerError::CommandFailed(format!("Failed to parse PR data: {}", e)))?;
 
     Ok(PrData {
         number: data["number"].as_u64().unwrap_or(0) as u32,
@@ -507,7 +507,7 @@ fn fetch_pr_data(pr_number: Option<u32>) -> Result<PrData, ServerError> {
     })
 }
 
-fn fetch_pr_approvals(pr_number: Option<u32>) -> Result<(bool, Vec<String>), ServerError> {
+fn fetch_pr_approvals(pr_number: Option<u32>) -> Result<(bool, Vec<String>), HandlerError> {
     let mut args = vec!["pr", "view", "--json", "reviews"];
 
     let pr_num_str;
@@ -519,18 +519,18 @@ fn fetch_pr_approvals(pr_number: Option<u32>) -> Result<(bool, Vec<String>), Ser
     let output = Command::new("gh")
         .args(&args)
         .output()
-        .map_err(|e| ServerError::CommandFailed(format!("Failed to run gh: {}", e)))?;
+        .map_err(|e| HandlerError::CommandFailed(format!("Failed to run gh: {}", e)))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(ServerError::CommandFailed(format!(
+        return Err(HandlerError::CommandFailed(format!(
             "gh pr view failed: {}",
             stderr
         )));
     }
 
     let data: serde_json::Value = serde_json::from_slice(&output.stdout)
-        .map_err(|e| ServerError::CommandFailed(format!("Failed to parse reviews: {}", e)))?;
+        .map_err(|e| HandlerError::CommandFailed(format!("Failed to parse reviews: {}", e)))?;
 
     let reviews = data["reviews"].as_array();
     let approved_by: Vec<String> = reviews
@@ -545,15 +545,15 @@ fn fetch_pr_approvals(pr_number: Option<u32>) -> Result<(bool, Vec<String>), Ser
     Ok((!approved_by.is_empty(), approved_by))
 }
 
-fn update_pr_body(pr_number: u32, new_body: &str) -> Result<(), ServerError> {
+fn update_pr_body(pr_number: u32, new_body: &str) -> Result<(), HandlerError> {
     let output = Command::new("gh")
         .args(["pr", "edit", &pr_number.to_string(), "--body", new_body])
         .output()
-        .map_err(|e| ServerError::CommandFailed(format!("Failed to run gh: {}", e)))?;
+        .map_err(|e| HandlerError::CommandFailed(format!("Failed to run gh: {}", e)))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(ServerError::CommandFailed(format!(
+        return Err(HandlerError::CommandFailed(format!(
             "gh pr edit failed: {}",
             stderr
         )));
@@ -672,7 +672,7 @@ fn categorize_task(description: &str) -> TaskCategory {
 fn update_checkbox_in_body(
     body: &str,
     item_selector: &str,
-) -> Result<(String, String), ServerError> {
+) -> Result<(String, String), HandlerError> {
     let mut lines: Vec<String> = body.lines().map(|s| s.to_string()).collect();
     let mut matched_item = None;
     let mut matched_line_idx = None;
@@ -717,7 +717,7 @@ fn update_checkbox_in_body(
 
     match matched_item {
         Some(item) => Ok((lines.join("\n"), item)),
-        None => Err(ServerError::NotFound(format!(
+        None => Err(HandlerError::NotFound(format!(
             "No matching unchecked item for: {}",
             item_selector
         ))),

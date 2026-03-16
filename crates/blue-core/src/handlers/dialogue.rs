@@ -8,7 +8,7 @@ use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use blue_core::alignment_db::{
+use crate::alignment_db::{
     self,
     can_dialogue_converge,
     create_round_with_metrics,
@@ -47,12 +47,12 @@ use blue_core::alignment_db::{
     Verdict,
     VerdictType,
 };
-use blue_core::{title_to_slug, DocType, Document, LinkType, ProjectState};
+use crate::{title_to_slug, DocType, Document, LinkType, ProjectState};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::error::ServerError;
+use crate::handler_error::HandlerError;
 
 /// Coerce a JSON value to bool, accepting both `true` and `"true"`.
 /// MCP clients sometimes send booleans as strings.
@@ -214,7 +214,7 @@ pub struct ExtractionResult {
 }
 
 /// Handle blue_extract_dialogue
-pub fn handle_extract_dialogue(args: &Value) -> Result<Value, ServerError> {
+pub fn handle_extract_dialogue(args: &Value) -> Result<Value, HandlerError> {
     let task_id = args.get("task_id").and_then(|v| v.as_str());
     let file_path_arg = args.get("file_path").and_then(|v| v.as_str());
 
@@ -223,13 +223,13 @@ pub fn handle_extract_dialogue(args: &Value) -> Result<Value, ServerError> {
         (Some(id), _) => resolve_task_output(id)?,
         (None, Some(path)) => PathBuf::from(path),
         (None, None) => {
-            return Err(ServerError::InvalidParams);
+            return Err(HandlerError::InvalidParams);
         }
     };
 
     // Verify file exists
     if !file_path.exists() {
-        return Err(ServerError::CommandFailed(format!(
+        return Err(HandlerError::CommandFailed(format!(
             "JSONL file not found: {}",
             file_path.display()
         )));
@@ -261,7 +261,7 @@ pub fn handle_extract_dialogue(args: &Value) -> Result<Value, ServerError> {
 
     Ok(serde_json::json!({
         "status": "success",
-        "message": blue_core::voice::info(
+        "message": crate::voice::info(
             &format!("Extracted {} messages", result.message_count),
             Some(&hint)
         ),
@@ -274,21 +274,21 @@ pub fn handle_extract_dialogue(args: &Value) -> Result<Value, ServerError> {
 }
 
 /// Resolve file path from task_id
-fn resolve_task_output(task_id: &str) -> Result<PathBuf, ServerError> {
+fn resolve_task_output(task_id: &str) -> Result<PathBuf, HandlerError> {
     // Look for task output symlink in /tmp/claude/.../tasks/
     let tmp_claude = PathBuf::from("/tmp/claude");
     if !tmp_claude.exists() {
-        return Err(ServerError::CommandFailed(
+        return Err(HandlerError::CommandFailed(
             "No /tmp/claude directory found. Is Claude Code running?".to_string(),
         ));
     }
 
     // Search for task output file
     for entry in fs::read_dir(&tmp_claude)
-        .map_err(|e| ServerError::CommandFailed(format!("Failed to read /tmp/claude: {}", e)))?
+        .map_err(|e| HandlerError::CommandFailed(format!("Failed to read /tmp/claude: {}", e)))?
     {
         let entry = entry.map_err(|e| {
-            ServerError::CommandFailed(format!("Failed to read directory entry: {}", e))
+            HandlerError::CommandFailed(format!("Failed to read directory entry: {}", e))
         })?;
         let tasks_dir = entry.path().join("tasks");
         if tasks_dir.exists() {
@@ -301,7 +301,7 @@ fn resolve_task_output(task_id: &str) -> Result<PathBuf, ServerError> {
         }
     }
 
-    Err(ServerError::CommandFailed(format!(
+    Err(HandlerError::CommandFailed(format!(
         "Task output not found for task_id: {}",
         task_id
     )))
@@ -317,17 +317,17 @@ fn jq_available() -> bool {
 }
 
 /// Extract dialogue using jq (faster for large files)
-fn extract_with_jq(file_path: &Path) -> Result<ExtractionResult, ServerError> {
+fn extract_with_jq(file_path: &Path) -> Result<ExtractionResult, HandlerError> {
     let output = Command::new("jq")
         .arg("-r")
         .arg(r#"select(.type == "assistant") | .message.content[]? | select(.type == "text") | .text"#)
         .arg(file_path)
         .output()
-        .map_err(|e| ServerError::CommandFailed(format!("Failed to run jq: {}", e)))?;
+        .map_err(|e| HandlerError::CommandFailed(format!("Failed to run jq: {}", e)))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(ServerError::CommandFailed(format!("jq failed: {}", stderr)));
+        return Err(HandlerError::CommandFailed(format!("jq failed: {}", stderr)));
     }
 
     let text = String::from_utf8_lossy(&output.stdout).to_string();
@@ -352,9 +352,9 @@ fn extract_with_jq(file_path: &Path) -> Result<ExtractionResult, ServerError> {
 }
 
 /// Extract dialogue using pure Rust (fallback)
-fn extract_with_rust(file_path: &Path) -> Result<ExtractionResult, ServerError> {
+fn extract_with_rust(file_path: &Path) -> Result<ExtractionResult, HandlerError> {
     let file = File::open(file_path)
-        .map_err(|e| ServerError::CommandFailed(format!("Failed to open file: {}", e)))?;
+        .map_err(|e| HandlerError::CommandFailed(format!("Failed to open file: {}", e)))?;
 
     let reader = BufReader::new(file);
     let mut texts = Vec::new();
@@ -434,11 +434,11 @@ fn extract_with_rust(file_path: &Path) -> Result<ExtractionResult, ServerError> 
 /// Handle blue_dialogue_create
 ///
 /// Creates a new dialogue document with SQLite metadata.
-pub fn handle_create(state: &mut ProjectState, args: &Value) -> Result<Value, ServerError> {
+pub fn handle_create(state: &mut ProjectState, args: &Value) -> Result<Value, HandlerError> {
     let title = args
         .get("title")
         .and_then(|v| v.as_str())
-        .ok_or(ServerError::InvalidParams)?;
+        .ok_or(HandlerError::InvalidParams)?;
 
     let rfc_title = args.get("rfc_title").and_then(|v| v.as_str());
     let summary = args.get("summary").and_then(|v| v.as_str());
@@ -483,7 +483,7 @@ pub fn handle_create(state: &mut ProjectState, args: &Value) -> Result<Value, Se
 
     // RFC 0048: Alignment mode requires expert_pool
     if alignment && expert_pool.is_none() {
-        return Err(ServerError::CommandFailed(
+        return Err(HandlerError::CommandFailed(
             "Alignment dialogues require expert_pool parameter (RFC 0048)".to_string(),
         ));
     }
@@ -494,7 +494,7 @@ pub fn handle_create(state: &mut ProjectState, args: &Value) -> Result<Value, Se
             state
                 .store
                 .find_document(DocType::Rfc, rfc)
-                .map_err(|_| ServerError::NotFound(format!("RFC '{}' not found", rfc)))?,
+                .map_err(|_| HandlerError::NotFound(format!("RFC '{}' not found", rfc)))?,
         )
     } else {
         None
@@ -504,10 +504,10 @@ pub fn handle_create(state: &mut ProjectState, args: &Value) -> Result<Value, Se
     let dialogue_number = state
         .store
         .next_number_with_fs(DocType::Dialogue, &state.home.docs_path)
-        .map_err(|e| ServerError::CommandFailed(e.to_string()))?;
+        .map_err(|e| HandlerError::CommandFailed(e.to_string()))?;
 
     // Generate file path with ISO 8601 timestamp prefix (RFC 0031)
-    let timestamp = blue_core::utc_timestamp();
+    let timestamp = crate::utc_timestamp();
     let slug = title_to_slug(title);
     let file_name = format!("{}-{}.dialogue.recorded.md", timestamp, slug);
     let file_path = PathBuf::from("dialogues").join(&file_name);
@@ -536,12 +536,12 @@ pub fn handle_create(state: &mut ProjectState, args: &Value) -> Result<Value, Se
 
     // Create dialogues directory if it doesn't exist
     if let Some(parent) = dialogue_path.parent() {
-        fs::create_dir_all(parent).map_err(|e| ServerError::CommandFailed(e.to_string()))?;
+        fs::create_dir_all(parent).map_err(|e| HandlerError::CommandFailed(e.to_string()))?;
     }
 
     // Overwrite protection (RFC 0031)
     if dialogue_path.exists() {
-        return Err(ServerError::CommandFailed(format!(
+        return Err(HandlerError::CommandFailed(format!(
             "File already exists: {}",
             dialogue_path.display()
         )));
@@ -555,7 +555,7 @@ pub fn handle_create(state: &mut ProjectState, args: &Value) -> Result<Value, Se
     let dialogue_id = state
         .store
         .add_document(&doc)
-        .map_err(|e| ServerError::CommandFailed(e.to_string()))?;
+        .map_err(|e| HandlerError::CommandFailed(e.to_string()))?;
 
     // Link to RFC if provided
     if let Some(ref rfc) = rfc_doc {
@@ -566,7 +566,7 @@ pub fn handle_create(state: &mut ProjectState, args: &Value) -> Result<Value, Se
         }
     }
 
-    fs::write(&dialogue_path, &markdown).map_err(|e| ServerError::CommandFailed(e.to_string()))?;
+    fs::write(&dialogue_path, &markdown).map_err(|e| HandlerError::CommandFailed(e.to_string()))?;
 
     // Build response — RFC 0023: inject protocol as prose in message field
     let (message, judge_protocol) = if let Some(ref agents) = pastry_agents {
@@ -574,17 +574,17 @@ pub fn handle_create(state: &mut ProjectState, args: &Value) -> Result<Value, Se
         // Format: .blue/dialogues/2026-02-03T1423Z-topic-name/
         let output_dir = format!(".blue/dialogues/{}-{}", timestamp, slug);
         fs::create_dir_all(&output_dir).map_err(|e| {
-            ServerError::CommandFailed(format!("Failed to create output dir {}: {}", output_dir, e))
+            HandlerError::CommandFailed(format!("Failed to create output dir {}: {}", output_dir, e))
         })?;
 
         // RFC 0048: Persist expert pool to output directory
         if let Some(ref pool) = pool_for_response {
             let pool_path = format!("{}/expert-pool.json", output_dir);
             let pool_json = serde_json::to_string_pretty(pool).map_err(|e| {
-                ServerError::CommandFailed(format!("Failed to serialize pool: {}", e))
+                HandlerError::CommandFailed(format!("Failed to serialize pool: {}", e))
             })?;
             fs::write(&pool_path, pool_json)
-                .map_err(|e| ServerError::CommandFailed(format!("Failed to write pool: {}", e)))?;
+                .map_err(|e| HandlerError::CommandFailed(format!("Failed to write pool: {}", e)))?;
         }
 
         let protocol = build_judge_protocol(
@@ -615,7 +615,7 @@ pub fn handle_create(state: &mut ProjectState, args: &Value) -> Result<Value, Se
         );
         (msg, Some(protocol))
     } else {
-        let msg = blue_core::voice::info(
+        let msg = crate::voice::info(
             &format!("Dialogue recorded: {}", title),
             Some(if rfc_title.is_some() {
                 "Dialogue recorded and linked to RFC."
@@ -651,16 +651,16 @@ pub fn handle_create(state: &mut ProjectState, args: &Value) -> Result<Value, Se
 }
 
 /// Handle blue_dialogue_get
-pub fn handle_get(state: &ProjectState, args: &Value) -> Result<Value, ServerError> {
+pub fn handle_get(state: &ProjectState, args: &Value) -> Result<Value, HandlerError> {
     let title = args
         .get("title")
         .and_then(|v| v.as_str())
-        .ok_or(ServerError::InvalidParams)?;
+        .ok_or(HandlerError::InvalidParams)?;
 
     let doc = state
         .store
         .find_document(DocType::Dialogue, title)
-        .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+        .map_err(|e| HandlerError::StateLoadFailed(e.to_string()))?;
 
     // Read file content if available
     let content = if let Some(ref rel_path) = doc.file_path {
@@ -684,7 +684,7 @@ pub fn handle_get(state: &ProjectState, args: &Value) -> Result<Value, ServerErr
 
     Ok(json!({
         "status": "success",
-        "message": blue_core::voice::info(
+        "message": crate::voice::info(
             &format!("Dialogue: {}", doc.title),
             None
         ),
@@ -702,13 +702,13 @@ pub fn handle_get(state: &ProjectState, args: &Value) -> Result<Value, ServerErr
 }
 
 /// Handle blue_dialogue_list
-pub fn handle_list(state: &ProjectState, args: &Value) -> Result<Value, ServerError> {
+pub fn handle_list(state: &ProjectState, args: &Value) -> Result<Value, HandlerError> {
     let rfc_filter = args.get("rfc_title").and_then(|v| v.as_str());
 
     let all_dialogues = state
         .store
         .list_documents(DocType::Dialogue)
-        .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+        .map_err(|e| HandlerError::StateLoadFailed(e.to_string()))?;
 
     // Filter by RFC if specified
     let dialogues: Vec<_> = if let Some(rfc_title) = rfc_filter {
@@ -716,7 +716,7 @@ pub fn handle_list(state: &ProjectState, args: &Value) -> Result<Value, ServerEr
         let rfc_doc = state
             .store
             .find_document(DocType::Rfc, rfc_title)
-            .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+            .map_err(|e| HandlerError::StateLoadFailed(e.to_string()))?;
 
         // Find dialogues linked to this RFC
         if let Some(rfc_id) = rfc_doc.id {
@@ -753,7 +753,7 @@ pub fn handle_list(state: &ProjectState, args: &Value) -> Result<Value, ServerEr
 
     Ok(json!({
         "status": "success",
-        "message": blue_core::voice::info(
+        "message": crate::voice::info(
             &format!("{} dialogue(s)", dialogues.len()),
             Some(hint)
         ),
@@ -771,13 +771,13 @@ pub fn handle_list(state: &ProjectState, args: &Value) -> Result<Value, ServerEr
 }
 
 /// Handle blue_dialogue_save (extends extract_dialogue to save with metadata)
-pub fn handle_save(state: &mut ProjectState, args: &Value) -> Result<Value, ServerError> {
+pub fn handle_save(state: &mut ProjectState, args: &Value) -> Result<Value, HandlerError> {
     let task_id = args.get("task_id").and_then(|v| v.as_str());
     let file_path_arg = args.get("file_path").and_then(|v| v.as_str());
     let title = args
         .get("title")
         .and_then(|v| v.as_str())
-        .ok_or(ServerError::InvalidParams)?;
+        .ok_or(HandlerError::InvalidParams)?;
     let rfc_title = args.get("rfc_title").and_then(|v| v.as_str());
     let summary = args.get("summary").and_then(|v| v.as_str());
 
@@ -786,13 +786,13 @@ pub fn handle_save(state: &mut ProjectState, args: &Value) -> Result<Value, Serv
         (Some(id), _) => resolve_task_output(id)?,
         (None, Some(path)) => PathBuf::from(path),
         (None, None) => {
-            return Err(ServerError::InvalidParams);
+            return Err(HandlerError::InvalidParams);
         }
     };
 
     // Verify file exists
     if !jsonl_path.exists() {
-        return Err(ServerError::CommandFailed(format!(
+        return Err(HandlerError::CommandFailed(format!(
             "JSONL file not found: {}",
             jsonl_path.display()
         )));
@@ -1004,7 +1004,7 @@ fn tier_split(count: usize) -> (usize, usize, usize) {
 ///
 /// Fresh experts (from pool or created) need context about what happened
 /// in prior rounds so they can engage meaningfully.
-pub fn generate_context_brief(output_dir: &str, round: usize) -> Result<String, ServerError> {
+pub fn generate_context_brief(output_dir: &str, round: usize) -> Result<String, HandlerError> {
     if round == 0 {
         return Ok(String::new());
     }
@@ -1596,28 +1596,28 @@ fn to_title_case(s: &str) -> String {
 /// ready to pass directly to the Task tool. Eliminates manual template substitution.
 ///
 /// RFC 0050: Now accepts optional `expert_source` to generate context briefs for fresh experts.
-pub fn handle_round_prompt(args: &Value) -> Result<Value, ServerError> {
+pub fn handle_round_prompt(args: &Value) -> Result<Value, HandlerError> {
     // Required params
     let output_dir = args
         .get("output_dir")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| ServerError::InvalidParams)?;
+        .ok_or_else(|| HandlerError::InvalidParams)?;
     let agent_name = args
         .get("agent_name")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| ServerError::InvalidParams)?;
+        .ok_or_else(|| HandlerError::InvalidParams)?;
     let agent_emoji = args
         .get("agent_emoji")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| ServerError::InvalidParams)?;
+        .ok_or_else(|| HandlerError::InvalidParams)?;
     let agent_role = args
         .get("agent_role")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| ServerError::InvalidParams)?;
+        .ok_or_else(|| HandlerError::InvalidParams)?;
     let round = args
         .get("round")
         .and_then(|v| v.as_u64())
-        .ok_or_else(|| ServerError::InvalidParams)? as usize;
+        .ok_or_else(|| HandlerError::InvalidParams)? as usize;
 
     // Optional params
     let sources: Vec<String> = args
@@ -1836,16 +1836,16 @@ Five lines. The FILE_WRITTEN line proves you wrote the file. Without it, the Jud
 /// Handle blue_dialogue_sample_panel (RFC 0048)
 ///
 /// Sample a new panel from the expert pool for manual round control.
-pub fn handle_sample_panel(args: &Value) -> Result<Value, ServerError> {
+pub fn handle_sample_panel(args: &Value) -> Result<Value, HandlerError> {
     let dialogue_title = args
         .get("dialogue_title")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| ServerError::InvalidParams)?;
+        .ok_or_else(|| HandlerError::InvalidParams)?;
 
     let round = args
         .get("round")
         .and_then(|v| v.as_u64())
-        .ok_or_else(|| ServerError::InvalidParams)? as usize;
+        .ok_or_else(|| HandlerError::InvalidParams)? as usize;
 
     let panel_size = args
         .get("panel_size")
@@ -1879,14 +1879,14 @@ pub fn handle_sample_panel(args: &Value) -> Result<Value, ServerError> {
     let pool_path = format!("/tmp/blue-dialogue/{}/expert-pool.json", slug);
 
     let pool_content = fs::read_to_string(&pool_path).map_err(|e| {
-        ServerError::CommandFailed(format!(
+        HandlerError::CommandFailed(format!(
             "Failed to read expert pool at {}: {}. Did you create the dialogue with expert_pool?",
             pool_path, e
         ))
     })?;
 
     let pool: ExpertPool = serde_json::from_str(&pool_content)
-        .map_err(|e| ServerError::CommandFailed(format!("Failed to parse expert pool: {}", e)))?;
+        .map_err(|e| HandlerError::CommandFailed(format!("Failed to parse expert pool: {}", e)))?;
 
     // Filter pool based on retain/exclude
     let filtered: Vec<PoolExpert> = pool
@@ -1909,7 +1909,7 @@ pub fn handle_sample_panel(args: &Value) -> Result<Value, ServerError> {
         .collect();
 
     if filtered.is_empty() {
-        return Err(ServerError::CommandFailed(
+        return Err(HandlerError::CommandFailed(
             "No experts remain after filtering. Check retain/exclude parameters.".to_string(),
         ));
     }
@@ -1929,13 +1929,13 @@ pub fn handle_sample_panel(args: &Value) -> Result<Value, ServerError> {
     let output_dir = format!("/tmp/blue-dialogue/{}", slug);
     let round_dir = format!("{}/round-{}", output_dir, round);
     fs::create_dir_all(&round_dir)
-        .map_err(|e| ServerError::CommandFailed(format!("Failed to create round dir: {}", e)))?;
+        .map_err(|e| HandlerError::CommandFailed(format!("Failed to create round dir: {}", e)))?;
 
     let panel_path = format!("{}/panel.json", round_dir);
     let panel_json = serde_json::to_string_pretty(&agents)
-        .map_err(|e| ServerError::CommandFailed(format!("Failed to serialize panel: {}", e)))?;
+        .map_err(|e| HandlerError::CommandFailed(format!("Failed to serialize panel: {}", e)))?;
     fs::write(&panel_path, panel_json)
-        .map_err(|e| ServerError::CommandFailed(format!("Failed to write panel: {}", e)))?;
+        .map_err(|e| HandlerError::CommandFailed(format!("Failed to write panel: {}", e)))?;
 
     Ok(json!({
         "status": "success",
@@ -1957,30 +1957,30 @@ pub fn handle_sample_panel(args: &Value) -> Result<Value, ServerError> {
 /// Judge-driven panel evolution for graduated rotation mode.
 /// The Judge specifies exactly which experts to include, their sources,
 /// and can create new experts on-demand.
-pub fn handle_evolve_panel(args: &Value) -> Result<Value, ServerError> {
+pub fn handle_evolve_panel(args: &Value) -> Result<Value, HandlerError> {
     let output_dir = args
         .get("output_dir")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| ServerError::InvalidParams)?;
+        .ok_or_else(|| HandlerError::InvalidParams)?;
 
     let round = args
         .get("round")
         .and_then(|v| v.as_u64())
-        .ok_or_else(|| ServerError::InvalidParams)? as usize;
+        .ok_or_else(|| HandlerError::InvalidParams)? as usize;
 
     // Parse panel specification
     let panel_spec: Vec<PanelExpertSpec> = args
         .get("panel")
         .and_then(|v| serde_json::from_value(v.clone()).ok())
         .ok_or_else(|| {
-            ServerError::CommandFailed(
+            HandlerError::CommandFailed(
                 "panel parameter required: array of {name, role, source, tier?, focus?}"
                     .to_string(),
             )
         })?;
 
     if panel_spec.is_empty() {
-        return Err(ServerError::CommandFailed(
+        return Err(HandlerError::CommandFailed(
             "Panel cannot be empty".to_string(),
         ));
     }
@@ -1988,7 +1988,7 @@ pub fn handle_evolve_panel(args: &Value) -> Result<Value, ServerError> {
     // Validate unique names
     let names: std::collections::HashSet<_> = panel_spec.iter().map(|e| &e.name).collect();
     if names.len() != panel_spec.len() {
-        return Err(ServerError::CommandFailed(
+        return Err(HandlerError::CommandFailed(
             "Expert names must be unique".to_string(),
         ));
     }
@@ -2062,7 +2062,7 @@ pub fn handle_evolve_panel(args: &Value) -> Result<Value, ServerError> {
     // Create round directory
     let round_dir = format!("{}/round-{}", output_dir, round);
     fs::create_dir_all(&round_dir)
-        .map_err(|e| ServerError::CommandFailed(format!("Failed to create round dir: {}", e)))?;
+        .map_err(|e| HandlerError::CommandFailed(format!("Failed to create round dir: {}", e)))?;
 
     // Build panel history
     let history = PanelHistory {
@@ -2081,9 +2081,9 @@ pub fn handle_evolve_panel(args: &Value) -> Result<Value, ServerError> {
         "history": history,
     });
     let panel_json = serde_json::to_string_pretty(&panel_data)
-        .map_err(|e| ServerError::CommandFailed(format!("Failed to serialize panel: {}", e)))?;
+        .map_err(|e| HandlerError::CommandFailed(format!("Failed to serialize panel: {}", e)))?;
     fs::write(&panel_path, panel_json)
-        .map_err(|e| ServerError::CommandFailed(format!("Failed to write panel: {}", e)))?;
+        .map_err(|e| HandlerError::CommandFailed(format!("Failed to write panel: {}", e)))?;
 
     // Generate context brief for fresh experts if round > 0
     let context_brief = if round > 0 {
@@ -2122,57 +2122,57 @@ pub fn handle_evolve_panel(args: &Value) -> Result<Value, ServerError> {
 ///
 /// Bulk fetch context for all panel experts in a single call.
 /// Returns structured data for prompt building: open perspectives, tensions, etc.
-pub fn handle_round_context(state: &ProjectState, args: &Value) -> Result<Value, ServerError> {
+pub fn handle_round_context(state: &ProjectState, args: &Value) -> Result<Value, HandlerError> {
     let dialogue_id = args
         .get("dialogue_id")
         .and_then(|v| v.as_str())
-        .ok_or(ServerError::InvalidParams)?;
+        .ok_or(HandlerError::InvalidParams)?;
 
     let round = args
         .get("round")
         .and_then(|v| v.as_i64())
-        .ok_or(ServerError::InvalidParams)? as i32;
+        .ok_or(HandlerError::InvalidParams)? as i32;
 
     let conn = state.store.conn();
 
     // Get dialogue
     let dialogue = get_dialogue(conn, dialogue_id)
-        .map_err(|e| ServerError::CommandFailed(format!("Dialogue not found: {}", e)))?;
+        .map_err(|e| HandlerError::CommandFailed(format!("Dialogue not found: {}", e)))?;
 
     // Get experts
     let experts = get_experts(conn, dialogue_id)
-        .map_err(|e| ServerError::CommandFailed(format!("Failed to get experts: {}", e)))?;
+        .map_err(|e| HandlerError::CommandFailed(format!("Failed to get experts: {}", e)))?;
 
     // Get all perspectives
     let perspectives = get_perspectives(conn, dialogue_id)
-        .map_err(|e| ServerError::CommandFailed(format!("Failed to get perspectives: {}", e)))?;
+        .map_err(|e| HandlerError::CommandFailed(format!("Failed to get perspectives: {}", e)))?;
 
     // Get all tensions (filter for open/addressed in response)
     let tensions = get_tensions(conn, dialogue_id)
-        .map_err(|e| ServerError::CommandFailed(format!("Failed to get tensions: {}", e)))?;
+        .map_err(|e| HandlerError::CommandFailed(format!("Failed to get tensions: {}", e)))?;
 
     // Get recommendations
     let recommendations = get_recommendations(conn, dialogue_id)
-        .map_err(|e| ServerError::CommandFailed(format!("Failed to get recommendations: {}", e)))?;
+        .map_err(|e| HandlerError::CommandFailed(format!("Failed to get recommendations: {}", e)))?;
 
     // Get evidence
     let evidence = get_evidence(conn, dialogue_id)
-        .map_err(|e| ServerError::CommandFailed(format!("Failed to get evidence: {}", e)))?;
+        .map_err(|e| HandlerError::CommandFailed(format!("Failed to get evidence: {}", e)))?;
 
     // Get claims
     let claims = get_claims(conn, dialogue_id)
-        .map_err(|e| ServerError::CommandFailed(format!("Failed to get claims: {}", e)))?;
+        .map_err(|e| HandlerError::CommandFailed(format!("Failed to get claims: {}", e)))?;
 
     // Get verdicts
     let verdicts = get_verdicts(conn, dialogue_id)
-        .map_err(|e| ServerError::CommandFailed(format!("Failed to get verdicts: {}", e)))?;
+        .map_err(|e| HandlerError::CommandFailed(format!("Failed to get verdicts: {}", e)))?;
 
     // RFC 0057: Get scoreboard and convergence status
     let scoreboard = get_scoreboard(conn, dialogue_id)
-        .map_err(|e| ServerError::CommandFailed(format!("Failed to get scoreboard: {}", e)))?;
+        .map_err(|e| HandlerError::CommandFailed(format!("Failed to get scoreboard: {}", e)))?;
 
     let (can_converge, blockers) = can_dialogue_converge(conn, dialogue_id)
-        .map_err(|e| ServerError::CommandFailed(format!("Failed to check convergence: {}", e)))?;
+        .map_err(|e| HandlerError::CommandFailed(format!("Failed to check convergence: {}", e)))?;
 
     let last_round_metrics = scoreboard.last().map(|r| {
         json!({
@@ -2278,26 +2278,26 @@ pub fn handle_round_context(state: &ProjectState, args: &Value) -> Result<Value,
 /// Handle blue_dialogue_expert_create (RFC 0051)
 ///
 /// Create a new expert mid-dialogue to address emerging needs.
-pub fn handle_expert_create(state: &ProjectState, args: &Value) -> Result<Value, ServerError> {
+pub fn handle_expert_create(state: &ProjectState, args: &Value) -> Result<Value, HandlerError> {
     let dialogue_id = args
         .get("dialogue_id")
         .and_then(|v| v.as_str())
-        .ok_or(ServerError::InvalidParams)?;
+        .ok_or(HandlerError::InvalidParams)?;
 
     let expert_slug = args
         .get("expert_slug")
         .and_then(|v| v.as_str())
-        .ok_or(ServerError::InvalidParams)?;
+        .ok_or(HandlerError::InvalidParams)?;
 
     let role = args
         .get("role")
         .and_then(|v| v.as_str())
-        .ok_or(ServerError::InvalidParams)?;
+        .ok_or(HandlerError::InvalidParams)?;
 
     let tier_str = args
         .get("tier")
         .and_then(|v| v.as_str())
-        .ok_or(ServerError::InvalidParams)?;
+        .ok_or(HandlerError::InvalidParams)?;
 
     let tier = DbExpertTier::from_str(tier_str);
 
@@ -2306,18 +2306,18 @@ pub fn handle_expert_create(state: &ProjectState, args: &Value) -> Result<Value,
     let creation_reason = args
         .get("creation_reason")
         .and_then(|v| v.as_str())
-        .ok_or(ServerError::InvalidParams)?;
+        .ok_or(HandlerError::InvalidParams)?;
 
     let first_round = args
         .get("first_round")
         .and_then(|v| v.as_i64())
-        .ok_or(ServerError::InvalidParams)? as i32;
+        .ok_or(HandlerError::InvalidParams)? as i32;
 
     let conn = state.store.conn();
 
     // Verify dialogue exists
     let _dialogue = get_dialogue(conn, dialogue_id)
-        .map_err(|e| ServerError::CommandFailed(format!("Dialogue not found: {}", e)))?;
+        .map_err(|e| HandlerError::CommandFailed(format!("Dialogue not found: {}", e)))?;
 
     // Register expert with source=created
     register_expert(
@@ -2334,7 +2334,7 @@ pub fn handle_expert_create(state: &ProjectState, args: &Value) -> Result<Value,
         None, // color
         Some(first_round),
     )
-    .map_err(|e| ServerError::CommandFailed(format!("Failed to create expert: {}", e)))?;
+    .map_err(|e| HandlerError::CommandFailed(format!("Failed to create expert: {}", e)))?;
 
     Ok(json!({
         "status": "success",
@@ -2642,21 +2642,21 @@ fn validation_errors_to_json(errors: &[ValidationError]) -> Value {
 /// Handle blue_dialogue_round_register (RFC 0051)
 ///
 /// Bulk register all round data in a single atomic call.
-pub fn handle_round_register(state: &ProjectState, args: &Value) -> Result<Value, ServerError> {
+pub fn handle_round_register(state: &ProjectState, args: &Value) -> Result<Value, HandlerError> {
     let dialogue_id = args
         .get("dialogue_id")
         .and_then(|v| v.as_str())
-        .ok_or(ServerError::InvalidParams)?;
+        .ok_or(HandlerError::InvalidParams)?;
 
     let round = args
         .get("round")
         .and_then(|v| v.as_i64())
-        .ok_or(ServerError::InvalidParams)? as i32;
+        .ok_or(HandlerError::InvalidParams)? as i32;
 
     let score = args
         .get("score")
         .and_then(|v| v.as_i64())
-        .ok_or(ServerError::InvalidParams)? as i32;
+        .ok_or(HandlerError::InvalidParams)? as i32;
 
     let summary = args.get("summary").and_then(|v| v.as_str());
 
@@ -2709,7 +2709,7 @@ pub fn handle_round_register(state: &ProjectState, args: &Value) -> Result<Value
 
     // Verify dialogue exists
     let _dialogue = get_dialogue(conn, dialogue_id)
-        .map_err(|e| ServerError::CommandFailed(format!("Dialogue not found: {}", e)))?;
+        .map_err(|e| HandlerError::CommandFailed(format!("Dialogue not found: {}", e)))?;
 
     // Create round record with RFC 0057 metrics
     create_round_with_metrics(
@@ -2721,7 +2721,7 @@ pub fn handle_round_register(state: &ProjectState, args: &Value) -> Result<Value
         score_components.as_ref(),
         convergence_metrics.as_ref(),
     )
-    .map_err(|e| ServerError::CommandFailed(format!("Failed to create round: {}", e)))?;
+    .map_err(|e| HandlerError::CommandFailed(format!("Failed to create round: {}", e)))?;
 
     let mut registered = json!({
         "perspectives": [],
@@ -2760,7 +2760,7 @@ pub fn handle_round_register(state: &ProjectState, args: &Value) -> Result<Value
                 None,
             )
             .map_err(|e| {
-                ServerError::CommandFailed(format!("Failed to register perspective: {}", e))
+                HandlerError::CommandFailed(format!("Failed to register perspective: {}", e))
             })?;
 
             // Register refs for this perspective
@@ -2816,7 +2816,7 @@ pub fn handle_round_register(state: &ProjectState, args: &Value) -> Result<Value
                 None,
             )
             .map_err(|e| {
-                ServerError::CommandFailed(format!("Failed to register tension: {}", e))
+                HandlerError::CommandFailed(format!("Failed to register tension: {}", e))
             })?;
 
             // Register refs for this tension
@@ -2874,7 +2874,7 @@ pub fn handle_round_register(state: &ProjectState, args: &Value) -> Result<Value
                 None,
             )
             .map_err(|e| {
-                ServerError::CommandFailed(format!("Failed to register recommendation: {}", e))
+                HandlerError::CommandFailed(format!("Failed to register recommendation: {}", e))
             })?;
 
             // Register refs
@@ -2933,7 +2933,7 @@ pub fn handle_round_register(state: &ProjectState, args: &Value) -> Result<Value
                 None,
             )
             .map_err(|e| {
-                ServerError::CommandFailed(format!("Failed to register evidence: {}", e))
+                HandlerError::CommandFailed(format!("Failed to register evidence: {}", e))
             })?;
 
             // Register refs
@@ -2991,7 +2991,7 @@ pub fn handle_round_register(state: &ProjectState, args: &Value) -> Result<Value
                 &contributors,
                 None,
             )
-            .map_err(|e| ServerError::CommandFailed(format!("Failed to register claim: {}", e)))?;
+            .map_err(|e| HandlerError::CommandFailed(format!("Failed to register claim: {}", e)))?;
 
             // Register refs
             if let Some(refs) = c.get("references").and_then(|v| v.as_array()) {
@@ -3075,38 +3075,38 @@ pub fn handle_round_register(state: &ProjectState, args: &Value) -> Result<Value
 /// Handle blue_dialogue_verdict_register (RFC 0051)
 ///
 /// Register a verdict (interim, final, minority, or dissent).
-pub fn handle_verdict_register(state: &ProjectState, args: &Value) -> Result<Value, ServerError> {
+pub fn handle_verdict_register(state: &ProjectState, args: &Value) -> Result<Value, HandlerError> {
     let dialogue_id = args
         .get("dialogue_id")
         .and_then(|v| v.as_str())
-        .ok_or(ServerError::InvalidParams)?;
+        .ok_or(HandlerError::InvalidParams)?;
 
     let verdict_id = args
         .get("verdict_id")
         .and_then(|v| v.as_str())
-        .ok_or(ServerError::InvalidParams)?;
+        .ok_or(HandlerError::InvalidParams)?;
 
     let verdict_type_str = args
         .get("verdict_type")
         .and_then(|v| v.as_str())
-        .ok_or(ServerError::InvalidParams)?;
+        .ok_or(HandlerError::InvalidParams)?;
 
     let verdict_type = VerdictType::from_str(verdict_type_str);
 
     let round = args
         .get("round")
         .and_then(|v| v.as_i64())
-        .ok_or(ServerError::InvalidParams)? as i32;
+        .ok_or(HandlerError::InvalidParams)? as i32;
 
     let recommendation = args
         .get("recommendation")
         .and_then(|v| v.as_str())
-        .ok_or(ServerError::InvalidParams)?;
+        .ok_or(HandlerError::InvalidParams)?;
 
     let description = args
         .get("description")
         .and_then(|v| v.as_str())
-        .ok_or(ServerError::InvalidParams)?;
+        .ok_or(HandlerError::InvalidParams)?;
 
     // Optional fields
     let conditions: Option<Vec<String>> =
@@ -3171,13 +3171,13 @@ pub fn handle_verdict_register(state: &ProjectState, args: &Value) -> Result<Val
 
     // Verify dialogue exists
     let _dialogue = get_dialogue(conn, dialogue_id)
-        .map_err(|e| ServerError::CommandFailed(format!("Dialogue not found: {}", e)))?;
+        .map_err(|e| HandlerError::CommandFailed(format!("Dialogue not found: {}", e)))?;
 
     // RFC 0057: Convergence validation for final verdicts
     let mut forced_warning: Option<String> = None;
     if verdict_type == VerdictType::Final {
         let (can_converge, blockers) = can_dialogue_converge(conn, dialogue_id).map_err(|e| {
-            ServerError::CommandFailed(format!("Failed to check convergence: {}", e))
+            HandlerError::CommandFailed(format!("Failed to check convergence: {}", e))
         })?;
 
         if !can_converge {
@@ -3234,7 +3234,7 @@ pub fn handle_verdict_register(state: &ProjectState, args: &Value) -> Result<Val
     };
 
     register_verdict(conn, &verdict)
-        .map_err(|e| ServerError::CommandFailed(format!("Failed to register verdict: {}", e)))?;
+        .map_err(|e| HandlerError::CommandFailed(format!("Failed to register verdict: {}", e)))?;
 
     // RFC 0057: Include warning if convergence was forced
     let mut response = json!({
@@ -3257,11 +3257,11 @@ pub fn handle_verdict_register(state: &ProjectState, args: &Value) -> Result<Val
 /// Handle blue_dialogue_export (RFC 0051)
 ///
 /// Export dialogue to JSON with full provenance from database.
-pub fn handle_export(state: &ProjectState, args: &Value) -> Result<Value, ServerError> {
+pub fn handle_export(state: &ProjectState, args: &Value) -> Result<Value, HandlerError> {
     let dialogue_id = args
         .get("dialogue_id")
         .and_then(|v| v.as_str())
-        .ok_or(ServerError::InvalidParams)?;
+        .ok_or(HandlerError::InvalidParams)?;
 
     let output_path = args.get("output_path").and_then(|v| v.as_str());
 
@@ -3269,33 +3269,33 @@ pub fn handle_export(state: &ProjectState, args: &Value) -> Result<Value, Server
 
     // Get dialogue
     let dialogue = get_dialogue(conn, dialogue_id)
-        .map_err(|e| ServerError::CommandFailed(format!("Dialogue not found: {}", e)))?;
+        .map_err(|e| HandlerError::CommandFailed(format!("Dialogue not found: {}", e)))?;
 
     // Get all data
     let experts = get_experts(conn, dialogue_id)
-        .map_err(|e| ServerError::CommandFailed(format!("Failed to get experts: {}", e)))?;
+        .map_err(|e| HandlerError::CommandFailed(format!("Failed to get experts: {}", e)))?;
 
     let perspectives = get_perspectives(conn, dialogue_id)
-        .map_err(|e| ServerError::CommandFailed(format!("Failed to get perspectives: {}", e)))?;
+        .map_err(|e| HandlerError::CommandFailed(format!("Failed to get perspectives: {}", e)))?;
 
     let tensions = get_tensions(conn, dialogue_id)
-        .map_err(|e| ServerError::CommandFailed(format!("Failed to get tensions: {}", e)))?;
+        .map_err(|e| HandlerError::CommandFailed(format!("Failed to get tensions: {}", e)))?;
 
     let recommendations = get_recommendations(conn, dialogue_id)
-        .map_err(|e| ServerError::CommandFailed(format!("Failed to get recommendations: {}", e)))?;
+        .map_err(|e| HandlerError::CommandFailed(format!("Failed to get recommendations: {}", e)))?;
 
     let evidence = get_evidence(conn, dialogue_id)
-        .map_err(|e| ServerError::CommandFailed(format!("Failed to get evidence: {}", e)))?;
+        .map_err(|e| HandlerError::CommandFailed(format!("Failed to get evidence: {}", e)))?;
 
     let claims = get_claims(conn, dialogue_id)
-        .map_err(|e| ServerError::CommandFailed(format!("Failed to get claims: {}", e)))?;
+        .map_err(|e| HandlerError::CommandFailed(format!("Failed to get claims: {}", e)))?;
 
     let verdicts = get_verdicts(conn, dialogue_id)
-        .map_err(|e| ServerError::CommandFailed(format!("Failed to get verdicts: {}", e)))?;
+        .map_err(|e| HandlerError::CommandFailed(format!("Failed to get verdicts: {}", e)))?;
 
     // RFC 0057: Get scoreboard with full metrics
     let scoreboard = get_scoreboard(conn, dialogue_id)
-        .map_err(|e| ServerError::CommandFailed(format!("Failed to get scoreboard: {}", e)))?;
+        .map_err(|e| HandlerError::CommandFailed(format!("Failed to get scoreboard: {}", e)))?;
 
     // Build export structure
     let export_data = json!({
@@ -3443,17 +3443,17 @@ pub fn handle_export(state: &ProjectState, args: &Value) -> Result<Value, Server
     // Ensure parent directory exists
     if let Some(parent) = Path::new(&final_path).parent() {
         fs::create_dir_all(parent).map_err(|e| {
-            ServerError::CommandFailed(format!("Failed to create output directory: {}", e))
+            HandlerError::CommandFailed(format!("Failed to create output directory: {}", e))
         })?;
     }
 
     // Write JSON file
     let json_str = serde_json::to_string_pretty(&export_data).map_err(|e| {
-        ServerError::CommandFailed(format!("Failed to serialize export data: {}", e))
+        HandlerError::CommandFailed(format!("Failed to serialize export data: {}", e))
     })?;
 
     fs::write(&final_path, &json_str)
-        .map_err(|e| ServerError::CommandFailed(format!("Failed to write export file: {}", e)))?;
+        .map_err(|e| HandlerError::CommandFailed(format!("Failed to write export file: {}", e)))?;
 
     Ok(json!({
         "status": "success",

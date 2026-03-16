@@ -4,22 +4,22 @@
 
 use std::fs;
 
-use blue_core::{title_to_slug, Decision, DocType, Document, ProjectState};
+use crate::{title_to_slug, Decision, DocType, Document, ProjectState};
 use serde_json::{json, Value};
 
-use crate::error::ServerError;
+use crate::handler_error::HandlerError;
 
 /// Handle blue_decision_create
-pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, ServerError> {
+pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, HandlerError> {
     let title = args
         .get("title")
         .and_then(|v| v.as_str())
-        .ok_or(ServerError::InvalidParams)?;
+        .ok_or(HandlerError::InvalidParams)?;
 
     let decision_text = args
         .get("decision")
         .and_then(|v| v.as_str())
-        .ok_or(ServerError::InvalidParams)?;
+        .ok_or(HandlerError::InvalidParams)?;
 
     let rationale = args.get("rationale").and_then(|v| v.as_str());
     let alternatives: Vec<String> = args
@@ -43,7 +43,7 @@ pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, Server
     let markdown = decision.to_markdown();
 
     // Compute file path with ISO 8601 timestamp (RFC 0031)
-    let today = blue_core::utc_timestamp();
+    let today = crate::utc_timestamp();
     let file_name = format!("{}-{}.recorded.md", today, title_to_slug(title));
     let file_path = format!("decisions/{}", file_name);
 
@@ -55,7 +55,7 @@ pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, Server
     if decision_path.exists() {
         return Ok(json!({
             "status": "error",
-            "message": blue_core::voice::error(
+            "message": crate::voice::error(
                 &format!("Decision '{}' already exists for today", title),
                 "Use a different title or update the existing one"
             )
@@ -63,10 +63,10 @@ pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, Server
     }
 
     if let Some(parent) = decision_path.parent() {
-        fs::create_dir_all(parent).map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+        fs::create_dir_all(parent).map_err(|e| HandlerError::StateLoadFailed(e.to_string()))?;
     }
     fs::write(&decision_path, &markdown)
-        .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+        .map_err(|e| HandlerError::StateLoadFailed(e.to_string()))?;
 
     // Add to store
     let mut doc = Document::new(DocType::Decision, title, "recorded");
@@ -75,7 +75,7 @@ pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, Server
     let id = state
         .store
         .add_document(&doc)
-        .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+        .map_err(|e| HandlerError::StateLoadFailed(e.to_string()))?;
 
     Ok(json!({
         "status": "success",
@@ -83,7 +83,7 @@ pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, Server
         "title": title,
         "file": decision_path.display().to_string(),
         "markdown": markdown,
-        "message": blue_core::voice::success(
+        "message": crate::voice::success(
             &format!("Recorded decision: '{}'", title),
             None
         )

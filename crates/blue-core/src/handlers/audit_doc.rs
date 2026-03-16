@@ -5,17 +5,17 @@
 
 use std::fs;
 
-use blue_core::{Audit, AuditType, DocType, Document, ProjectState};
+use crate::{Audit, AuditType, DocType, Document, ProjectState};
 use serde_json::{json, Value};
 
-use crate::error::ServerError;
+use crate::handler_error::HandlerError;
 
 /// Handle blue_audit_create
-pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, ServerError> {
+pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, HandlerError> {
     let title = args
         .get("title")
         .and_then(|v| v.as_str())
-        .ok_or(ServerError::InvalidParams)?;
+        .ok_or(HandlerError::InvalidParams)?;
 
     let audit_type_str = args
         .get("audit_type")
@@ -33,7 +33,7 @@ pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, Server
     let audit = Audit::new(title, audit_type, scope);
 
     // Generate filename with ISO 8601 timestamp (RFC 0031)
-    let timestamp = blue_core::utc_timestamp();
+    let timestamp = crate::utc_timestamp();
     let filename = format!("audits/{}-{}.wip.md", timestamp, title);
 
     // Generate markdown
@@ -43,15 +43,15 @@ pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, Server
     let docs_path = state.home.docs_path.clone();
     let audit_path = docs_path.join(&filename);
     if let Some(parent) = audit_path.parent() {
-        fs::create_dir_all(parent).map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+        fs::create_dir_all(parent).map_err(|e| HandlerError::StateLoadFailed(e.to_string()))?;
     }
     if audit_path.exists() {
-        return Err(ServerError::CommandFailed(format!(
+        return Err(HandlerError::CommandFailed(format!(
             "File already exists: {}",
             audit_path.display()
         )));
     }
-    fs::write(&audit_path, &markdown).map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+    fs::write(&audit_path, &markdown).map_err(|e| HandlerError::StateLoadFailed(e.to_string()))?;
 
     // Add to store
     let mut doc = Document::new(DocType::Audit, title, "in-progress");
@@ -60,7 +60,7 @@ pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, Server
     let id = state
         .store
         .add_document(&doc)
-        .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+        .map_err(|e| HandlerError::StateLoadFailed(e.to_string()))?;
 
     Ok(json!({
         "status": "success",
@@ -70,7 +70,7 @@ pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, Server
         "date": timestamp,
         "file": audit_path.display().to_string(),
         "markdown": markdown,
-        "message": blue_core::voice::success(
+        "message": crate::voice::success(
             &format!("Created audit '{}'", title),
             Some("Document your findings.")
         )
@@ -78,11 +78,11 @@ pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, Server
 }
 
 /// Handle blue_audit_list
-pub fn handle_list(state: &ProjectState) -> Result<Value, ServerError> {
+pub fn handle_list(state: &ProjectState) -> Result<Value, HandlerError> {
     let audits = state
         .store
         .list_documents(DocType::Audit)
-        .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+        .map_err(|e| HandlerError::StateLoadFailed(e.to_string()))?;
 
     let items: Vec<Value> = audits
         .iter()
@@ -102,9 +102,9 @@ pub fn handle_list(state: &ProjectState) -> Result<Value, ServerError> {
         "count": items.len(),
         "audits": items,
         "message": if items.is_empty() {
-            blue_core::voice::info("No audits found.", None::<&str>)
+            crate::voice::info("No audits found.", None::<&str>)
         } else {
-            blue_core::voice::info(
+            crate::voice::info(
                 &format!("Found {} audit(s).", items.len()),
                 None::<&str>
             )
@@ -113,16 +113,16 @@ pub fn handle_list(state: &ProjectState) -> Result<Value, ServerError> {
 }
 
 /// Handle blue_audit_get
-pub fn handle_get(state: &ProjectState, args: &Value) -> Result<Value, ServerError> {
+pub fn handle_get(state: &ProjectState, args: &Value) -> Result<Value, HandlerError> {
     let title = args
         .get("title")
         .and_then(|v| v.as_str())
-        .ok_or(ServerError::InvalidParams)?;
+        .ok_or(HandlerError::InvalidParams)?;
 
     let doc = state
         .store
         .find_document(DocType::Audit, title)
-        .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+        .map_err(|e| HandlerError::StateLoadFailed(e.to_string()))?;
 
     // Read the file content if it exists
     let content = if let Some(ref file_path) = doc.file_path {
@@ -145,40 +145,40 @@ pub fn handle_get(state: &ProjectState, args: &Value) -> Result<Value, ServerErr
 }
 
 /// Handle blue_audit_complete
-pub fn handle_complete(state: &ProjectState, args: &Value) -> Result<Value, ServerError> {
+pub fn handle_complete(state: &ProjectState, args: &Value) -> Result<Value, HandlerError> {
     let title = args
         .get("title")
         .and_then(|v| v.as_str())
-        .ok_or(ServerError::InvalidParams)?;
+        .ok_or(HandlerError::InvalidParams)?;
 
     // Find the audit
     let doc = state
         .store
         .find_document(DocType::Audit, title)
-        .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+        .map_err(|e| HandlerError::StateLoadFailed(e.to_string()))?;
 
     // Update status in database
     state
         .store
         .update_document_status(DocType::Audit, title, "complete")
-        .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+        .map_err(|e| HandlerError::StateLoadFailed(e.to_string()))?;
 
     // Rename file for new status (RFC 0031)
     let final_path =
-        blue_core::rename_for_status(&state.home.docs_path, &state.store, &doc, "complete")
-            .map_err(|e| ServerError::StateLoadFailed(e.to_string()))?;
+        crate::rename_for_status(&state.home.docs_path, &state.store, &doc, "complete")
+            .map_err(|e| HandlerError::StateLoadFailed(e.to_string()))?;
 
     // Update markdown at effective path
     let effective_path = final_path.as_deref().or(doc.file_path.as_deref());
     if let Some(p) = effective_path {
-        let _ = blue_core::update_markdown_status(&state.home.docs_path.join(p), "complete");
+        let _ = crate::update_markdown_status(&state.home.docs_path.join(p), "complete");
     }
 
     Ok(json!({
         "status": "success",
         "title": title,
         "new_status": "complete",
-        "message": blue_core::voice::success(
+        "message": crate::voice::success(
             &format!("Completed audit '{}'", title),
             Some("Findings documented.")
         )

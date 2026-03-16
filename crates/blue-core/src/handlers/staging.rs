@@ -3,22 +3,22 @@
 //! Handles staging environment isolation through resource locking.
 //! Ensures single-writer access to staging resources like migrations.
 
-use blue_core::{ProjectState, StagingLockResult};
+use crate::{ProjectState, StagingLockResult};
 use serde_json::{json, Value};
 
-use crate::error::ServerError;
+use crate::handler_error::HandlerError;
 
 /// Handle blue_staging_lock
-pub fn handle_lock(state: &ProjectState, args: &Value) -> Result<Value, ServerError> {
+pub fn handle_lock(state: &ProjectState, args: &Value) -> Result<Value, HandlerError> {
     let resource = args
         .get("resource")
         .and_then(|v| v.as_str())
-        .ok_or(ServerError::InvalidParams)?;
+        .ok_or(HandlerError::InvalidParams)?;
 
     let locked_by = args
         .get("locked_by")
         .and_then(|v| v.as_str())
-        .ok_or(ServerError::InvalidParams)?;
+        .ok_or(HandlerError::InvalidParams)?;
 
     let agent_id = args.get("agent_id").and_then(|v| v.as_str());
     let duration_minutes = args
@@ -29,12 +29,12 @@ pub fn handle_lock(state: &ProjectState, args: &Value) -> Result<Value, ServerEr
     let result = state
         .store
         .acquire_staging_lock(resource, locked_by, agent_id, duration_minutes)
-        .map_err(|e| ServerError::CommandFailed(e.to_string()))?;
+        .map_err(|e| HandlerError::CommandFailed(e.to_string()))?;
 
     match result {
         StagingLockResult::Acquired { expires_at } => Ok(json!({
             "status": "acquired",
-            "message": blue_core::voice::success(
+            "message": crate::voice::success(
                 &format!("Acquired staging lock for '{}'", resource),
                 Some(&format!("Expires at {}. Release with blue_staging_unlock when done.", expires_at))
             ),
@@ -48,7 +48,7 @@ pub fn handle_lock(state: &ProjectState, args: &Value) -> Result<Value, ServerEr
             expires_at,
         } => Ok(json!({
             "status": "queued",
-            "message": blue_core::voice::info(
+            "message": crate::voice::info(
                 &format!("Resource '{}' is locked by '{}'", resource, current_holder),
                 Some(&format!("You're #{} in queue. Lock expires at {}.", position, expires_at))
             ),
@@ -61,21 +61,21 @@ pub fn handle_lock(state: &ProjectState, args: &Value) -> Result<Value, ServerEr
 }
 
 /// Handle blue_staging_unlock
-pub fn handle_unlock(state: &ProjectState, args: &Value) -> Result<Value, ServerError> {
+pub fn handle_unlock(state: &ProjectState, args: &Value) -> Result<Value, HandlerError> {
     let resource = args
         .get("resource")
         .and_then(|v| v.as_str())
-        .ok_or(ServerError::InvalidParams)?;
+        .ok_or(HandlerError::InvalidParams)?;
 
     let locked_by = args
         .get("locked_by")
         .and_then(|v| v.as_str())
-        .ok_or(ServerError::InvalidParams)?;
+        .ok_or(HandlerError::InvalidParams)?;
 
     let next_in_queue = state
         .store
         .release_staging_lock(resource, locked_by)
-        .map_err(|e| ServerError::CommandFailed(e.to_string()))?;
+        .map_err(|e| HandlerError::CommandFailed(e.to_string()))?;
 
     let hint = match &next_in_queue {
         Some(next) => format!("Next in queue: '{}' can now acquire the lock.", next),
@@ -84,7 +84,7 @@ pub fn handle_unlock(state: &ProjectState, args: &Value) -> Result<Value, Server
 
     Ok(json!({
         "status": "released",
-        "message": blue_core::voice::success(
+        "message": crate::voice::success(
             &format!("Released staging lock for '{}'", resource),
             Some(&hint)
         ),
@@ -94,7 +94,7 @@ pub fn handle_unlock(state: &ProjectState, args: &Value) -> Result<Value, Server
 }
 
 /// Handle blue_staging_status
-pub fn handle_status(state: &ProjectState, args: &Value) -> Result<Value, ServerError> {
+pub fn handle_status(state: &ProjectState, args: &Value) -> Result<Value, HandlerError> {
     let resource = args.get("resource").and_then(|v| v.as_str());
 
     if let Some(resource) = resource {
@@ -102,17 +102,17 @@ pub fn handle_status(state: &ProjectState, args: &Value) -> Result<Value, Server
         let lock = state
             .store
             .get_staging_lock(resource)
-            .map_err(|e| ServerError::CommandFailed(e.to_string()))?;
+            .map_err(|e| HandlerError::CommandFailed(e.to_string()))?;
 
         let queue = state
             .store
             .get_staging_lock_queue(resource)
-            .map_err(|e| ServerError::CommandFailed(e.to_string()))?;
+            .map_err(|e| HandlerError::CommandFailed(e.to_string()))?;
 
         if let Some(lock) = lock {
             Ok(json!({
                 "status": "locked",
-                "message": blue_core::voice::info(
+                "message": crate::voice::info(
                     &format!("Resource '{}' is locked by '{}'", resource, lock.locked_by),
                     Some(&format!("Expires at {}. {} waiting in queue.", lock.expires_at, queue.len()))
                 ),
@@ -132,7 +132,7 @@ pub fn handle_status(state: &ProjectState, args: &Value) -> Result<Value, Server
         } else {
             Ok(json!({
                 "status": "available",
-                "message": blue_core::voice::info(
+                "message": crate::voice::info(
                     &format!("Resource '{}' is available", resource),
                     None::<&str>
                 ),
@@ -146,7 +146,7 @@ pub fn handle_status(state: &ProjectState, args: &Value) -> Result<Value, Server
         let locks = state
             .store
             .list_staging_locks()
-            .map_err(|e| ServerError::CommandFailed(e.to_string()))?;
+            .map_err(|e| HandlerError::CommandFailed(e.to_string()))?;
 
         let hint = if locks.is_empty() {
             "No active staging locks. Resources are available."
@@ -156,7 +156,7 @@ pub fn handle_status(state: &ProjectState, args: &Value) -> Result<Value, Server
 
         Ok(json!({
             "status": "success",
-            "message": blue_core::voice::info(
+            "message": crate::voice::info(
                 &format!("{} active staging lock{}", locks.len(), if locks.len() == 1 { "" } else { "s" }),
                 Some(hint)
             ),
@@ -172,11 +172,11 @@ pub fn handle_status(state: &ProjectState, args: &Value) -> Result<Value, Server
 }
 
 /// Handle blue_staging_cleanup
-pub fn handle_cleanup(state: &ProjectState, _args: &Value) -> Result<Value, ServerError> {
+pub fn handle_cleanup(state: &ProjectState, _args: &Value) -> Result<Value, HandlerError> {
     let (locks_cleaned, queue_cleaned) = state
         .store
         .cleanup_expired_staging()
-        .map_err(|e| ServerError::CommandFailed(e.to_string()))?;
+        .map_err(|e| HandlerError::CommandFailed(e.to_string()))?;
 
     let total = locks_cleaned + queue_cleaned;
 
@@ -188,7 +188,7 @@ pub fn handle_cleanup(state: &ProjectState, _args: &Value) -> Result<Value, Serv
 
     Ok(json!({
         "status": "success",
-        "message": blue_core::voice::success(
+        "message": crate::voice::success(
             &format!("Cleaned {} expired lock{}, {} orphaned queue entr{}",
                 locks_cleaned,
                 if locks_cleaned == 1 { "" } else { "s" },
@@ -206,7 +206,7 @@ pub fn handle_cleanup(state: &ProjectState, _args: &Value) -> Result<Value, Serv
 /// Handle blue_staging_create
 ///
 /// Detects IaC in the project and generates staging deployment commands.
-pub fn handle_create(args: &Value, repo_path: &std::path::Path) -> Result<Value, ServerError> {
+pub fn handle_create(args: &Value, repo_path: &std::path::Path) -> Result<Value, HandlerError> {
     let path = args
         .get("cwd")
         .and_then(|v| v.as_str())
@@ -245,7 +245,7 @@ pub fn handle_create(args: &Value, repo_path: &std::path::Path) -> Result<Value,
     } else {
         return Ok(json!({
             "status": "error",
-            "message": blue_core::voice::error(
+            "message": crate::voice::error(
                 "No IaC detected",
                 "Need cdk.json, main.tf, or Pulumi.yaml"
             )
@@ -254,7 +254,7 @@ pub fn handle_create(args: &Value, repo_path: &std::path::Path) -> Result<Value,
 
     Ok(json!({
         "status": "success",
-        "message": blue_core::voice::success(
+        "message": crate::voice::success(
             &format!("Staging deployment ready ({})", iac_type.to_uppercase()),
             Some(&format!("TTL: {} hours. Run the command to deploy.", ttl_hours))
         ),
@@ -270,7 +270,7 @@ pub fn handle_create(args: &Value, repo_path: &std::path::Path) -> Result<Value,
 }
 
 /// Handle blue_staging_destroy
-pub fn handle_destroy(args: &Value, repo_path: &std::path::Path) -> Result<Value, ServerError> {
+pub fn handle_destroy(args: &Value, repo_path: &std::path::Path) -> Result<Value, HandlerError> {
     let path = args
         .get("cwd")
         .and_then(|v| v.as_str())
@@ -289,7 +289,7 @@ pub fn handle_destroy(args: &Value, repo_path: &std::path::Path) -> Result<Value
     } else {
         return Ok(json!({
             "status": "error",
-            "message": blue_core::voice::error(
+            "message": crate::voice::error(
                 "No IaC detected",
                 "Need cdk.json, main.tf, or Pulumi.yaml"
             )
@@ -298,7 +298,7 @@ pub fn handle_destroy(args: &Value, repo_path: &std::path::Path) -> Result<Value
 
     Ok(json!({
         "status": "success",
-        "message": blue_core::voice::success(
+        "message": crate::voice::success(
             &format!("Staging destruction ready ({})", iac_type.to_uppercase()),
             Some("Run the command to destroy resources")
         ),
@@ -309,7 +309,7 @@ pub fn handle_destroy(args: &Value, repo_path: &std::path::Path) -> Result<Value
 }
 
 /// Handle blue_staging_cost
-pub fn handle_cost(args: &Value, repo_path: &std::path::Path) -> Result<Value, ServerError> {
+pub fn handle_cost(args: &Value, repo_path: &std::path::Path) -> Result<Value, HandlerError> {
     let path = args
         .get("cwd")
         .and_then(|v| v.as_str())
@@ -342,7 +342,7 @@ pub fn handle_cost(args: &Value, repo_path: &std::path::Path) -> Result<Value, S
     } else {
         return Ok(json!({
             "status": "error",
-            "message": blue_core::voice::error(
+            "message": crate::voice::error(
                 "No IaC detected",
                 "Need cdk.json, main.tf, or Pulumi.yaml"
             )
@@ -351,7 +351,7 @@ pub fn handle_cost(args: &Value, repo_path: &std::path::Path) -> Result<Value, S
 
     Ok(json!({
         "status": "success",
-        "message": blue_core::voice::info(
+        "message": crate::voice::info(
             &format!("Cost estimation for {} hours", duration_hours),
             Some(instructions)
         ),
@@ -366,7 +366,7 @@ pub fn handle_cost(args: &Value, repo_path: &std::path::Path) -> Result<Value, S
 ///
 /// Lists staging deployments with optional filtering.
 /// Can also check for expired deployments that need cleanup.
-pub fn handle_deployments(state: &ProjectState, args: &Value) -> Result<Value, ServerError> {
+pub fn handle_deployments(state: &ProjectState, args: &Value) -> Result<Value, HandlerError> {
     let status = args.get("status").and_then(|v| v.as_str());
     let check_expired = args
         .get("check_expired")
@@ -378,7 +378,7 @@ pub fn handle_deployments(state: &ProjectState, args: &Value) -> Result<Value, S
         state
             .store
             .mark_expired_deployments()
-            .map_err(|e| ServerError::CommandFailed(e.to_string()))?
+            .map_err(|e| HandlerError::CommandFailed(e.to_string()))?
     } else {
         vec![]
     };
@@ -387,7 +387,7 @@ pub fn handle_deployments(state: &ProjectState, args: &Value) -> Result<Value, S
     let deployments = state
         .store
         .list_staging_deployments(status)
-        .map_err(|e| ServerError::CommandFailed(e.to_string()))?;
+        .map_err(|e| HandlerError::CommandFailed(e.to_string()))?;
 
     let deployed_count = deployments
         .iter()
@@ -411,7 +411,7 @@ pub fn handle_deployments(state: &ProjectState, args: &Value) -> Result<Value, S
 
     Ok(json!({
         "status": "success",
-        "message": blue_core::voice::info(
+        "message": crate::voice::info(
             &format!("{} staging deployment{}", deployments.len(), if deployments.len() == 1 { "" } else { "s" }),
             Some(&hint)
         ),

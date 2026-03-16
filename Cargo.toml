@@ -2,7 +2,6 @@
 resolver = "2"
 members = [
     "crates/blue-core",
-    "crates/blue-mcp",
     "apps/blue-cli",
 ]
 
@@ -80,5 +79,4 @@ tempfile = "3.15"
 
 # Internal
 blue-core = { path = "crates/blue-core" }
-blue-mcp = { path = "crates/blue-mcp" }
 

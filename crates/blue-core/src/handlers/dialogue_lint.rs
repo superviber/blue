@@ -10,7 +10,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
 
-use crate::error::ServerError;
+use crate::handler_error::HandlerError;
 
 /// Check severity levels with weights
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -77,17 +77,17 @@ struct ParsedDialogue {
 }
 
 /// Handle blue_dialogue_lint
-pub fn handle_dialogue_lint(args: &Value) -> Result<Value, ServerError> {
+pub fn handle_dialogue_lint(args: &Value) -> Result<Value, HandlerError> {
     let file_path_str = args
         .get("file_path")
         .and_then(|v| v.as_str())
-        .ok_or(ServerError::InvalidParams)?;
+        .ok_or(HandlerError::InvalidParams)?;
 
     let file_path = PathBuf::from(file_path_str);
 
     // Verify file exists
     if !file_path.exists() {
-        return Err(ServerError::CommandFailed(format!(
+        return Err(HandlerError::CommandFailed(format!(
             "Dialogue file not found: {}",
             file_path.display()
         )));
@@ -95,7 +95,7 @@ pub fn handle_dialogue_lint(args: &Value) -> Result<Value, ServerError> {
 
     // Read file content
     let content = fs::read_to_string(&file_path)
-        .map_err(|e| ServerError::CommandFailed(format!("Failed to read file: {}", e)))?;
+        .map_err(|e| HandlerError::CommandFailed(format!("Failed to read file: {}", e)))?;
 
     // Parse dialogue structure
     let parsed = parse_dialogue(&content);
@@ -177,7 +177,7 @@ pub fn handle_dialogue_lint(args: &Value) -> Result<Value, ServerError> {
 
     Ok(json!({
         "status": "success",
-        "message": blue_core::voice::info(
+        "message": crate::voice::info(
             &format!("Dialogue score: {:.1}%", score * 100.0),
             Some(&hint)
         ),
