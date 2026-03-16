@@ -1,21 +1,21 @@
 //! Semantic file indexer (RFC 0010)
 //!
-//! Uses Ollama with qwen2.5:3b to analyze source files and extract:
-//! - Summary: one-sentence description
-//! - Relationships: dependencies and connections to other files
-//! - Symbols: functions, structs, classes with line numbers
+//! Provides file analysis utilities: hashing, indexable-file detection,
+//! and prompt/response parsing for external LLM-based indexing.
+//! The actual LLM call has been removed (RFC 0071); callers can pipe
+//! `generate_index_prompt` output to any LLM and feed the response
+//! back through `parse_index_response`.
 
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
-use tracing::{debug, info, warn};
+use tracing::{debug, warn};
 
 use crate::store::{DocumentStore, FileIndexEntry, SymbolIndexEntry};
-use crate::{CompletionOptions, LlmError, LlmProvider};
 
-/// Default model for indexing
+/// Default model for indexing (advisory; no longer used directly)
 pub const DEFAULT_INDEX_MODEL: &str = "qwen2.5:3b";
 
 /// Maximum file size in lines before partial indexing
@@ -65,81 +65,50 @@ pub struct ParsedSymbol {
     pub description: Option<String>,
 }
 
-/// The indexer that uses LLM to analyze files
-pub struct Indexer<P: LlmProvider> {
-    provider: P,
+/// The indexer for checking file staleness and storing results.
+///
+/// LLM completion has been removed (RFC 0071). Use `generate_index_prompt`
+/// and `parse_index_response` to integrate with an external LLM if needed.
+pub struct Indexer {
     config: IndexerConfig,
 }
 
-impl<P: LlmProvider> Indexer<P> {
-    /// Create a new indexer with the given LLM provider
-    pub fn new(provider: P, config: IndexerConfig) -> Self {
-        Self { provider, config }
+impl Indexer {
+    /// Create a new indexer
+    pub fn new(config: IndexerConfig) -> Self {
+        Self { config }
     }
 
-    /// Index a single file and return the result
-    pub fn index_file(&self, file_path: &Path) -> Result<IndexResult, IndexerError> {
-        let path_str = file_path.to_string_lossy().to_string();
-
-        // Read file contents
-        let content = std::fs::read_to_string(file_path)
-            .map_err(|e| IndexerError::FileRead(path_str.clone(), e.to_string()))?;
-
-        // Calculate hash
-        let file_hash = hash_content(&content);
-
-        // Check file size
-        let line_count = content.lines().count();
-        let is_partial = line_count > MAX_FILE_LINES;
-
-        let content_to_index = if is_partial {
-            // Take first MAX_FILE_LINES lines
-            content
-                .lines()
-                .take(MAX_FILE_LINES)
-                .collect::<Vec<_>>()
-                .join("\n")
-        } else {
-            content.clone()
-        };
-
-        // Generate prompt
-        let prompt = generate_index_prompt(&path_str, &content_to_index, is_partial);
-
-        // Call LLM
-        let options = CompletionOptions {
-            max_tokens: self.config.max_tokens,
-            temperature: self.config.temperature,
-            stop_sequences: vec![], // Let model complete naturally
-        };
-
-        let completion = self
-            .provider
-            .complete(&prompt, &options)
-            .map_err(IndexerError::LlmError)?;
-
-        // Parse YAML response
-        let parsed = parse_index_response(&completion.text);
-
-        Ok(IndexResult {
-            file_path: path_str,
-            file_hash,
-            summary: parsed.summary,
-            relationships: parsed.relationships,
-            symbols: parsed.symbols,
-            is_partial,
-            error: parsed.error,
-        })
-    }
-
-    /// Index a file and store in the database
-    pub fn index_and_store(
+    /// Check if a file needs re-indexing (compares file hash against stored hash)
+    pub fn needs_indexing(
         &self,
         file_path: &Path,
         store: &DocumentStore,
-    ) -> Result<IndexResult, IndexerError> {
-        let result = self.index_file(file_path)?;
+    ) -> Result<bool, IndexerError> {
+        let path_str = file_path.to_string_lossy().to_string();
 
+        // Read file and calculate hash
+        let content = std::fs::read_to_string(file_path)
+            .map_err(|e| IndexerError::FileRead(path_str.clone(), e.to_string()))?;
+        let current_hash = hash_content(&content);
+
+        // Check against stored hash
+        store
+            .is_file_stale(
+                &self.config.realm,
+                &self.config.repo,
+                &path_str,
+                &current_hash,
+            )
+            .map_err(|e| IndexerError::StoreError(e.to_string()))
+    }
+
+    /// Store an externally-produced IndexResult into the database
+    pub fn store_result(
+        &self,
+        result: &IndexResult,
+        store: &DocumentStore,
+    ) -> Result<(), IndexerError> {
         // Create file index entry
         let mut entry = FileIndexEntry::new(
             &self.config.realm,
@@ -174,42 +143,12 @@ impl<P: LlmProvider> Indexer<P> {
             .set_file_symbols(file_id, &symbols)
             .map_err(|e| IndexerError::StoreError(e.to_string()))?;
 
-        info!(
-            "Indexed {} with {} symbols",
-            result.file_path,
-            symbols.len()
-        );
-
-        Ok(result)
-    }
-
-    /// Check if a file needs re-indexing
-    pub fn needs_indexing(
-        &self,
-        file_path: &Path,
-        store: &DocumentStore,
-    ) -> Result<bool, IndexerError> {
-        let path_str = file_path.to_string_lossy().to_string();
-
-        // Read file and calculate hash
-        let content = std::fs::read_to_string(file_path)
-            .map_err(|e| IndexerError::FileRead(path_str.clone(), e.to_string()))?;
-        let current_hash = hash_content(&content);
-
-        // Check against stored hash
-        store
-            .is_file_stale(
-                &self.config.realm,
-                &self.config.repo,
-                &path_str,
-                &current_hash,
-            )
-            .map_err(|e| IndexerError::StoreError(e.to_string()))
+        Ok(())
     }
 }
 
-/// Generate the indexing prompt
-fn generate_index_prompt(file_path: &str, content: &str, is_partial: bool) -> String {
+/// Generate the indexing prompt (useful for piping to an external LLM)
+pub fn generate_index_prompt(file_path: &str, content: &str, is_partial: bool) -> String {
     let partial_note = if is_partial {
         "\n\nNote: This is a large file. Only the first 1000 lines are shown. Include a note about this in the summary."
     } else {
@@ -253,7 +192,7 @@ Rules:
     )
 }
 
-/// Parsed response from the LLM
+/// Parsed response from an LLM
 #[derive(Debug, Default)]
 struct ParsedResponse {
     summary: Option<String>,
@@ -262,8 +201,22 @@ struct ParsedResponse {
     error: Option<String>,
 }
 
-/// Parse the YAML response from the LLM
-fn parse_index_response(response: &str) -> ParsedResponse {
+/// Parse the YAML response from an LLM
+pub fn parse_index_response(response: &str) -> IndexResult {
+    let parsed = parse_yaml_response(response);
+    IndexResult {
+        file_path: String::new(),
+        file_hash: String::new(),
+        summary: parsed.summary,
+        relationships: parsed.relationships,
+        symbols: parsed.symbols,
+        is_partial: false,
+        error: parsed.error,
+    }
+}
+
+/// Internal YAML parsing
+fn parse_yaml_response(response: &str) -> ParsedResponse {
     // Try to find YAML block
     let yaml_content = if let Some(start) = response.find("```yaml") {
         let after_marker = &response[start + 7..];
@@ -355,9 +308,6 @@ fn hash_content(content: &str) -> String {
 pub enum IndexerError {
     #[error("Failed to read file '{0}': {1}")]
     FileRead(String, String),
-
-    #[error("LLM error: {0}")]
-    LlmError(#[from] LlmError),
 
     #[error("Store error: {0}")]
     StoreError(String),

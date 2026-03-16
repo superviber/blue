@@ -15,7 +15,7 @@ pub mod env;
 pub mod guide;
 pub mod index; // Semantic index (RFC 0010)
 pub mod lint;
-pub mod llm;
+
 pub mod playwright;
 pub mod postmortem;
 pub mod pr;

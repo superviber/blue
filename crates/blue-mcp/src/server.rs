@@ -2350,107 +2350,6 @@ impl BlueServer {
                         }
                     }
                 },
-                // RFC 0005: Local LLM Integration
-                {
-                    "name": "blue_llm_start",
-                    "description": "Start the Ollama LLM server. Manages an embedded Ollama instance or uses an external one.",
-                    "inputSchema": {
-                        "type": "object",
-                        "properties": {
-                            "port": {
-                                "type": "number",
-                                "description": "Port to run on (default: 11434)"
-                            },
-                            "model": {
-                                "type": "string",
-                                "description": "Default model to use (default: qwen2.5:7b)"
-                            },
-                            "backend": {
-                                "type": "string",
-                                "enum": ["auto", "cuda", "mps", "cpu"],
-                                "description": "Backend to use (default: auto)"
-                            },
-                            "use_external": {
-                                "type": "boolean",
-                                "description": "Use external Ollama instead of embedded (default: false)"
-                            }
-                        }
-                    }
-                },
-                {
-                    "name": "blue_llm_stop",
-                    "description": "Stop the managed Ollama LLM server.",
-                    "inputSchema": {
-                        "type": "object",
-                        "properties": {}
-                    }
-                },
-                {
-                    "name": "blue_llm_status",
-                    "description": "Check LLM server status. Returns running state, version, and GPU info.",
-                    "inputSchema": {
-                        "type": "object",
-                        "properties": {}
-                    }
-                },
-                {
-                    "name": "blue_llm_providers",
-                    "description": "Show LLM provider fallback chain status. Returns availability of: Ollama (local) → API (Anthropic/OpenAI) → Keywords (always available).",
-                    "inputSchema": {
-                        "type": "object",
-                        "properties": {}
-                    }
-                },
-                {
-                    "name": "blue_model_list",
-                    "description": "List available models in the Ollama instance.",
-                    "inputSchema": {
-                        "type": "object",
-                        "properties": {}
-                    }
-                },
-                {
-                    "name": "blue_model_pull",
-                    "description": "Pull a model from the Ollama registry.",
-                    "inputSchema": {
-                        "type": "object",
-                        "properties": {
-                            "name": {
-                                "type": "string",
-                                "description": "Model name (e.g., 'qwen2.5:7b', 'llama3.2:3b')"
-                            }
-                        },
-                        "required": ["name"]
-                    }
-                },
-                {
-                    "name": "blue_model_remove",
-                    "description": "Remove a model from the Ollama instance.",
-                    "inputSchema": {
-                        "type": "object",
-                        "properties": {
-                            "name": {
-                                "type": "string",
-                                "description": "Model name to remove"
-                            }
-                        },
-                        "required": ["name"]
-                    }
-                },
-                {
-                    "name": "blue_model_warmup",
-                    "description": "Warm up a model by loading it into memory.",
-                    "inputSchema": {
-                        "type": "object",
-                        "properties": {
-                            "name": {
-                                "type": "string",
-                                "description": "Model name to warm up"
-                            }
-                        },
-                        "required": ["name"]
-                    }
-                },
                 // RFC 0006: Delete tools
                 {
                     "name": "blue_delete",
@@ -2823,23 +2722,6 @@ impl BlueServer {
             "blue_notifications_list" => self.handle_notifications_list(&call.arguments),
             // RFC 0038: Realm RFC Validation
             "blue_rfc_validate_realm" => self.handle_validate_realm(&call.arguments),
-            // RFC 0005: LLM tools
-            "blue_llm_start" => {
-                crate::handlers::llm::handle_start(&call.arguments.unwrap_or_default())
-            }
-            "blue_llm_stop" => crate::handlers::llm::handle_stop(),
-            "blue_llm_status" => crate::handlers::llm::handle_status(),
-            "blue_llm_providers" => crate::handlers::llm::handle_providers(),
-            "blue_model_list" => crate::handlers::llm::handle_model_list(),
-            "blue_model_pull" => {
-                crate::handlers::llm::handle_model_pull(&call.arguments.unwrap_or_default())
-            }
-            "blue_model_remove" => {
-                crate::handlers::llm::handle_model_remove(&call.arguments.unwrap_or_default())
-            }
-            "blue_model_warmup" => {
-                crate::handlers::llm::handle_model_warmup(&call.arguments.unwrap_or_default())
-            }
             // RFC 0006: Delete tools
             "blue_delete" => self.handle_delete(&call.arguments),
             "blue_restore" => self.handle_restore(&call.arguments),

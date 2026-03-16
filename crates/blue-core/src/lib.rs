@@ -19,7 +19,7 @@ pub mod daemon;
 pub mod documents;
 pub mod forge;
 pub mod indexer;
-pub mod llm;
+
 pub mod manifest;
 pub mod org;
 pub mod plan;
@@ -50,13 +50,10 @@ pub use forge::{
     ReleaseConfig, WorktreeConfig,
 };
 pub use indexer::{
-    is_indexable_file, should_skip_dir, IndexResult, Indexer, IndexerConfig, IndexerError,
-    ParsedSymbol, DEFAULT_INDEX_MODEL, MAX_FILE_LINES,
+    generate_index_prompt, is_indexable_file, parse_index_response, should_skip_dir, IndexResult,
+    Indexer, IndexerConfig, IndexerError, ParsedSymbol, DEFAULT_INDEX_MODEL, MAX_FILE_LINES,
 };
-pub use llm::{
-    ApiLlmConfig, CompletionOptions, CompletionResult, KeywordLlm, LlmBackendChoice, LlmConfig,
-    LlmError, LlmManager, LlmProvider, LlmProviderChoice, LocalLlmConfig, MockLlm, ProviderStatus,
-};
+
 pub use manifest::{
     ContextManifest, IdentityConfig, ManifestError, ManifestResolution, PluginConfig,
     ReferenceConfig, RefreshTrigger, ResolvedSource, SalienceTrigger, SourceConfig, TierResolution,

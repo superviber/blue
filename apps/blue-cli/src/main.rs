@@ -269,17 +269,6 @@ enum Commands {
         command: SessionCommands,
     },
 
-    /// Launch Goose AI agent with Blue extension
-    Agent {
-        /// Model to use (default: claude-sonnet-4-20250514)
-        #[arg(long, short)]
-        model: Option<String>,
-
-        /// Additional Goose arguments
-        #[arg(trailing_var_arg = true)]
-        args: Vec<String>,
-    },
-
     /// Semantic index commands (RFC 0010)
     Index {
         #[command(subcommand)]
@@ -1400,9 +1389,6 @@ async fn tokio_main() -> Result<()> {
         Some(Commands::Migrate { from }) => {
             println!("Coming home from {}.", from);
         }
-        Some(Commands::Agent { model, args }) => {
-            handle_agent_command(model, args).await?;
-        }
         Some(Commands::Index { command }) => {
             handle_index_command(command).await?;
         }
@@ -2267,320 +2253,6 @@ async fn handle_session_command(command: SessionCommands) -> Result<()> {
     Ok(())
 }
 
-async fn handle_agent_command(model: Option<String>, extra_args: Vec<String>) -> Result<()> {
-    use std::process::Command;
-
-    // Find Goose binary: bundled first, then system
-    let goose_path = find_goose_binary()?;
-
-    // Check if Ollama is running and get available models
-    let ollama_model = if model.is_none() {
-        detect_ollama_model().await
-    } else {
-        None
-    };
-
-    // Get the path to the blue binary
-    let blue_binary = std::env::current_exe()?;
-
-    // Build the extension command
-    let extension_cmd = format!("{} mcp", blue_binary.display());
-
-    println!("Starting Goose with Blue extension...");
-    println!("  Goose: {}", goose_path.display());
-    println!("  Extension: {}", extension_cmd);
-
-    // Configure Goose for the model
-    let (provider, model_name) = if let Some(m) = &model {
-        // User specified a model - could be "provider/model" format
-        if m.contains('/') {
-            let parts: Vec<&str> = m.splitn(2, '/').collect();
-            (parts[0].to_string(), parts[1].to_string())
-        } else {
-            // Assume ollama if no provider specified
-            ("ollama".to_string(), m.clone())
-        }
-    } else if let Some(m) = ollama_model {
-        ("ollama".to_string(), m)
-    } else {
-        // Check if goose is already configured
-        let config_path = dirs::config_dir().map(|d| d.join("goose").join("config.yaml"));
-
-        if let Some(path) = &config_path {
-            if path.exists() {
-                let content = std::fs::read_to_string(path).unwrap_or_default();
-                if content.contains("GOOSE_PROVIDER") {
-                    println!("  Using existing Goose config");
-                    ("".to_string(), "".to_string())
-                } else {
-                    anyhow::bail!(
-                        "No model available. Either:\n  \
-                         1. Start Ollama with a model: ollama run qwen2.5:7b\n  \
-                         2. Specify a model: blue agent --model ollama/qwen2.5:7b\n  \
-                         3. Configure Goose: goose configure"
-                    );
-                }
-            } else {
-                anyhow::bail!(
-                    "No model available. Either:\n  \
-                     1. Start Ollama with a model: ollama run qwen2.5:7b\n  \
-                     2. Specify a model: blue agent --model ollama/qwen2.5:7b\n  \
-                     3. Configure Goose: goose configure"
-                );
-            }
-        } else {
-            anyhow::bail!("Could not determine config directory");
-        }
-    };
-
-    // Build goose command
-    let mut cmd = Command::new(&goose_path);
-    cmd.arg("session");
-    cmd.arg("--with-extension").arg(&extension_cmd);
-
-    // Configure via environment variables (more reliable than config file)
-    if !provider.is_empty() {
-        cmd.env("GOOSE_PROVIDER", &provider);
-        cmd.env("GOOSE_MODEL", &model_name);
-        println!("  Provider: {}", provider);
-        println!("  Model: {}", model_name);
-
-        if provider == "ollama" {
-            cmd.env("OLLAMA_HOST", "http://localhost:11434");
-        }
-    }
-
-    // Add any extra arguments
-    for arg in extra_args {
-        cmd.arg(arg);
-    }
-
-    // Execute goose, replacing current process
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        let err = cmd.exec();
-        // exec() only returns if there was an error
-        anyhow::bail!("Failed to exec goose: {}", err);
-    }
-
-    #[cfg(not(unix))]
-    {
-        // On non-Unix, spawn and wait
-        let status = cmd.status()?;
-        if !status.success() {
-            anyhow::bail!("Goose exited with status: {}", status);
-        }
-        Ok(())
-    }
-}
-
-fn find_goose_binary() -> Result<std::path::PathBuf> {
-    use std::path::PathBuf;
-
-    let binary_name = if cfg!(windows) { "goose.exe" } else { "goose" };
-
-    // 1. Check Blue's data directory (~/.local/share/blue/bin/goose)
-    if let Some(data_dir) = dirs::data_dir() {
-        let blue_bin = data_dir.join("blue").join("bin").join(binary_name);
-        if blue_bin.exists() && is_block_goose(&blue_bin) {
-            return Ok(blue_bin);
-        }
-    }
-
-    // 2. Check for bundled binary next to blue executable
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            let bundled = dir.join(binary_name);
-            if bundled.exists() && is_block_goose(&bundled) {
-                return Ok(bundled);
-            }
-        }
-    }
-
-    // 3. Check compile-time bundled path (dev builds)
-    if let Some(path) = option_env!("GOOSE_BINARY_PATH") {
-        let bundled = PathBuf::from(path);
-        if bundled.exists() && is_block_goose(&bundled) {
-            return Ok(bundled);
-        }
-    }
-
-    // 4. Not found - download it
-    println!("Goose not found. Downloading...");
-    download_goose_runtime()
-}
-
-fn is_block_goose(path: &std::path::Path) -> bool {
-    // Check if it's Block's Goose (AI agent), not pressly/goose (DB migration)
-    if let Ok(output) = std::process::Command::new(path).arg("--version").output() {
-        let version = String::from_utf8_lossy(&output.stdout);
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        // Block's goose outputs version without "DRIVER" references
-        // and has "session" subcommand
-        !version.contains("DRIVER") && !stderr.contains("DRIVER")
-    } else {
-        false
-    }
-}
-
-fn download_goose_runtime() -> Result<std::path::PathBuf> {
-    const GOOSE_VERSION: &str = "1.21.1";
-
-    let data_dir =
-        dirs::data_dir().ok_or_else(|| anyhow::anyhow!("Could not determine data directory"))?;
-    let bin_dir = data_dir.join("blue").join("bin");
-    std::fs::create_dir_all(&bin_dir)?;
-
-    let binary_name = if cfg!(windows) { "goose.exe" } else { "goose" };
-    let dest = bin_dir.join(binary_name);
-
-    // Determine download URL based on platform
-    let (url, is_zip) = get_goose_download_url(GOOSE_VERSION)?;
-
-    println!("  Downloading from: {}", url);
-
-    // Download to temp file
-    let temp_dir = tempfile::tempdir()?;
-    let archive_path = temp_dir.path().join("goose-archive");
-
-    let status = std::process::Command::new("curl")
-        .args(["-L", "-o"])
-        .arg(&archive_path)
-        .arg(&url)
-        .status()?;
-
-    if !status.success() {
-        anyhow::bail!("Failed to download Goose");
-    }
-
-    // Extract
-    if is_zip {
-        let status = std::process::Command::new("unzip")
-            .args(["-o"])
-            .arg(&archive_path)
-            .arg("-d")
-            .arg(temp_dir.path())
-            .status()?;
-        if !status.success() {
-            anyhow::bail!("Failed to extract Goose zip");
-        }
-    } else {
-        let status = std::process::Command::new("tar")
-            .args(["-xjf"])
-            .arg(&archive_path)
-            .arg("-C")
-            .arg(temp_dir.path())
-            .status()?;
-        if !status.success() {
-            anyhow::bail!("Failed to extract Goose archive");
-        }
-    }
-
-    // Find the goose binary in extracted files
-    let extracted = find_file_recursive(temp_dir.path(), binary_name)?;
-
-    // Copy to destination
-    std::fs::copy(&extracted, &dest)?;
-
-    // Make executable on Unix
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = std::fs::metadata(&dest)?.permissions();
-        perms.set_mode(0o755);
-        std::fs::set_permissions(&dest, perms)?;
-    }
-
-    println!("  Installed to: {}", dest.display());
-    Ok(dest)
-}
-
-fn get_goose_download_url(version: &str) -> Result<(String, bool)> {
-    let base = format!(
-        "https://github.com/block/goose/releases/download/v{}",
-        version
-    );
-
-    let (arch, os) = (std::env::consts::ARCH, std::env::consts::OS);
-
-    let (file, is_zip) = match (arch, os) {
-        ("aarch64", "macos") => ("goose-aarch64-apple-darwin.tar.bz2", false),
-        ("x86_64", "macos") => ("goose-x86_64-apple-darwin.tar.bz2", false),
-        ("x86_64", "linux") => ("goose-x86_64-unknown-linux-gnu.tar.bz2", false),
-        ("aarch64", "linux") => ("goose-aarch64-unknown-linux-gnu.tar.bz2", false),
-        ("x86_64", "windows") => ("goose-x86_64-pc-windows-gnu.zip", true),
-        _ => anyhow::bail!("Unsupported platform: {} {}", arch, os),
-    };
-
-    Ok((format!("{}/{}", base, file), is_zip))
-}
-
-fn find_file_recursive(dir: &std::path::Path, name: &str) -> Result<std::path::PathBuf> {
-    // Check direct path
-    let direct = dir.join(name);
-    if direct.exists() {
-        return Ok(direct);
-    }
-
-    // Search subdirectories
-    for entry in std::fs::read_dir(dir)? {
-        let entry = entry?;
-        let path = entry.path();
-        if path.is_dir() {
-            if let Ok(found) = find_file_recursive(&path, name) {
-                return Ok(found);
-            }
-        } else if path.file_name().map(|n| n == name).unwrap_or(false) {
-            return Ok(path);
-        }
-    }
-
-    anyhow::bail!("Binary {} not found in {:?}", name, dir)
-}
-
-async fn detect_ollama_model() -> Option<String> {
-    // Check if Ollama is running
-    let client = reqwest::Client::new();
-    let resp = client
-        .get("http://localhost:11434/api/tags")
-        .timeout(std::time::Duration::from_secs(2))
-        .send()
-        .await
-        .ok()?;
-
-    if !resp.status().is_success() {
-        return None;
-    }
-
-    #[derive(serde::Deserialize)]
-    struct OllamaModels {
-        models: Vec<OllamaModel>,
-    }
-
-    #[derive(serde::Deserialize)]
-    struct OllamaModel {
-        name: String,
-        size: u64,
-    }
-
-    let models: OllamaModels = resp.json().await.ok()?;
-
-    if models.models.is_empty() {
-        return None;
-    }
-
-    // Prefer larger models (likely better for agentic work)
-    // Sort by size descending and pick first
-    let mut sorted = models.models;
-    sorted.sort_by(|a, b| b.size.cmp(&a.size));
-
-    let best = &sorted[0];
-    println!("  Detected Ollama with {} model(s)", sorted.len());
-
-    Some(best.name.clone())
-}
-
 // ==================== Semantic Index Commands (RFC 0010) ====================
 
 async fn handle_index_command(command: IndexCommands) -> Result<()> {
@@ -2592,8 +2264,7 @@ async fn handle_index_command(command: IndexCommands) -> Result<()> {
 
 fn handle_index_command_blocking(command: IndexCommands) -> Result<()> {
     use blue_core::store::DocumentStore;
-    use blue_core::{is_indexable_file, Indexer, IndexerConfig, LocalLlmConfig};
-    use blue_ollama::OllamaLlm;
+    use blue_core::is_indexable_file;
     use std::path::Path;
 
     // Get the .blue database path
@@ -2608,70 +2279,17 @@ fn handle_index_command_blocking(command: IndexCommands) -> Result<()> {
     let store = DocumentStore::open(&db_path)?;
 
     match command {
-        IndexCommands::All { path, model } => {
+        IndexCommands::All { path, model: _ } => {
             let target_path = path.as_deref().unwrap_or(".");
-            let model_name = model.as_deref().unwrap_or("qwen2.5:3b");
 
             // Collect all indexable files
             let files = collect_indexable_files(Path::new(target_path))?;
             println!("Found {} indexable files in '{}'", files.len(), target_path);
-
-            if files.is_empty() {
-                println!("No files to index.");
-                return Ok(());
-            }
-
-            // Try to connect to Ollama
-            let llm_config = LocalLlmConfig {
-                model: model_name.to_string(),
-                use_external: true, // Use existing Ollama instance
-                ..Default::default()
-            };
-
-            let llm = OllamaLlm::new(&llm_config);
-            if let Err(e) = llm.start() {
-                println!("Ollama not available: {}", e);
-                println!("\nTo index files:");
-                println!("  1. Start Ollama: ollama serve");
-                println!("  2. Pull the model: ollama pull {}", model_name);
-                println!("  3. Run this command again");
-                return Ok(());
-            }
-
-            println!("Indexing with model '{}'...\n", model_name);
-
-            let indexer_config = IndexerConfig {
-                model: model_name.to_string(),
-                ..Default::default()
-            };
-            let indexer = Indexer::new(llm, indexer_config);
-
-            let mut indexed = 0;
-            let mut errors = 0;
-
-            for file_path in &files {
-                let path = Path::new(file_path);
-                print!("  {} ... ", file_path);
-
-                match indexer.index_and_store(path, &store) {
-                    Ok(result) => {
-                        let partial = if result.is_partial { " (partial)" } else { "" };
-                        println!("{} symbols{}", result.symbols.len(), partial);
-                        indexed += 1;
-                    }
-                    Err(e) => {
-                        println!("error: {}", e);
-                        errors += 1;
-                    }
-                }
-            }
-
-            println!("\nIndexed {} files ({} errors)", indexed, errors);
+            println!("\nEmbedded LLM indexing has been removed (RFC 0071).");
+            println!("Use 'blue index status' to check existing index state.");
         }
 
-        IndexCommands::Diff { model } => {
-            let model_name = model.as_deref().unwrap_or("qwen2.5:3b");
-
+        IndexCommands::Diff { model: _ } => {
             // Get staged files
             let output = std::process::Command::new("git")
                 .args(["diff", "--cached", "--name-only"])
@@ -2689,44 +2307,11 @@ fn handle_index_command_blocking(command: IndexCommands) -> Result<()> {
                 return Ok(());
             }
 
-            // Try to connect to Ollama
-            let llm_config = LocalLlmConfig {
-                model: model_name.to_string(),
-                use_external: true,
-                ..Default::default()
-            };
-
-            let llm = OllamaLlm::new(&llm_config);
-            if llm.start().is_err() {
-                // Silently skip if Ollama not available (pre-commit hook shouldn't block)
-                return Ok(());
-            }
-
-            println!("Indexing {} staged file(s)...", staged_files.len());
-
-            let indexer_config = IndexerConfig {
-                model: model_name.to_string(),
-                ..Default::default()
-            };
-            let indexer = Indexer::new(llm, indexer_config);
-
-            for file_path in &staged_files {
-                let path = Path::new(file_path);
-                if path.exists() {
-                    match indexer.index_and_store(path, &store) {
-                        Ok(result) => {
-                            println!("  {} - {} symbols", file_path, result.symbols.len());
-                        }
-                        Err(e) => {
-                            println!("  {} - error: {}", file_path, e);
-                        }
-                    }
-                }
-            }
+            println!("{} indexable staged file(s) detected.", staged_files.len());
+            println!("Embedded LLM indexing has been removed (RFC 0071).");
         }
 
-        IndexCommands::File { path, model } => {
-            let model_name = model.as_deref().unwrap_or("qwen2.5:3b");
+        IndexCommands::File { path, model: _ } => {
             let file_path = Path::new(&path);
 
             if !file_path.exists() {
@@ -2734,52 +2319,11 @@ fn handle_index_command_blocking(command: IndexCommands) -> Result<()> {
                 return Ok(());
             }
 
-            // Try to connect to Ollama
-            let llm_config = LocalLlmConfig {
-                model: model_name.to_string(),
-                use_external: true,
-                ..Default::default()
-            };
-
-            let llm = OllamaLlm::new(&llm_config);
-            if let Err(e) = llm.start() {
-                println!("Ollama not available: {}", e);
-                println!("\nStart Ollama first: ollama serve");
-                return Ok(());
-            }
-
-            println!("Indexing '{}' with '{}'...", path, model_name);
-
-            let indexer_config = IndexerConfig {
-                model: model_name.to_string(),
-                ..Default::default()
-            };
-            let indexer = Indexer::new(llm, indexer_config);
-
-            match indexer.index_and_store(file_path, &store) {
-                Ok(result) => {
-                    println!("\nSummary: {}", result.summary.unwrap_or_default());
-                    if let Some(rel) = &result.relationships {
-                        println!("\nRelationships:\n{}", rel);
-                    }
-                    println!("\nSymbols ({}):", result.symbols.len());
-                    for sym in &result.symbols {
-                        let lines = match (sym.start_line, sym.end_line) {
-                            (Some(s), Some(e)) => format!(" (lines {}-{})", s, e),
-                            (Some(s), None) => format!(" (line {})", s),
-                            _ => String::new(),
-                        };
-                        println!("  {} ({}){}", sym.name, sym.kind, lines);
-                    }
-                }
-                Err(e) => {
-                    println!("Error: {}", e);
-                }
-            }
+            println!("Embedded LLM indexing has been removed (RFC 0071).");
+            println!("File '{}' exists and is indexable: {}", path, is_indexable_file(file_path));
         }
 
-        IndexCommands::Refresh { model } => {
-            let model_name = model.as_deref().unwrap_or("qwen2.5:3b");
+        IndexCommands::Refresh { model: _ } => {
             let realm = "default";
 
             let (file_count, symbol_count) = store.get_index_stats(realm)?;
@@ -2789,13 +2333,13 @@ fn handle_index_command_blocking(command: IndexCommands) -> Result<()> {
             );
 
             if file_count == 0 {
-                println!("Index is empty. Run 'blue index all' first.");
+                println!("Index is empty.");
                 return Ok(());
             }
 
             // Get all indexed files and check which are stale
             let indexed_files = store.list_file_index(realm, None)?;
-            let mut stale_files = Vec::new();
+            let mut stale_count = 0;
 
             for entry in &indexed_files {
                 let path = Path::new(&entry.file_path);
@@ -2803,56 +2347,17 @@ fn handle_index_command_blocking(command: IndexCommands) -> Result<()> {
                     if let Ok(content) = std::fs::read_to_string(path) {
                         let current_hash = hash_file_content(&content);
                         if current_hash != entry.file_hash {
-                            stale_files.push(entry.file_path.clone());
+                            stale_count += 1;
                         }
                     }
                 }
             }
 
-            if stale_files.is_empty() {
+            if stale_count == 0 {
                 println!("All indexed files are up to date.");
-                return Ok(());
-            }
-
-            println!("Found {} stale file(s)", stale_files.len());
-
-            // Try to connect to Ollama
-            let llm_config = LocalLlmConfig {
-                model: model_name.to_string(),
-                use_external: true,
-                ..Default::default()
-            };
-
-            let llm = OllamaLlm::new(&llm_config);
-            if let Err(e) = llm.start() {
-                println!("Ollama not available: {}", e);
-                println!("\nStale files:");
-                for f in &stale_files {
-                    println!("  {}", f);
-                }
-                return Ok(());
-            }
-
-            println!("Re-indexing stale files with '{}'...\n", model_name);
-
-            let indexer_config = IndexerConfig {
-                model: model_name.to_string(),
-                ..Default::default()
-            };
-            let indexer = Indexer::new(llm, indexer_config);
-
-            for file_path in &stale_files {
-                let path = Path::new(file_path);
-                print!("  {} ... ", file_path);
-
-                match indexer.index_and_store(path, &store) {
-                    Ok(result) => {
-                        println!("{} symbols", result.symbols.len());
-                    }
-                    Err(e) => {
-                        println!("error: {}", e);
-                    }
-                }
+            } else {
+                println!("Found {} stale file(s).", stale_count);
+                println!("Embedded LLM re-indexing has been removed (RFC 0071).");
             }
         }
 

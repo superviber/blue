@@ -3,7 +3,6 @@ resolver = "2"
 members = [
     "crates/blue-core",
     "crates/blue-mcp",
-    "crates/blue-ollama",
     "apps/blue-cli",
 ]
 
@@ -54,7 +53,7 @@ semver = { version = "1.0", features = ["serde"] }
 axum = "0.8"
 tower-http = { version = "0.6", features = ["cors", "trace"] }
 
-# HTTP client (Forgejo API, Ollama)
+# HTTP client (Forgejo API, Jira)
 reqwest = { version = "0.12", features = ["json", "blocking"] }
 
 # Directories
@@ -82,4 +81,4 @@ tempfile = "3.15"
 # Internal
 blue-core = { path = "crates/blue-core" }
 blue-mcp = { path = "crates/blue-mcp" }
-blue-ollama = { path = "crates/blue-ollama" }
+
