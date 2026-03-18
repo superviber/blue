@@ -1043,6 +1043,20 @@ enum DialogueCommands {
         #[arg(long)]
         data: String,
     },
+    /// Verify round files exist
+    RoundVerify {
+        /// Output directory for the dialogue
+        #[arg(long)]
+        output_dir: String,
+
+        /// Round number
+        #[arg(long)]
+        round: u64,
+
+        /// Agent names as JSON array (e.g., '["Muffin","Cupcake"]')
+        #[arg(long)]
+        agents: String,
+    },
     /// Sample a new panel from the expert pool
     SamplePanel {
         /// Dialogue title
@@ -4486,6 +4500,26 @@ async fn handle_dialogue_command(command: DialogueCommands) -> Result<()> {
             match blue_core::handlers::dialogue::handle_verdict_register(&state, &args) {
                 Ok(result) => println!("{}", serde_json::to_string_pretty(&result)?),
                 Err(e) => { eprintln!("Error: {}", e); std::process::exit(1); }
+            }
+        }
+        DialogueCommands::RoundVerify {
+            output_dir,
+            round,
+            agents,
+        } => {
+            let agents_value: serde_json::Value = serde_json::from_str(&agents)
+                .map_err(|e| anyhow::anyhow!("Invalid agents JSON: {}", e))?;
+            let args = json!({
+                "output_dir": output_dir,
+                "round": round,
+                "agents": agents_value,
+            });
+            match blue_core::handlers::dialogue::handle_round_verify(&args) {
+                Ok(result) => println!("{}", serde_json::to_string_pretty(&result)?),
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    std::process::exit(1);
+                }
             }
         }
         DialogueCommands::SamplePanel {

@@ -193,6 +193,12 @@ const PASTRY_NAMES: &[&str] = &[
     "Religieuse",
 ];
 
+/// Validate that a name is a valid pastry name (ADR 0014)
+fn is_valid_pastry_name(name: &str) -> bool {
+    PASTRY_NAMES.contains(&name)
+        || (name.starts_with("Pastry") && name[6..].chars().all(|c| c.is_ascii_digit()) && name.len() > 6)
+}
+
 /// Extraction status
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -1606,6 +1612,15 @@ pub fn handle_round_prompt(args: &Value) -> Result<Value, HandlerError> {
         .get("agent_name")
         .and_then(|v| v.as_str())
         .ok_or_else(|| HandlerError::InvalidParams)?;
+    if !is_valid_pastry_name(agent_name) {
+        return Err(HandlerError::CommandFailed(format!(
+            "Agent name '{}' is not a valid pastry name. Use names from the suggested panel \
+             (Muffin, Cupcake, Scone, Eclair, Donut, Brioche, Croissant, Macaron, Cannoli, \
+             Strudel, Beignet, Churro, Profiterole, Tartlet, Galette, Palmier, Kouign, \
+             Sfogliatella, Financier, Religieuse) or PastryN overflow format.",
+            agent_name
+        )));
+    }
     let agent_emoji = args
         .get("agent_emoji")
         .and_then(|v| v.as_str())
@@ -2288,6 +2303,13 @@ pub fn handle_expert_create(state: &ProjectState, args: &Value) -> Result<Value,
         .get("expert_slug")
         .and_then(|v| v.as_str())
         .ok_or(HandlerError::InvalidParams)?;
+    if !is_valid_pastry_name(expert_slug) {
+        return Err(HandlerError::CommandFailed(format!(
+            "Expert slug '{}' is not a valid pastry name. Use names like Muffin, Cupcake, \
+             Scone, etc. from the pastry name list.",
+            expert_slug
+        )));
+    }
 
     let role = args
         .get("role")
@@ -3472,6 +3494,87 @@ pub fn handle_export(state: &ProjectState, args: &Value) -> Result<Value, Handle
     }))
 }
 
+/// Handle blue_dialogue_round_verify
+///
+/// Verifies that all expected files exist for a completed round.
+pub fn handle_round_verify(args: &Value) -> Result<Value, HandlerError> {
+    let output_dir = args
+        .get("output_dir")
+        .and_then(|v| v.as_str())
+        .ok_or(HandlerError::InvalidParams)?;
+    let round = args
+        .get("round")
+        .and_then(|v| v.as_u64())
+        .ok_or(HandlerError::InvalidParams)? as usize;
+    let agents: Vec<String> = args
+        .get("agents")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect()
+        })
+        .ok_or(HandlerError::InvalidParams)?;
+
+    let mut present = Vec::new();
+    let mut missing = Vec::new();
+
+    // Check round directory
+    let round_dir = format!("{}/round-{}", output_dir, round);
+    if !Path::new(&round_dir).is_dir() {
+        missing.push(format!("round-{}/", round));
+    }
+
+    // Check agent files
+    for agent in &agents {
+        let agent_file = format!("{}/{}.md", round_dir, agent.to_lowercase());
+        if Path::new(&agent_file).exists() {
+            present.push(agent_file);
+        } else {
+            missing.push(agent_file);
+        }
+    }
+
+    // Check judge artifacts
+    let scoreboard = format!("{}/scoreboard.md", output_dir);
+    if Path::new(&scoreboard).exists() {
+        present.push(scoreboard);
+    } else {
+        missing.push(scoreboard);
+    }
+
+    let tensions = format!("{}/tensions.md", output_dir);
+    if Path::new(&tensions).exists() {
+        present.push(tensions);
+    } else {
+        missing.push(tensions);
+    }
+
+    let summary = format!("{}/round-{}.summary.md", output_dir, round);
+    if Path::new(&summary).exists() {
+        present.push(summary);
+    } else {
+        missing.push(summary);
+    }
+
+    let status = if missing.is_empty() {
+        "ok"
+    } else {
+        "missing_files"
+    };
+
+    Ok(json!({
+        "status": status,
+        "message": if missing.is_empty() {
+            format!("All {} files present for round {}", present.len(), round)
+        } else {
+            format!("{} files missing for round {}: {}", missing.len(), round, missing.join(", "))
+        },
+        "present": present,
+        "missing": missing,
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4562,5 +4665,68 @@ mod tests {
         // Cleanup
         fs::remove_dir_all(test_dir).ok();
         println!("\n=== TEST PASSED ===\n");
+    }
+
+    #[test]
+    fn test_is_valid_pastry_name() {
+        assert!(is_valid_pastry_name("Muffin"));
+        assert!(is_valid_pastry_name("Cupcake"));
+        assert!(is_valid_pastry_name("Sfogliatella"));
+        assert!(is_valid_pastry_name("Pastry21"));
+        assert!(is_valid_pastry_name("Pastry99"));
+        assert!(!is_valid_pastry_name("KETTLE"));
+        assert!(!is_valid_pastry_name("TEAPOT"));
+        assert!(!is_valid_pastry_name("LOCKBOX"));
+        assert!(!is_valid_pastry_name("Backend Architect"));
+        assert!(!is_valid_pastry_name("Pastry")); // no digits
+        assert!(!is_valid_pastry_name("muffin")); // case sensitive
+    }
+
+    #[test]
+    fn test_handle_round_verify_missing_files() {
+        let dir = std::env::temp_dir().join("blue-test-round-verify");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("round-0")).unwrap();
+        // Only create one agent file
+        std::fs::write(dir.join("round-0/muffin.md"), "test").unwrap();
+
+        let args = json!({
+            "output_dir": dir.to_str().unwrap(),
+            "round": 0,
+            "agents": ["Muffin", "Cupcake"]
+        });
+
+        let result = handle_round_verify(&args).unwrap();
+        assert_eq!(result["status"], "missing_files");
+        let missing = result["missing"].as_array().unwrap();
+        assert!(missing.iter().any(|m| m.as_str().unwrap().contains("cupcake.md")));
+        assert!(missing.iter().any(|m| m.as_str().unwrap().contains("scoreboard.md")));
+        assert!(missing.iter().any(|m| m.as_str().unwrap().contains("tensions.md")));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_handle_round_verify_all_present() {
+        let dir = std::env::temp_dir().join("blue-test-round-verify-ok");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("round-0")).unwrap();
+        std::fs::write(dir.join("round-0/muffin.md"), "test").unwrap();
+        std::fs::write(dir.join("round-0/cupcake.md"), "test").unwrap();
+        std::fs::write(dir.join("scoreboard.md"), "test").unwrap();
+        std::fs::write(dir.join("tensions.md"), "test").unwrap();
+        std::fs::write(dir.join("round-0.summary.md"), "test").unwrap();
+
+        let args = json!({
+            "output_dir": dir.to_str().unwrap(),
+            "round": 0,
+            "agents": ["Muffin", "Cupcake"]
+        });
+
+        let result = handle_round_verify(&args).unwrap();
+        assert_eq!(result["status"], "ok");
+        assert!(result["missing"].as_array().unwrap().is_empty());
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

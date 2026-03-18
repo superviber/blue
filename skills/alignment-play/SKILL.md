@@ -91,6 +91,7 @@ The suggested panel is just that — a suggestion. **Review it before Round 0:**
 2. Get prompts for each agent via `blue_dialogue_round_prompt`
 3. **Spawn ALL agents in ONE message** using Task tool (parallel execution)
 4. Collect responses, score contributions, write artifacts
+5. **Verify round files**: Call `blue_dialogue_round_verify` with output_dir, round, and agent names to confirm all files were written. If any are missing, retry the failed agent or write the file yourself as fallback.
 
 ### Phase 3+: Graduated Panel Evolution
 
@@ -359,6 +360,19 @@ See the `alignment-expert` skill (`/alignment-expert`) for full syntax reference
 10. **BOTH CONDITIONS REQUIRED** — Convergence requires BOTH velocity = 0 AND 100% expert convergence. Either condition failing means another round. (RFC 0057)
 11. **MAX ROUNDS = 10** — Safety valve. If round 10 completes without convergence, force it with a warning in the verdict. (RFC 0057)
 12. **OUTPUT CONVERGENCE SUMMARY** — When convergence achieved, output the formatted summary table showing: rounds, total ALIGNMENT (with W/C/T/R breakdown), experts consulted, tensions resolved, converged decisions, and resolved tensions. (RFC 0057)
+13. **ALWAYS USE PASTRY NAMES** — Agents MUST use names from the pastry name list (Muffin, Cupcake, Scone, Eclair, Donut, Brioche, Croissant, Macaron, Cannoli, Strudel, Beignet, Churro, Profiterole, Tartlet, Galette, Palmier, Kouign, Sfogliatella, Financier, Religieuse) or PastryN overflow format. NEVER invent agent names like "KETTLE", "LOCKBOX", or "ANALYST". The `blue_dialogue_create` and `blue_dialogue_evolve_panel` tools assign names — use them as-is. The MCP server will REJECT non-pastry names.
+14. **NEVER BYPASS MCP TOOLS** — NEVER spawn expert agents without first calling `blue_dialogue_create` with `alignment: true` to initialize the dialogue. Every alignment dialogue MUST go through the tool to ensure proper pool setup, pastry name assignment, output directory creation, and file scaffolding. Spawning agents with ad-hoc names and no dialogue initialization leads to missing files, invalid names, and broken state.
+15. **VERIFY ROUND FILES** — After each round completes and all artifacts are written, call `blue dialogue round-verify` (or the MCP tool `blue_dialogue_round_verify`) to confirm all expected files exist. Missing files mean missing context for the next round. If verification fails, retry the failed agent or write a fallback before proceeding.
+
+## Anti-Patterns (DO NOT DO THIS)
+
+| Anti-Pattern | Why It Fails | Do This Instead |
+|-------------|-------------|-----------------|
+| Inventing expert names (KETTLE, LOCKBOX) | MCP server rejects non-pastry names; breaks file naming, marker syntax, and cross-references | Use pastry names from the panel returned by `blue_dialogue_create` |
+| Spawning agents without `blue_dialogue_create` | No output directory, no expert pool, no pastry names, no Judge Protocol | Always call `blue_dialogue_create` with `alignment: true` first |
+| Skipping `blue_dialogue_round_prompt` | Agents don't get file-writing instructions, mandatory output paths, or context from prior rounds | Always use `blue_dialogue_round_prompt` for each agent's prompt |
+| Not writing scoreboard/tensions/summary files | Next round's agents have no context — dialogue degrades | Write all 3 Judge artifacts after every round |
+| Saving individual expert outputs as separate dialogues | Fragments the dialogue — no panel, no scoring, no convergence | All experts contribute to a single dialogue via the file architecture |
 
 ## Driving Velocity to Zero (RFC 0057)
 
