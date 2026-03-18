@@ -284,7 +284,7 @@ pub fn parse_rfc_title(content: &str) -> Option<String> {
 pub fn rfc_status_to_jira(status: &str) -> Option<&'static str> {
     match status {
         "draft" => Some("To Do"),
-        "accepted" => Some("To Do"),
+        "approved" | "accepted" => Some("To Do"),
         "in-progress" => Some("In Progress"),
         "implemented" => Some("Done"),
         _ => None,
@@ -673,6 +673,8 @@ Has Jira key but no UUID.
     #[test]
     fn test_rfc_status_to_jira_mapping() {
         assert_eq!(rfc_status_to_jira("draft"), Some("To Do"));
+        assert_eq!(rfc_status_to_jira("approved"), Some("To Do"));
+        // Backwards compat
         assert_eq!(rfc_status_to_jira("accepted"), Some("To Do"));
         assert_eq!(rfc_status_to_jira("in-progress"), Some("In Progress"));
         assert_eq!(rfc_status_to_jira("implemented"), Some("Done"));

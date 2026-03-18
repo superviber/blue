@@ -9,8 +9,7 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "kebab-case")]
 pub enum Status {
     Draft,
-    Accepted,
-    InProgress,
+    Approved,
     Implemented,
     Superseded,
 }
@@ -19,8 +18,7 @@ impl Status {
     pub fn as_str(&self) -> &'static str {
         match self {
             Status::Draft => "draft",
-            Status::Accepted => "accepted",
-            Status::InProgress => "in-progress",
+            Status::Approved => "approved",
             Status::Implemented => "implemented",
             Status::Superseded => "superseded",
         }

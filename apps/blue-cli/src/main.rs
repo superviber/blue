@@ -39,21 +39,21 @@ fn maybe_handle_guard_sync() -> Option<i32> {
 }
 
 /// Synchronous guard implementation - no tokio, no tracing, just the check.
+///
+/// RFC 0073 enhancements:
+/// - Worktrees: block .blue/docs/ writes (docs belong on develop)
+/// - Worktrees: check RFC approval status via filesystem glob
+/// - Main repo: allow doc writes on develop, block source code without worktree
 fn run_guard_sync(path_str: &str) -> i32 {
     use std::path::Path;
 
     // Check bypass environment variable
     if std::env::var("BLUE_BYPASS_WORKTREE").is_ok() {
-        // Note: We skip audit logging in sync mode for simplicity
         return 0; // Allow
     }
 
     let path = Path::new(path_str);
-
-    // Fast allowlist check
-    if is_in_allowlist_sync(path) {
-        return 0; // Allow
-    }
+    let path_str_lossy = path.to_string_lossy();
 
     // Get cwd
     let cwd = match std::env::current_dir() {
@@ -68,9 +68,27 @@ fn run_guard_sync(path_str: &str) -> i32 {
     let git_path = cwd.join(".git");
 
     if git_path.is_file() {
-        // This is a worktree (linked worktree has .git as a file)
+        // ====================================================================
+        // WORKTREE CONTEXT (RFC 0073)
+        // Worktrees are implementation-only. Doc writes belong on develop.
+        // ====================================================================
         if let Ok(content) = std::fs::read_to_string(&git_path) {
             if content.starts_with("gitdir:") {
+                // RFC 0073: Block .blue/docs/ writes in worktrees
+                if path_str_lossy.contains(".blue/docs/") {
+                    eprintln!(
+                        "guard: blocked doc write in worktree: {}",
+                        path.display()
+                    );
+                    eprintln!("hint: Doc changes belong on develop, not in worktrees");
+                    return 1;
+                }
+
+                // Fast allowlist for worktree-safe paths
+                if is_in_worktree_allowlist_sync(path) {
+                    return 0; // Allow
+                }
+
                 let dir_name = cwd.file_name().and_then(|n| n.to_str()).unwrap_or("");
 
                 let parent_is_worktrees = cwd
@@ -80,18 +98,31 @@ fn run_guard_sync(path_str: &str) -> i32 {
                     .map(|s| s == "worktrees")
                     .unwrap_or(false);
 
-                let is_rfc = dir_name.starts_with("rfc-")
+                let is_valid_worktree = dir_name.starts_with("rfc-")
                     || dir_name.starts_with("feature-")
                     || parent_is_worktrees;
 
-                if is_rfc {
+                if is_valid_worktree {
                     let abs_path = if path.is_absolute() {
                         path.to_path_buf()
                     } else {
                         cwd.join(path)
                     };
                     if abs_path.starts_with(&cwd) {
-                        return 0; // Allow writes in RFC worktree
+                        // RFC 0073: Check RFC is approved before allowing implementation
+                        if is_source_code_path_sync(path) {
+                            if let Some(slug) = extract_worktree_slug(&cwd) {
+                                if !is_rfc_approved_sync(&cwd, &slug) {
+                                    eprintln!(
+                                        "guard: blocked write — RFC for '{}' is not approved",
+                                        slug
+                                    );
+                                    eprintln!("hint: Approve the RFC first on develop");
+                                    return 1;
+                                }
+                            }
+                        }
+                        return 0; // Allow writes in approved RFC worktree
                     }
                 }
             }
@@ -102,23 +133,32 @@ fn run_guard_sync(path_str: &str) -> i32 {
         );
         return 1;
     } else if git_path.is_dir() {
-        // Main repository - check branch
+        // ====================================================================
+        // MAIN REPOSITORY CONTEXT
+        // ====================================================================
+
+        // Fast allowlist check (docs, .claude, etc.)
+        if is_in_allowlist_sync(path) {
+            return 0; // Allow
+        }
+
+        // Check branch
         if let Ok(output) = std::process::Command::new("git")
             .args(["branch", "--show-current"])
             .current_dir(&cwd)
             .output()
         {
             let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            let is_rfc = branch.starts_with("feature/")
+            let is_feature = branch.starts_with("feature/")
                 || branch.starts_with("rfc/")
                 || branch.starts_with("rfc-");
 
-            if is_rfc {
-                return 0; // Allow - on RFC branch
+            if is_feature {
+                return 0; // Allow - on feature branch in main repo
             }
         }
 
-        // Not on RFC branch - check if source code
+        // Not on feature branch - block source code writes
         if is_source_code_path_sync(path) {
             eprintln!(
                 "guard: blocked write to {} (no active worktree)",
@@ -127,14 +167,85 @@ fn run_guard_sync(path_str: &str) -> i32 {
             eprintln!("hint: Create a worktree with 'blue worktree create <rfc-title>' first");
             return 1;
         }
-        return 0; // Allow non-source-code files
+        return 0; // Allow non-source-code files on develop/main
     }
 
     // No .git - allow (not a git repo)
     0
 }
 
-/// Synchronous allowlist check (RFC 0049)
+/// Extract the worktree slug from the current directory or git branch.
+///
+/// Tries two methods:
+/// 1. Parse branch name `feature/{slug}` from `git branch --show-current`
+/// 2. Fall back to directory name
+fn extract_worktree_slug(cwd: &std::path::Path) -> Option<String> {
+    // Try git branch first
+    if let Ok(output) = std::process::Command::new("git")
+        .args(["branch", "--show-current"])
+        .current_dir(cwd)
+        .output()
+    {
+        let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if let Some(slug) = branch.strip_prefix("feature/") {
+            return Some(slug.to_string());
+        }
+    }
+    // Fall back to directory name
+    cwd.file_name()
+        .and_then(|n| n.to_str())
+        .map(|s| s.to_string())
+}
+
+/// Check if an RFC is approved by globbing the filesystem (RFC 0073).
+///
+/// Looks for `*-A-{slug}.md` or `*-I-{slug}.md` in `.blue/docs/rfcs/`.
+/// The filename is the source of truth — no DB needed.
+fn is_rfc_approved_sync(cwd: &std::path::Path, slug: &str) -> bool {
+    let rfcs_dir = cwd.join(".blue/docs/rfcs");
+    if !rfcs_dir.is_dir() {
+        // No rfcs directory — can't verify, allow by default
+        return true;
+    }
+
+    let approved_pattern = format!("-A-{}.md", slug);
+    let implemented_pattern = format!("-I-{}.md", slug);
+
+    if let Ok(entries) = std::fs::read_dir(&rfcs_dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy();
+            if name_str.contains(&approved_pattern) || name_str.contains(&implemented_pattern) {
+                return true;
+            }
+        }
+    }
+
+    // Check for draft — if we find a draft, that means it's NOT approved
+    let draft_pattern = format!("-D-{}.md", slug);
+    let mut found_draft = false;
+    if let Ok(entries) = std::fs::read_dir(&rfcs_dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy();
+            if name_str.contains(&draft_pattern) {
+                found_draft = true;
+                break;
+            }
+        }
+    }
+
+    if found_draft {
+        return false; // Draft exists but not approved
+    }
+
+    // No matching RFC found at all — allow (might be legacy naming or no RFC)
+    true
+}
+
+/// Allowlist for main repository context (RFC 0049 + RFC 0073)
+///
+/// On develop/main, these paths are always writable (non-source-code).
 fn is_in_allowlist_sync(path: &std::path::Path) -> bool {
     let path_str = path.to_string_lossy();
 
@@ -159,6 +270,26 @@ fn is_in_allowlist_sync(path: &std::path::Path) -> bool {
 
     // Dialogue temp files
     if path_str.contains("/tmp/blue-dialogue/") {
+        return true;
+    }
+
+    false
+}
+
+/// Allowlist for worktree context (RFC 0073)
+///
+/// In worktrees, only non-doc, non-source infrastructure files are auto-allowed.
+/// Source code is allowed after RFC approval check (handled separately).
+fn is_in_worktree_allowlist_sync(path: &std::path::Path) -> bool {
+    let path_str = path.to_string_lossy();
+
+    // Config files are ok
+    if path_str.contains(".claude/") || path_str.contains(".gitignore") {
+        return true;
+    }
+
+    // Temp files
+    if path_str.contains("/tmp/") || path_str.contains("/tmp/blue-dialogue/") {
         return true;
     }
 

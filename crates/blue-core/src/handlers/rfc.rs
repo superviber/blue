@@ -51,7 +51,7 @@ pub fn handle_create(state: &mut ProjectState, args: &Value) -> Result<Value, Ha
     let markdown = rfc.to_markdown(number as u32);
 
     // Generate filename and write file
-    let filename = format!("rfcs/{:04}-{}.draft.md", number, title_to_slug(title));
+    let filename = format!("rfcs/{:04}-D-{}.md", number, title_to_slug(title));
     let docs_path = state.home.docs_path.clone();
     let rfc_path = docs_path.join(&filename);
     if let Some(parent) = rfc_path.parent() {
@@ -263,13 +263,9 @@ pub fn handle_update_status(state: &ProjectState, args: &Value) -> Result<Value,
     validate_rfc_transition(current_status, target_status)
         .map_err(|e| HandlerError::Workflow(e.to_string()))?;
 
-    // Check for worktree if going to in-progress (RFC 0011)
-    let has_worktree = state.has_worktree(title);
-    let worktree_warning = if status_str == "in-progress" && !has_worktree {
-        Some("No worktree exists for this RFC. Consider using blue_worktree_create for isolated development.")
-    } else {
-        None
-    };
+    // Check for worktree (RFC 0011)
+    let _has_worktree = state.has_worktree(title);
+    let worktree_warning: Option<&str> = None;
 
     // Update database
     state
@@ -293,13 +289,9 @@ pub fn handle_update_status(state: &ProjectState, args: &Value) -> Result<Value,
 
     // Conversational hints guide Claude to next action (RFC 0014)
     let hint = match target_status {
-        RfcStatus::Accepted => Some(
-            "RFC accepted. Ask the user: 'Ready to begin implementation? \
+        RfcStatus::Approved => Some(
+            "RFC approved. Ask the user: 'Ready to begin implementation? \
              I'll create a worktree and set up the environment.'",
-        ),
-        RfcStatus::InProgress => Some(
-            "Implementation started. Work in the worktree, mark plan tasks \
-             as you complete them.",
         ),
         RfcStatus::Implemented => {
             Some("Implementation complete. Ask the user: 'Ready to create a PR?'")
@@ -308,8 +300,8 @@ pub fn handle_update_status(state: &ProjectState, args: &Value) -> Result<Value,
         RfcStatus::Draft => None,
     };
 
-    // Build next_action for accepted status (RFC 0011)
-    let next_action = if status_str == "accepted" {
+    // Build next_action for approved status (RFC 0011)
+    let next_action = if target_status == RfcStatus::Approved {
         Some(json!({
             "tool": "blue_worktree_create",
             "args": { "title": title },
@@ -367,11 +359,12 @@ pub fn handle_plan(state: &ProjectState, args: &Value) -> Result<Value, HandlerE
 
     let doc_id = doc.id.ok_or(HandlerError::InvalidParams)?;
 
-    // RFC 0017: Status gating - only allow planning for accepted or in-progress RFCs
+    // RFC 0017: Status gating - only allow planning for approved RFCs
+    // Also accept legacy "accepted" and "in-progress" for backwards compat
     let status_lower = doc.status.to_lowercase();
-    if status_lower != "accepted" && status_lower != "in-progress" {
+    if status_lower != "approved" && status_lower != "accepted" && status_lower != "in-progress" {
         return Err(HandlerError::Workflow(format!(
-            "RFC must be 'accepted' or 'in-progress' to create a plan (current: {})",
+            "RFC must be 'approved' to create a plan (current: {})",
             doc.status
         )));
     }
@@ -481,7 +474,7 @@ pub fn handle_complete(state: &ProjectState, args: &Value) -> Result<Value, Hand
                 )
             }));
         }
-        _ => {} // accepted or in-progress - continue
+        _ => {} // approved (or legacy accepted/in-progress) - continue
     }
 
     // Check plan progress
@@ -513,14 +506,8 @@ pub fn handle_complete(state: &ProjectState, args: &Value) -> Result<Value, Hand
         }));
     }
 
-    // Auto-advance from accepted to in-progress if needed
-    let status_auto_advanced = doc.status == "accepted";
-    if status_auto_advanced {
-        state
-            .store
-            .update_document_status(DocType::Rfc, title, "in-progress")
-            .map_err(|e| HandlerError::StateLoadFailed(e.to_string()))?;
-    }
+    // No auto-advance needed since in-progress is removed; approved goes directly to implemented
+    let status_auto_advanced = false;
 
     // Update to implemented
     state
@@ -662,11 +649,11 @@ mod tests {
     }
 
     #[test]
-    fn test_complete_accepted_rfc() {
+    fn test_complete_approved_rfc() {
         let state = ProjectState::for_test();
 
-        // Create an accepted RFC
-        let mut doc = Document::new(DocType::Rfc, "test-rfc", "accepted");
+        // Create an approved RFC
+        let mut doc = Document::new(DocType::Rfc, "test-rfc", "approved");
         doc.number = Some(1);
         state.store.add_document(&doc).unwrap();
 
@@ -675,7 +662,7 @@ mod tests {
 
         assert_eq!(result["status"], "success");
         assert_eq!(result["new_status"], "implemented");
-        assert_eq!(result["status_auto_advanced"], true);
+        assert_eq!(result["status_auto_advanced"], false);
     }
 
     #[test]

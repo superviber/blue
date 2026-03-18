@@ -48,7 +48,7 @@ pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, Handle
         // Check RFC exists and has worktree
         if let Ok(doc) = state.store.find_document(DocType::Rfc, rfc_title) {
             // Warn if RFC isn't implemented yet
-            if doc.status != "implemented" && doc.status != "in-progress" {
+            if doc.status != "implemented" && doc.status != "approved" && doc.status != "in-progress" {
                 return Ok(json!({
                     "status": "error",
                     "message": crate::voice::error(

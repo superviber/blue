@@ -1325,6 +1325,40 @@ fn check_dependency(cwd: &Path, dep: &str) -> RfcDepStatus {
     }
 }
 
+/// Parse RFC status from a filename
+///
+/// Handles both new prefix format (NNNN-{D|A|I|S}-slug.md) and
+/// legacy suffix format (NNNN-slug.{status}.md).
+fn parse_rfc_status_from_filename(name: &str) -> Option<String> {
+    // New format: NNNN-{D|A|I|S}-slug.md
+    let prefix_re = regex::Regex::new(r"^\d{4}-([DAIS])-").unwrap();
+    if let Some(caps) = prefix_re.captures(name) {
+        let code = caps.get(1).unwrap().as_str();
+        return match code {
+            "D" => Some("draft".to_string()),
+            "A" => Some("approved".to_string()),
+            "I" => Some("implemented".to_string()),
+            "S" => Some("superseded".to_string()),
+            _ => None,
+        };
+    }
+
+    // Legacy format: NNNN-slug.{status}.md
+    if name.contains(".implemented.") {
+        return Some("implemented".to_string());
+    } else if name.contains(".accepted.") {
+        return Some("approved".to_string());
+    } else if name.contains(".impl.") || name.contains(".wip.") {
+        return Some("approved".to_string());
+    } else if name.contains(".draft.") {
+        return Some("draft".to_string());
+    } else if name.contains(".super.") {
+        return Some("superseded".to_string());
+    }
+
+    None
+}
+
 /// Check RFC status in the local repo
 fn check_local_rfc(cwd: &Path, rfc_id: &str) -> Option<String> {
     // Try to find RFC by number or title in local .blue/docs/rfcs/
@@ -1340,15 +1374,8 @@ fn check_local_rfc(cwd: &Path, rfc_id: &str) -> Option<String> {
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().to_string();
             if name.starts_with(&pattern) && name.ends_with(".md") {
-                // Parse status from filename (e.g., "0015-foo.implemented.md")
-                if name.contains(".implemented.") {
-                    return Some("implemented".to_string());
-                } else if name.contains(".accepted.") {
-                    return Some("accepted".to_string());
-                } else if name.contains(".impl.") {
-                    return Some("in-progress".to_string());
-                } else if name.contains(".draft.") {
-                    return Some("draft".to_string());
+                if let Some(status) = parse_rfc_status_from_filename(&name) {
+                    return Some(status);
                 }
             }
         }
@@ -1377,15 +1404,8 @@ fn check_remote_rfc(repo: &str, rfc_id: &str) -> Option<String> {
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().to_string();
             if name.starts_with(&pattern) && name.ends_with(".md") {
-                // Parse status from filename
-                if name.contains(".implemented.") {
-                    return Some("implemented".to_string());
-                } else if name.contains(".accepted.") {
-                    return Some("accepted".to_string());
-                } else if name.contains(".impl.") {
-                    return Some("in-progress".to_string());
-                } else if name.contains(".draft.") {
-                    return Some("draft".to_string());
+                if let Some(status) = parse_rfc_status_from_filename(&name) {
+                    return Some(status);
                 }
             }
         }

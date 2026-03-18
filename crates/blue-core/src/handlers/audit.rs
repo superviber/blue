@@ -21,10 +21,10 @@ pub fn handle_audit(state: &ProjectState) -> Result<Value, HandlerError> {
     let mut issues: Vec<AuditIssue> = Vec::new();
     let mut recommendations: Vec<String> = Vec::new();
 
-    // Check 1: In-progress RFCs without worktrees (stalled)
+    // Check 1: Approved RFCs without worktrees (stalled)
     if let Ok(docs) = state
         .store
-        .list_documents_by_status(DocType::Rfc, "in-progress")
+        .list_documents_by_status(DocType::Rfc, "approved")
     {
         let worktrees = state.store.list_worktrees().unwrap_or_default();
         for doc in docs {

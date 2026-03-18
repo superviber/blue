@@ -23,7 +23,8 @@ cargo run --bin blue
 | `blue realm` | [Cross-repo coordination](realm.md) |
 | `blue session` | Work session management |
 | `blue daemon` | Background service |
-| `blue mcp` | Run as MCP server |
+| `blue worktree` | Worktree management for RFC implementation |
+| `blue release` | Release develop to main with semver tag |
 
 ## Realm Commands
 
@@ -56,18 +57,21 @@ blue daemon status   # Check if running
 blue daemon stop     # Stop daemon
 ```
 
-## MCP Server
+## Worktree Commands
 
-Run Blue as an MCP server for Claude integration:
+Manage worktrees for RFC implementation. See [workflow documentation](../workflow/README.md) for the full lifecycle.
 
 ```bash
-blue mcp
+blue worktree create --rfc <slug>   # Create worktree for approved RFC
+blue worktree list                  # List active worktrees
+blue worktree remove --rfc <slug>   # Remove worktree after completion
 ```
 
-This exposes 8 realm coordination tools to Claude:
-- `realm_status`, `realm_check`, `contract_get`
-- `session_start`, `session_stop`
-- `realm_worktree_create`, `realm_pr_status`
-- `notifications_list`
+## Release Commands
 
-See [../mcp/README.md](../mcp/README.md) for tool reference and [../mcp/integration.md](../mcp/integration.md) for setup guide.
+Release develop to main with semver tagging.
+
+```bash
+blue release                # Release develop to main
+blue release --bump minor   # Specify version bump (patch|minor|major)
+```

@@ -142,7 +142,7 @@ fn map_status(category: &StatusCategory) -> &'static str {
     match category {
         StatusCategory::ToDo => "draft",
         StatusCategory::InProgress => "draft",
-        StatusCategory::Done => "accepted",
+        StatusCategory::Done => "approved",
         StatusCategory::Unknown(_) => "draft",
     }
 }
@@ -253,7 +253,7 @@ mod tests {
         let stub = RfcStub {
             jira_key: "TEST-1".to_string(),
             title: "Minimal".to_string(),
-            status: "accepted",
+            status: "approved",
             description: None,
             epic_key: None,
         };
@@ -314,7 +314,7 @@ mod tests {
                 RfcStub {
                     jira_key: "PROJ-11".to_string(),
                     title: "Task Two".to_string(),
-                    status: "accepted",
+                    status: "approved",
                     description: None,
                     epic_key: None,
                 },
@@ -337,7 +337,7 @@ mod tests {
     fn test_map_status() {
         assert_eq!(map_status(&StatusCategory::ToDo), "draft");
         assert_eq!(map_status(&StatusCategory::InProgress), "draft");
-        assert_eq!(map_status(&StatusCategory::Done), "accepted");
+        assert_eq!(map_status(&StatusCategory::Done), "approved");
         assert_eq!(
             map_status(&StatusCategory::Unknown("custom".to_string())),
             "draft"

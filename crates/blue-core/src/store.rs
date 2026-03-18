@@ -405,6 +405,9 @@ pub fn title_to_slug(title: &str) -> String {
 }
 
 /// Known status suffixes that can appear in filenames (RFC 0031)
+/// Note: RFC files now use prefix-based naming (NNNN-{D|A|I|S}-slug.md) but
+/// these suffixes are still needed for legacy RFC filenames during migration
+/// and for all other doc types.
 const KNOWN_SUFFIXES: &[&str] = &[
     "done", "impl", "super", "accepted", "approved", "wip", "resolved", "closed", "pub",
     "archived", "draft", "open", "recorded", "active",
@@ -412,8 +415,10 @@ const KNOWN_SUFFIXES: &[&str] = &[
 
 /// Map (DocType, status) → optional filename suffix (RFC 0031)
 ///
-/// Returns `None` for the default/initial status of each doc type,
-/// meaning no suffix should be appended.
+/// For RFCs, returns the single-letter prefix code (D, A, I, S) used in
+/// the new `NNNN-{D|A|I|S}-slug.md` naming convention.
+/// For other doc types, returns the suffix to append before `.md`.
+/// Returns `None` for unknown statuses.
 pub fn status_suffix(doc_type: DocType, status: &str) -> Option<&'static str> {
     match (doc_type, status.to_lowercase().as_str()) {
         // Spike
@@ -421,12 +426,14 @@ pub fn status_suffix(doc_type: DocType, status: &str) -> Option<&'static str> {
         (DocType::Spike, "complete") => Some("done"),
         (DocType::Spike, "resolved") => Some("resolved"),
 
-        // RFC
-        (DocType::Rfc, "draft") => Some("draft"),
-        (DocType::Rfc, "accepted") => Some("accepted"),
-        (DocType::Rfc, "in-progress") => Some("wip"),
-        (DocType::Rfc, "implemented") => Some("impl"),
-        (DocType::Rfc, "superseded") => Some("super"),
+        // RFC — single-letter prefix codes for new naming convention
+        (DocType::Rfc, "draft") => Some("D"),
+        (DocType::Rfc, "approved") => Some("A"),
+        (DocType::Rfc, "implemented") => Some("I"),
+        (DocType::Rfc, "superseded") => Some("S"),
+        // Migration compat: old status names
+        (DocType::Rfc, "accepted") => Some("A"),
+        (DocType::Rfc, "in-progress") => Some("A"),
 
         // ADR
         (DocType::Adr, "accepted") => Some("accepted"),
@@ -462,13 +469,18 @@ pub fn status_suffix(doc_type: DocType, status: &str) -> Option<&'static str> {
     }
 }
 
-/// Rebuild a filename with a new status suffix (RFC 0031)
+/// Rebuild a filename with a new status (RFC 0031, RFC 0073)
 ///
-/// Handles:
-/// - Regular files: `spikes/2026-01-26T0856Z-slug.md` → `spikes/2026-01-26T0856Z-slug.done.md`
-/// - Dialogue double extension: `dialogues/2026-01-26T0856Z-slug.dialogue.md` → `dialogues/2026-01-26T0856Z-slug.dialogue.done.md`
-/// - Stripping old suffix before adding new one
+/// For RFCs, uses prefix-based naming: `NNNN-{D|A|I|S}-slug.md`
+/// For other doc types, uses suffix-based naming: `slug.{suffix}.md`
+///
+/// Handles both old (suffix-based) and new (prefix-based) RFC formats for migration.
 pub fn rebuild_filename(old_path: &str, doc_type: DocType, new_status: &str) -> String {
+    // RFC uses prefix-based naming convention
+    if doc_type == DocType::Rfc {
+        return rebuild_rfc_filename(old_path, new_status);
+    }
+
     let suffix = status_suffix(doc_type, new_status);
 
     // Detect dialogue double extension
@@ -499,6 +511,58 @@ pub fn rebuild_filename(old_path: &str, doc_type: DocType, new_status: &str) -> 
             None => base,
         }
     }
+}
+
+/// Rebuild an RFC filename with prefix-based status convention (RFC 0073)
+///
+/// New format: `NNNN-{D|A|I|S}-slug.md`
+/// Also handles legacy format: `NNNN-slug.{status}.md` for migration
+///
+/// Examples:
+/// - `rfcs/0001-D-my-rfc.md` + "approved" → `rfcs/0001-A-my-rfc.md`
+/// - `rfcs/0001-my-rfc.draft.md` + "approved" → `rfcs/0001-A-my-rfc.md` (migration)
+/// - `rfcs/0001-my-rfc.accepted.md` + "implemented" → `rfcs/0001-I-my-rfc.md` (migration)
+pub fn rebuild_rfc_filename(old_path: &str, new_status: &str) -> String {
+    let new_prefix = status_suffix(DocType::Rfc, new_status).unwrap_or("D");
+
+    // Split into directory and filename
+    let (dir, filename) = if let Some(pos) = old_path.rfind('/') {
+        (&old_path[..=pos], &old_path[pos + 1..])
+    } else {
+        ("", old_path)
+    };
+
+    // Try to parse as new format: NNNN-{D|A|I|S}-slug.md
+    let rfc_prefix_re = regex::Regex::new(r"^(\d{4})-[DAIS]-(.+)\.md$").unwrap();
+    if let Some(caps) = rfc_prefix_re.captures(filename) {
+        let number = caps.get(1).unwrap().as_str();
+        let slug = caps.get(2).unwrap().as_str();
+        return format!("{}{}-{}-{}.md", dir, number, new_prefix, slug);
+    }
+
+    // Try to parse as legacy format: NNNN-slug.{status}.md
+    // Strip any known suffix first
+    let legacy_suffixes = [
+        ".draft", ".accepted", ".wip", ".impl", ".super", ".approved",
+    ];
+    let mut base_filename = filename.strip_suffix(".md").unwrap_or(filename);
+    for suffix in &legacy_suffixes {
+        if let Some(stripped) = base_filename.strip_suffix(suffix) {
+            base_filename = stripped;
+            break;
+        }
+    }
+
+    // Parse NNNN-slug from what remains
+    let number_re = regex::Regex::new(r"^(\d{4})-(.+)$").unwrap();
+    if let Some(caps) = number_re.captures(base_filename) {
+        let number = caps.get(1).unwrap().as_str();
+        let slug = caps.get(2).unwrap().as_str();
+        return format!("{}{}-{}-{}.md", dir, number, new_prefix, slug);
+    }
+
+    // Fallback: just return as-is with new prefix attempt
+    format!("{}{}.md", dir, base_filename)
 }
 
 /// Strip a known status suffix from a dialogue filename
@@ -4600,7 +4664,7 @@ mod tests {
     fn test_find_document_slug_with_multiple_words() {
         let store = DocumentStore::open_in_memory().unwrap();
 
-        let doc = Document::new(DocType::Rfc, "Plan File Authority", "accepted");
+        let doc = Document::new(DocType::Rfc, "Plan File Authority", "approved");
         let id = store.add_document(&doc).unwrap();
 
         let found = store
@@ -4753,12 +4817,14 @@ mod tests {
         assert_eq!(status_suffix(DocType::Spike, "complete"), Some("done"));
         assert_eq!(status_suffix(DocType::Spike, "resolved"), Some("resolved"));
 
-        // RFC
-        assert_eq!(status_suffix(DocType::Rfc, "draft"), Some("draft"));
-        assert_eq!(status_suffix(DocType::Rfc, "accepted"), Some("accepted"));
-        assert_eq!(status_suffix(DocType::Rfc, "in-progress"), Some("wip"));
-        assert_eq!(status_suffix(DocType::Rfc, "implemented"), Some("impl"));
-        assert_eq!(status_suffix(DocType::Rfc, "superseded"), Some("super"));
+        // RFC — single-letter prefix codes
+        assert_eq!(status_suffix(DocType::Rfc, "draft"), Some("D"));
+        assert_eq!(status_suffix(DocType::Rfc, "approved"), Some("A"));
+        assert_eq!(status_suffix(DocType::Rfc, "implemented"), Some("I"));
+        assert_eq!(status_suffix(DocType::Rfc, "superseded"), Some("S"));
+        // Migration compat
+        assert_eq!(status_suffix(DocType::Rfc, "accepted"), Some("A"));
+        assert_eq!(status_suffix(DocType::Rfc, "in-progress"), Some("A"));
 
         // ADR
         assert_eq!(status_suffix(DocType::Adr, "accepted"), Some("accepted"));
@@ -4826,10 +4892,35 @@ mod tests {
     }
 
     #[test]
-    fn test_rebuild_filename_strip_old() {
-        // Already has a suffix — strip it and add the new one
+    fn test_rebuild_filename_rfc_new_format() {
+        // New prefix-based format
+        let result = rebuild_filename("rfcs/0001-D-my-rfc.md", DocType::Rfc, "approved");
+        assert_eq!(result, "rfcs/0001-A-my-rfc.md");
+
+        let result = rebuild_filename("rfcs/0001-A-my-rfc.md", DocType::Rfc, "implemented");
+        assert_eq!(result, "rfcs/0001-I-my-rfc.md");
+
+        let result = rebuild_filename("rfcs/0001-I-my-rfc.md", DocType::Rfc, "superseded");
+        assert_eq!(result, "rfcs/0001-S-my-rfc.md");
+    }
+
+    #[test]
+    fn test_rebuild_filename_rfc_legacy_migration() {
+        // Legacy suffix-based format → new prefix-based format
+        let result = rebuild_filename("rfcs/0001-my-rfc.draft.md", DocType::Rfc, "approved");
+        assert_eq!(result, "rfcs/0001-A-my-rfc.md");
+
         let result = rebuild_filename("rfcs/0001-my-rfc.accepted.md", DocType::Rfc, "implemented");
-        assert_eq!(result, "rfcs/0001-my-rfc.impl.md");
+        assert_eq!(result, "rfcs/0001-I-my-rfc.md");
+
+        let result = rebuild_filename("rfcs/0001-my-rfc.wip.md", DocType::Rfc, "implemented");
+        assert_eq!(result, "rfcs/0001-I-my-rfc.md");
+    }
+
+    #[test]
+    fn test_rebuild_filename_rfc_noop() {
+        let result = rebuild_filename("rfcs/0001-D-my-rfc.md", DocType::Rfc, "draft");
+        assert_eq!(result, "rfcs/0001-D-my-rfc.md");
     }
 
     #[test]
@@ -4844,13 +4935,6 @@ mod tests {
             result,
             "dialogues/2026-01-26T0856Z-slug.dialogue.recorded.md"
         );
-    }
-
-    #[test]
-    fn test_rebuild_filename_noop() {
-        // draft now gets .draft suffix
-        let result = rebuild_filename("rfcs/0001-my-rfc.draft.md", DocType::Rfc, "draft");
-        assert_eq!(result, "rfcs/0001-my-rfc.draft.md");
     }
 
     #[test]

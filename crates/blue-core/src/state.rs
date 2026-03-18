@@ -96,11 +96,11 @@ impl ProjectState {
         Ok(())
     }
 
-    /// Get RFCs that are in-progress with active worktrees
+    /// Get RFCs that are approved with active worktrees
     pub fn active_items(&self) -> Vec<WorkItem> {
         match self
             .store
-            .list_documents_by_status(DocType::Rfc, "in-progress")
+            .list_documents_by_status(DocType::Rfc, "approved")
         {
             Ok(docs) => docs
                 .into_iter()
@@ -119,11 +119,11 @@ impl ProjectState {
         }
     }
 
-    /// Get RFCs that are accepted and ready to start
+    /// Get RFCs that are approved and ready to start (no worktree yet)
     pub fn ready_items(&self) -> Vec<WorkItem> {
         match self
             .store
-            .list_documents_by_status(DocType::Rfc, "accepted")
+            .list_documents_by_status(DocType::Rfc, "approved")
         {
             Ok(docs) => docs
                 .into_iter()
@@ -141,11 +141,11 @@ impl ProjectState {
         }
     }
 
-    /// Get RFCs that are in-progress but have no worktree (possibly stalled)
+    /// Get RFCs that are approved but have no worktree (possibly stalled)
     pub fn stalled_items(&self) -> Vec<WorkItem> {
         match self
             .store
-            .list_documents_by_status(DocType::Rfc, "in-progress")
+            .list_documents_by_status(DocType::Rfc, "approved")
         {
             Ok(docs) => docs
                 .into_iter()

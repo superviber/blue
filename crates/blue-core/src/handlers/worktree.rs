@@ -152,13 +152,13 @@ pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, Handle
         .find_document(DocType::Rfc, title)
         .map_err(|e| HandlerError::StateLoadFailed(e.to_string()))?;
 
-    // Check RFC is accepted or in-progress
-    if doc.status != "accepted" && doc.status != "in-progress" {
+    // Check RFC is approved (or legacy accepted/in-progress)
+    if doc.status != "approved" && doc.status != "accepted" && doc.status != "in-progress" {
         return Ok(json!({
             "status": "error",
             "message": crate::voice::error(
                 &format!("RFC '{}' is {} - can't create worktree", title, doc.status),
-                "Accept the RFC first with blue_rfc_update_status"
+                "Approve the RFC first with blue_rfc_update_status"
             )
         }));
     }
@@ -218,13 +218,7 @@ pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, Handle
                     };
                     let _ = state.store.add_worktree(&wt);
 
-                    // Update RFC status to in-progress if accepted
-                    if doc.status == "accepted" {
-                        let _ =
-                            state
-                                .store
-                                .update_document_status(DocType::Rfc, title, "in-progress");
-                    }
+                    // Status stays as approved — no in-progress state needed
 
                     // Detect install command and setup script
                     let install_command = detect_install_command(&worktree_path);
@@ -588,8 +582,8 @@ mod tests {
 
         let state = ProjectState::for_test();
 
-        // Create an accepted RFC without a plan
-        let mut doc = Document::new(DocType::Rfc, "test-rfc", "accepted");
+        // Create an approved RFC without a plan
+        let mut doc = Document::new(DocType::Rfc, "test-rfc", "approved");
         doc.number = Some(1);
         state.store.add_document(&doc).unwrap();
 

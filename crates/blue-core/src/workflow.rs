@@ -12,9 +12,7 @@ pub enum RfcStatus {
     /// Initial proposal, still being refined
     Draft,
     /// Approved, ready to implement
-    Accepted,
-    /// Work has started
-    InProgress,
+    Approved,
     /// Work is complete
     Implemented,
     /// Replaced by a newer RFC
@@ -25,8 +23,7 @@ impl RfcStatus {
     pub fn as_str(&self) -> &'static str {
         match self {
             RfcStatus::Draft => "draft",
-            RfcStatus::Accepted => "accepted",
-            RfcStatus::InProgress => "in-progress",
+            RfcStatus::Approved => "approved",
             RfcStatus::Implemented => "implemented",
             RfcStatus::Superseded => "superseded",
         }
@@ -35,10 +32,11 @@ impl RfcStatus {
     pub fn parse(s: &str) -> Result<Self, WorkflowError> {
         match s.to_lowercase().as_str() {
             "draft" => Ok(RfcStatus::Draft),
-            "accepted" => Ok(RfcStatus::Accepted),
-            "in-progress" | "in_progress" | "inprogress" => Ok(RfcStatus::InProgress),
+            "approved" | "accepted" => Ok(RfcStatus::Approved),
             "implemented" => Ok(RfcStatus::Implemented),
             "superseded" => Ok(RfcStatus::Superseded),
+            // Migration compat: in-progress maps to Approved
+            "in-progress" | "in_progress" | "inprogress" => Ok(RfcStatus::Approved),
             _ => Err(WorkflowError::InvalidStatus(s.to_string())),
         }
     }
@@ -48,30 +46,27 @@ impl RfcStatus {
         matches!(
             (self, target),
             // Normal forward flow
-            (RfcStatus::Draft, RfcStatus::Accepted)
-                | (RfcStatus::Accepted, RfcStatus::InProgress)
-                | (RfcStatus::InProgress, RfcStatus::Implemented)
+            (RfcStatus::Draft, RfcStatus::Approved)
+                | (RfcStatus::Approved, RfcStatus::Implemented)
                 // Can supersede from any active state
                 | (RfcStatus::Draft, RfcStatus::Superseded)
-                | (RfcStatus::Accepted, RfcStatus::Superseded)
-                | (RfcStatus::InProgress, RfcStatus::Superseded)
-                // Can go back to draft if needed
-                | (RfcStatus::Accepted, RfcStatus::Draft)
+                | (RfcStatus::Approved, RfcStatus::Superseded)
+                // Can revert back to draft if needed
+                | (RfcStatus::Approved, RfcStatus::Draft)
         )
     }
 
     /// Get allowed transitions from current status
     pub fn allowed_transitions(&self) -> Vec<RfcStatus> {
         match self {
-            RfcStatus::Draft => vec![RfcStatus::Accepted, RfcStatus::Superseded],
-            RfcStatus::Accepted => {
+            RfcStatus::Draft => vec![RfcStatus::Approved, RfcStatus::Superseded],
+            RfcStatus::Approved => {
                 vec![
-                    RfcStatus::InProgress,
+                    RfcStatus::Implemented,
                     RfcStatus::Draft,
                     RfcStatus::Superseded,
                 ]
             }
-            RfcStatus::InProgress => vec![RfcStatus::Implemented, RfcStatus::Superseded],
             RfcStatus::Implemented => vec![],
             RfcStatus::Superseded => vec![],
         }
@@ -185,7 +180,7 @@ impl PrdStatus {
 /// Workflow errors
 #[derive(Debug, Error)]
 pub enum WorkflowError {
-    #[error("'{0}' isn't a valid status. Try: draft, accepted, in-progress, implemented")]
+    #[error("'{0}' isn't a valid status. Try: draft, approved, implemented, superseded")]
     InvalidStatus(String),
 
     #[error(
@@ -207,8 +202,8 @@ pub fn validate_rfc_transition(from: RfcStatus, to: RfcStatus) -> Result<(), Wor
         Ok(())
     } else {
         let hint = match (from, to) {
-            (RfcStatus::Draft, RfcStatus::InProgress) => {
-                "Accept it first, then start work".to_string()
+            (RfcStatus::Draft, RfcStatus::Implemented) => {
+                "Approve it first, then mark implemented".to_string()
             }
             (RfcStatus::Implemented, _) => {
                 "Already implemented. Create a new RFC for changes".to_string()
@@ -235,24 +230,30 @@ mod tests {
 
     #[test]
     fn test_rfc_transitions() {
-        assert!(RfcStatus::Draft.can_transition_to(RfcStatus::Accepted));
-        assert!(RfcStatus::Accepted.can_transition_to(RfcStatus::InProgress));
-        assert!(RfcStatus::InProgress.can_transition_to(RfcStatus::Implemented));
+        assert!(RfcStatus::Draft.can_transition_to(RfcStatus::Approved));
+        assert!(RfcStatus::Approved.can_transition_to(RfcStatus::Implemented));
+        assert!(RfcStatus::Approved.can_transition_to(RfcStatus::Draft));
+        assert!(RfcStatus::Draft.can_transition_to(RfcStatus::Superseded));
+        assert!(RfcStatus::Approved.can_transition_to(RfcStatus::Superseded));
 
-        assert!(!RfcStatus::Draft.can_transition_to(RfcStatus::InProgress));
+        assert!(!RfcStatus::Draft.can_transition_to(RfcStatus::Implemented));
         assert!(!RfcStatus::Implemented.can_transition_to(RfcStatus::Draft));
     }
 
     #[test]
     fn test_parse_status() {
         assert_eq!(RfcStatus::parse("draft").unwrap(), RfcStatus::Draft);
+        assert_eq!(RfcStatus::parse("approved").unwrap(), RfcStatus::Approved);
+        // Backwards compat: "accepted" maps to Approved
+        assert_eq!(RfcStatus::parse("accepted").unwrap(), RfcStatus::Approved);
+        // Backwards compat: "in-progress" maps to Approved
         assert_eq!(
             RfcStatus::parse("in-progress").unwrap(),
-            RfcStatus::InProgress
+            RfcStatus::Approved
         );
         assert_eq!(
             RfcStatus::parse("IN_PROGRESS").unwrap(),
-            RfcStatus::InProgress
+            RfcStatus::Approved
         );
     }
 

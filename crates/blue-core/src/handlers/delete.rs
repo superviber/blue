@@ -147,7 +147,7 @@ pub fn handle_delete(
     // Check status - non-draft requires force
     if doc.status != "draft" && !force {
         let status_msg = match doc.status.as_str() {
-            "accepted" => "This document has been accepted.",
+            "approved" | "accepted" => "This document has been approved.",
             "in-progress" => "This document has active work.",
             "implemented" => "This document is a historical record.",
             _ => "This document is not in draft status.",
