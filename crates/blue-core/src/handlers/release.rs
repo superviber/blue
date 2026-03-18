@@ -29,6 +29,7 @@ impl VersionBump {
     }
 
     /// Parse a bump type from a string ("major", "minor", "patch")
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
             "major" => Some(Self::Major),

@@ -26,17 +26,17 @@ impl CredentialStore {
     /// Resolve credentials from the three-tier hierarchy
     pub fn get_credentials(&self) -> Result<TrackerCredentials, TrackerError> {
         // Tier 1: Environment variables
-        if let Some(creds) = self.from_env() {
+        if let Some(creds) = self.resolve_env() {
             return Ok(creds);
         }
 
         // Tier 2: OS keychain
-        if let Some(creds) = self.from_keychain() {
+        if let Some(creds) = self.resolve_keychain() {
             return Ok(creds);
         }
 
         // Tier 3: TOML file
-        if let Some(creds) = self.from_toml() {
+        if let Some(creds) = self.resolve_toml() {
             return Ok(creds);
         }
 
@@ -99,11 +99,11 @@ impl CredentialStore {
 
     /// Which tier resolved credentials (for diagnostics)
     pub fn resolve_tier(&self) -> Option<&'static str> {
-        if self.from_env().is_some() {
+        if self.resolve_env().is_some() {
             Some("environment")
-        } else if self.from_keychain().is_some() {
+        } else if self.resolve_keychain().is_some() {
             Some("keychain")
-        } else if self.from_toml().is_some() {
+        } else if self.resolve_toml().is_some() {
             Some("toml")
         } else {
             None
@@ -112,14 +112,14 @@ impl CredentialStore {
 
     // --- Tier implementations ---
 
-    fn from_env(&self) -> Option<TrackerCredentials> {
+    fn resolve_env(&self) -> Option<TrackerCredentials> {
         let slug = domain_slug(&self.domain);
         let token = std::env::var(format!("BLUE_JIRA_TOKEN_{}", slug)).ok()?;
         let email = std::env::var(format!("BLUE_JIRA_EMAIL_{}", slug)).ok()?;
         Some(TrackerCredentials { email, token })
     }
 
-    fn from_keychain(&self) -> Option<TrackerCredentials> {
+    fn resolve_keychain(&self) -> Option<TrackerCredentials> {
         // Try to find any entry for this domain
         let entry = keyring::Entry::new(KEYRING_SERVICE, &self.domain).ok()?;
         let password = entry.get_password().ok()?;
@@ -132,7 +132,7 @@ impl CredentialStore {
         Some(TrackerCredentials { email, token })
     }
 
-    fn from_toml(&self) -> Option<TrackerCredentials> {
+    fn resolve_toml(&self) -> Option<TrackerCredentials> {
         let path = toml_path();
         let file = load_toml_file(&path);
         let entry = file.credentials.iter().find(|c| c.domain == self.domain)?;
@@ -146,7 +146,7 @@ impl CredentialStore {
 
 /// Convert domain to env var slug: superviber.atlassian.net → SUPERVIBER_ATLASSIAN_NET
 fn domain_slug(domain: &str) -> String {
-    domain.replace('.', "_").replace('-', "_").to_uppercase()
+    domain.replace(['.', '-'], "_").to_uppercase()
 }
 
 fn toml_path() -> PathBuf {
@@ -219,13 +219,13 @@ mod tests {
         let store = CredentialStore::new("test-env.example.com");
 
         // No env vars set — should return None
-        assert!(store.from_env().is_none());
+        assert!(store.resolve_env().is_none());
 
         // Set env vars
         std::env::set_var("BLUE_JIRA_TOKEN_TEST_ENV_EXAMPLE_COM", "test-token");
         std::env::set_var("BLUE_JIRA_EMAIL_TEST_ENV_EXAMPLE_COM", "test@example.com");
 
-        let creds = store.from_env().expect("should resolve from env");
+        let creds = store.resolve_env().expect("should resolve from env");
         assert_eq!(creds.email, "test@example.com");
         assert_eq!(creds.token, "test-token");
 

@@ -335,6 +335,7 @@ impl DialogueStatus {
         }
     }
 
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Self {
         match s {
             "converging" => Self::Converging,
@@ -362,6 +363,7 @@ impl ExpertTier {
         }
     }
 
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Self {
         match s {
             "Adjacent" | "adjacent" => Self::Adjacent,
@@ -389,6 +391,7 @@ impl ExpertSource {
         }
     }
 
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Self {
         match s {
             "created" => Self::Created,
@@ -418,6 +421,7 @@ impl PerspectiveStatus {
         }
     }
 
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Self {
         match s {
             "refined" => Self::Refined,
@@ -448,6 +452,7 @@ impl TensionStatus {
         }
     }
 
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Self {
         match s {
             "addressed" => Self::Addressed,
@@ -478,6 +483,7 @@ impl RecommendationStatus {
         }
     }
 
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Self {
         match s {
             "amended" => Self::Amended,
@@ -508,6 +514,7 @@ impl EvidenceStatus {
         }
     }
 
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Self {
         match s {
             "challenged" => Self::Challenged,
@@ -540,6 +547,7 @@ impl ClaimStatus {
         }
     }
 
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Self {
         match s {
             "supported" => Self::Supported,
@@ -577,6 +585,7 @@ impl EntityType {
         }
     }
 
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
             "P" => Some(Self::Perspective),
@@ -617,6 +626,7 @@ impl RefType {
         }
     }
 
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
             "support" => Some(Self::Support),
@@ -652,6 +662,7 @@ impl VerdictType {
         }
     }
 
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Self {
         match s {
             "final" => Self::Final,
@@ -686,6 +697,7 @@ impl MoveType {
         }
     }
 
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
             "defend" => Some(Self::Defend),
@@ -991,6 +1003,7 @@ pub fn get_dialogue(conn: &Connection, dialogue_id: &str) -> Result<Dialogue, Al
 }
 
 /// Register an expert in a dialogue
+#[allow(clippy::too_many_arguments)]
 pub fn register_expert(
     conn: &Connection,
     dialogue_id: &str,
@@ -1421,6 +1434,7 @@ pub fn register_tension(
 }
 
 /// Register a recommendation
+#[allow(clippy::too_many_arguments)]
 pub fn register_recommendation(
     conn: &Connection,
     dialogue_id: &str,

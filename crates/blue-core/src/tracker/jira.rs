@@ -337,7 +337,7 @@ impl IssueTracker for JiraCloudTracker {
         Ok(TrackerProject {
             key: created.key,
             name: created.name,
-            project_type: created.project_type_key.unwrap_or_else(|| opts.project_type),
+            project_type: created.project_type_key.unwrap_or(opts.project_type),
         })
     }
 

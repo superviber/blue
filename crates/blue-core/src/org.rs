@@ -252,7 +252,7 @@ pub fn parse_remote_url(url: &str) -> Option<(String, String)> {
         let path = url
             .split("://")
             .nth(1)
-            .and_then(|s| s.splitn(2, '/').nth(1))?;
+            .and_then(|s| s.split_once('/').map(|x| x.1))?;
         let path = path.trim_end_matches(".git").trim_end_matches('/');
         let parts: Vec<&str> = path.split('/').collect();
         if parts.len() == 2 {

@@ -1346,9 +1346,7 @@ fn parse_rfc_status_from_filename(name: &str) -> Option<String> {
     // Legacy format: NNNN-slug.{status}.md
     if name.contains(".implemented.") {
         return Some("implemented".to_string());
-    } else if name.contains(".accepted.") {
-        return Some("approved".to_string());
-    } else if name.contains(".impl.") || name.contains(".wip.") {
+    } else if name.contains(".accepted.") || name.contains(".impl.") || name.contains(".wip.") {
         return Some("approved".to_string());
     } else if name.contains(".draft.") {
         return Some("draft".to_string());

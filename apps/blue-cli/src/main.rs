@@ -2317,7 +2317,6 @@ async fn tokio_main() -> Result<()> {
             let domain = domain.clone();
             let project = project.clone();
             let drift_policy = drift_policy.clone();
-            let dry_run = dry_run;
             tokio::task::spawn_blocking(move || {
                 handle_sync_command(&domain, &project, dry_run, &drift_policy)
             })
@@ -4688,12 +4687,12 @@ async fn handle_dialogue_command(command: DialogueCommands) -> Result<()> {
 
 /// Handle ADR subcommands
 async fn handle_adr_command(command: AdrCommands) -> Result<()> {
-    let mut state = get_project_state()?;
+    let state = get_project_state()?;
 
     match command {
         AdrCommands::Create { title } => {
             let args = json!({ "title": title });
-            match blue_core::handlers::adr::handle_create(&mut state, &args) {
+            match blue_core::handlers::adr::handle_create(&state, &args) {
                 Ok(result) => {
                     if let Some(msg) = result.get("message").and_then(|v| v.as_str()) {
                         println!("{}", msg);
@@ -4757,12 +4756,12 @@ async fn handle_adr_command(command: AdrCommands) -> Result<()> {
 
 /// Handle spike subcommands
 async fn handle_spike_command(command: SpikeCommands) -> Result<()> {
-    let mut state = get_project_state()?;
+    let state = get_project_state()?;
 
     match command {
         SpikeCommands::Create { title, budget } => {
             let args = json!({ "title": title, "budget_hours": budget });
-            match blue_core::handlers::spike::handle_create(&mut state, &args) {
+            match blue_core::handlers::spike::handle_create(&state, &args) {
                 Ok(result) => {
                     if let Some(msg) = result.get("message").and_then(|v| v.as_str()) {
                         println!("{}", msg);
@@ -4798,7 +4797,7 @@ async fn handle_spike_command(command: SpikeCommands) -> Result<()> {
         }
         SpikeCommands::Complete { title, outcome } => {
             let args = json!({ "title": title, "outcome": outcome });
-            match blue_core::handlers::spike::handle_complete(&mut state, &args) {
+            match blue_core::handlers::spike::handle_complete(&state, &args) {
                 Ok(result) => {
                     if let Some(msg) = result.get("message").and_then(|v| v.as_str()) {
                         println!("{}", msg);
@@ -5443,7 +5442,7 @@ fn handle_jira_command_blocking(command: JiraCommands) -> Result<()> {
                 let entry =
                     entry.map_err(|e| anyhow::anyhow!("Failed to read entry: {}", e))?;
                 let path = entry.path();
-                if path.extension().map_or(true, |ext| ext != "md") {
+                if path.extension().is_none_or(|ext| ext != "md") {
                     continue;
                 }
 

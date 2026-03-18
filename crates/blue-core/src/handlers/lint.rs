@@ -522,10 +522,8 @@ fn run_mermaid_checks(docs_path: &Path, fix: bool) -> LintResult {
             if fix && file_issues.iter().any(|i| i.auto_fixable) {
                 // Apply auto-fixes (only theme declaration)
                 let fixed_content = apply_mermaid_fixes(&content);
-                if fixed_content != content {
-                    if fs::write(file_path, &fixed_content).is_ok() {
-                        fixed_count += 1;
-                    }
+                if fixed_content != content && fs::write(file_path, &fixed_content).is_ok() {
+                    fixed_count += 1;
                 }
                 // Re-check for remaining issues (non-fixable ones)
                 let remaining = check_mermaid_blocks(&fixed_content, file_path);

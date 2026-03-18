@@ -66,21 +66,16 @@ pub struct SyncConfig {
 }
 
 /// What to do when Jira state drifts from local
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum DriftPolicy {
     /// Overwrite Jira with local state
     Overwrite,
     /// Warn but take no action
+    #[default]
     Warn,
     /// Block sync entirely when drift detected
     Block,
-}
-
-impl Default for DriftPolicy {
-    fn default() -> Self {
-        DriftPolicy::Warn
-    }
 }
 
 /// Full sync report covering all RFCs
@@ -340,7 +335,7 @@ fn discover_rfc_files(docs_path: &Path) -> Result<Vec<PathBuf>, TrackerError> {
             TrackerError::Http(format!("Failed to read directory entry: {}", e))
         })?;
         let path = entry.path();
-        if path.extension().map_or(false, |ext| ext == "md") {
+        if path.extension().is_some_and(|ext| ext == "md") {
             files.push(path);
         }
     }

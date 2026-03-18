@@ -177,7 +177,7 @@ pub fn discover_pm_items(pm_repo_root: &Path) -> Result<Vec<PmItem>, TrackerErro
 
         for file_entry in files.flatten() {
             let path = file_entry.path();
-            if path.extension().map_or(true, |ext| ext != "md") {
+            if path.extension().is_none_or(|ext| ext != "md") {
                 continue;
             }
 

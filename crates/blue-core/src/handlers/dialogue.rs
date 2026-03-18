@@ -907,7 +907,7 @@ fn weighted_sample(experts: &[PoolExpert], n: usize) -> Vec<PoolExpert> {
     }
 
     let mut rng = rand::thread_rng();
-    let mut remaining: Vec<_> = experts.iter().cloned().collect();
+    let mut remaining: Vec<_> = experts.to_vec();
     let mut selected = Vec::with_capacity(n);
 
     for _ in 0..n {
@@ -1607,11 +1607,11 @@ pub fn handle_round_prompt(args: &Value) -> Result<Value, HandlerError> {
     let output_dir = args
         .get("output_dir")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| HandlerError::InvalidParams)?;
+        .ok_or(HandlerError::InvalidParams)?;
     let agent_name = args
         .get("agent_name")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| HandlerError::InvalidParams)?;
+        .ok_or(HandlerError::InvalidParams)?;
     if !is_valid_pastry_name(agent_name) {
         return Err(HandlerError::CommandFailed(format!(
             "Agent name '{}' is not a valid pastry name. Use names from the suggested panel \
@@ -1624,15 +1624,15 @@ pub fn handle_round_prompt(args: &Value) -> Result<Value, HandlerError> {
     let agent_emoji = args
         .get("agent_emoji")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| HandlerError::InvalidParams)?;
+        .ok_or(HandlerError::InvalidParams)?;
     let agent_role = args
         .get("agent_role")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| HandlerError::InvalidParams)?;
+        .ok_or(HandlerError::InvalidParams)?;
     let round = args
         .get("round")
         .and_then(|v| v.as_u64())
-        .ok_or_else(|| HandlerError::InvalidParams)? as usize;
+        .ok_or(HandlerError::InvalidParams)? as usize;
 
     // Optional params
     let sources: Vec<String> = args
@@ -1855,12 +1855,12 @@ pub fn handle_sample_panel(args: &Value) -> Result<Value, HandlerError> {
     let dialogue_title = args
         .get("dialogue_title")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| HandlerError::InvalidParams)?;
+        .ok_or(HandlerError::InvalidParams)?;
 
     let round = args
         .get("round")
         .and_then(|v| v.as_u64())
-        .ok_or_else(|| HandlerError::InvalidParams)? as usize;
+        .ok_or(HandlerError::InvalidParams)? as usize;
 
     let panel_size = args
         .get("panel_size")
@@ -1976,12 +1976,12 @@ pub fn handle_evolve_panel(args: &Value) -> Result<Value, HandlerError> {
     let output_dir = args
         .get("output_dir")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| HandlerError::InvalidParams)?;
+        .ok_or(HandlerError::InvalidParams)?;
 
     let round = args
         .get("round")
         .and_then(|v| v.as_u64())
-        .ok_or_else(|| HandlerError::InvalidParams)? as usize;
+        .ok_or(HandlerError::InvalidParams)? as usize;
 
     // Parse panel specification
     let panel_spec: Vec<PanelExpertSpec> = args
