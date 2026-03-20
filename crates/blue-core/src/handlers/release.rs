@@ -308,7 +308,7 @@ pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, Handle
             ],
             "message": crate::voice::success(
                 &format!("Release v{} prepared ({} bump)", version, suggested_bump.as_str()),
-                Some(&format!("Rebased onto main, pushed develop. Create PR and tag after merge."))
+                Some("Rebased onto main, pushed develop. Create PR and tag after merge.")
             )
         }));
     }

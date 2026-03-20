@@ -1201,12 +1201,8 @@ pub fn handle_validate_realm(cwd: Option<&Path>, strict: bool) -> Result<Value, 
     for (rfc_id, deps) in &realm_deps.rfc {
         for dep in &deps.depends_on {
             let status = check_dependency(cwd, dep);
-            if status.error.is_some() {
-                errors.push(format!(
-                    "RFC {}: {}",
-                    rfc_id,
-                    status.error.as_ref().unwrap()
-                ));
+            if let Some(err) = &status.error {
+                errors.push(format!("RFC {}: {}", rfc_id, err));
             }
             all_deps.push(status);
         }
