@@ -216,6 +216,16 @@ pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, Handle
                     };
                     let _ = state.store.add_worktree(&wt);
 
+                    // RFC 0073: Set git config for rebase workflow in worktree
+                    let _ = std::process::Command::new("git")
+                        .args(["config", "pull.rebase", "true"])
+                        .current_dir(&worktree_path)
+                        .output();
+                    let _ = std::process::Command::new("git")
+                        .args(["config", "rebase.autoStash", "true"])
+                        .current_dir(&worktree_path)
+                        .output();
+
                     // Status stays as approved — no in-progress state needed
 
                     // Detect install command and setup script

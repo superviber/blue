@@ -892,6 +892,14 @@ enum RfcCommands {
         /// RFC title
         title: String,
     },
+    /// Migrate RFC filenames to new naming convention (RFC 0073)
+    ///
+    /// Renames NNNN-slug.{status}.md → NNNN-{D|A|I|S}-slug.md
+    Migrate {
+        /// Dry run (show renames without executing)
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1455,6 +1463,10 @@ enum ReleaseCommands {
     Create {
         /// Version (auto-detected if omitted)
         version: Option<String>,
+
+        /// Execute release commands (fetch, rebase, push)
+        #[arg(long)]
+        execute: bool,
     },
 }
 
@@ -1758,12 +1770,25 @@ async fn tokio_main() -> Result<()> {
             let _state = blue_core::ProjectState::load(home.clone(), &project)
                 .map_err(|e| anyhow::anyhow!("Failed to create database: {}", e))?;
 
+            // RFC 0073: Set git config for rebase workflow
+            if home.root.join(".git").exists() {
+                let _ = std::process::Command::new("git")
+                    .args(["config", "pull.rebase", "true"])
+                    .current_dir(&home.root)
+                    .output();
+                let _ = std::process::Command::new("git")
+                    .args(["config", "rebase.autoStash", "true"])
+                    .current_dir(&home.root)
+                    .output();
+            }
+
             println!("{}", blue_core::voice::welcome());
             println!();
             println!("Initialized Blue:");
             println!("  Root:     {}", home.root.display());
             println!("  Database: {}", home.db_path.display());
             println!("  Docs:     {}", home.docs_path.display());
+            println!("  Git:      pull.rebase=true, rebase.autoStash=true");
 
             // RFC 0067: Detect org from git remote and auto-register
             if let Some((org_name, repo_name, provider)) =
@@ -2059,8 +2084,8 @@ async fn tokio_main() -> Result<()> {
         Some(Commands::Release { command }) => {
             let state = get_project_state()?;
             match command {
-                ReleaseCommands::Create { version } => {
-                    let args = json!({ "version": version });
+                ReleaseCommands::Create { version, execute } => {
+                    let args = json!({ "version": version, "execute": execute });
                     match blue_core::handlers::release::handle_create(&state, &args) {
                         Ok(result) => println!("{}", serde_json::to_string_pretty(&result)?),
                         Err(e) => { eprintln!("Error: {}", e); std::process::exit(1); }
@@ -5113,6 +5138,123 @@ async fn handle_rfc_command(command: RfcCommands) -> Result<()> {
                     eprintln!("Error: {}", e);
                     std::process::exit(1);
                 }
+            }
+        }
+        RfcCommands::Migrate { dry_run } => {
+            let rfcs_dir = state.home.docs_path.join("rfcs");
+            if !rfcs_dir.exists() {
+                println!("No rfcs directory found.");
+                return Ok(());
+            }
+
+            // Status suffix → new prefix mapping
+            let suffix_map: &[(&str, &str)] = &[
+                (".draft.md", "D"),
+                (".accepted.md", "A"),
+                (".approved.md", "A"),
+                (".wip.md", "A"),
+                (".impl.md", "I"),
+                (".super.md", "S"),
+                (".superseded.md", "S"),
+            ];
+
+            let mut renames: Vec<(String, String)> = Vec::new();
+            let mut skipped: Vec<String> = Vec::new();
+
+            let entries = std::fs::read_dir(&rfcs_dir)?;
+            for entry in entries.flatten() {
+                let name = entry.file_name();
+                let name_str = name.to_string_lossy().to_string();
+
+                // Skip .plan.md files
+                if name_str.ends_with(".plan.md") {
+                    skipped.push(format!("{} (plan file)", name_str));
+                    continue;
+                }
+
+                // Skip files already in new format (NNNN-{D|A|I|S}-slug.md)
+                if name_str.len() > 7
+                    && name_str.chars().take(4).all(|c| c.is_ascii_digit())
+                    && name_str.chars().nth(4) == Some('-')
+                    && matches!(name_str.chars().nth(5), Some('D' | 'A' | 'I' | 'S'))
+                    && name_str.chars().nth(6) == Some('-')
+                {
+                    continue;
+                }
+
+                // Try to match old format: NNNN-slug.{status}.md
+                let mut matched = false;
+                for (suffix, prefix) in suffix_map {
+                    if name_str.ends_with(suffix) {
+                        let base = &name_str[..name_str.len() - suffix.len()];
+                        // Parse NNNN-slug
+                        if base.len() > 5
+                            && base.chars().take(4).all(|c| c.is_ascii_digit())
+                            && base.chars().nth(4) == Some('-')
+                        {
+                            let number = &base[..4];
+                            let slug = &base[5..];
+                            let new_name = format!("{}-{}-{}.md", number, prefix, slug);
+                            renames.push((name_str.clone(), new_name));
+                            matched = true;
+                        }
+                        break;
+                    }
+                }
+
+                // Handle bare .md files without status suffix (not already new format)
+                if !matched && name_str.ends_with(".md") {
+                    let base = name_str.strip_suffix(".md").unwrap();
+                    if base.len() > 5
+                        && base.chars().take(4).all(|c| c.is_ascii_digit())
+                        && base.chars().nth(4) == Some('-')
+                    {
+                        let number = &base[..4];
+                        let slug = &base[5..];
+                        let new_name = format!("{}-D-{}.md", number, slug);
+                        renames.push((name_str.clone(), new_name));
+                    }
+                }
+            }
+
+            if renames.is_empty() {
+                println!("All RFC files already use the new naming convention.");
+                return Ok(());
+            }
+
+            renames.sort_by(|a, b| a.0.cmp(&b.0));
+
+            println!("RFC naming migration (RFC 0073):");
+            println!();
+            for (old, new) in &renames {
+                println!("  {} → {}", old, new);
+            }
+            if !skipped.is_empty() {
+                println!();
+                println!("Skipped:");
+                for s in &skipped {
+                    println!("  {}", s);
+                }
+            }
+            println!();
+
+            if dry_run {
+                println!("{} files would be renamed. Run without --dry-run to apply.", renames.len());
+            } else {
+                let mut success = 0;
+                let mut errors = 0;
+                for (old, new) in &renames {
+                    let old_path = rfcs_dir.join(old);
+                    let new_path = rfcs_dir.join(new);
+                    match std::fs::rename(&old_path, &new_path) {
+                        Ok(()) => success += 1,
+                        Err(e) => {
+                            eprintln!("  Error renaming {}: {}", old, e);
+                            errors += 1;
+                        }
+                    }
+                }
+                println!("{} files renamed, {} errors.", success, errors);
             }
         }
     }

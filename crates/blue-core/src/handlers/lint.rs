@@ -480,6 +480,42 @@ fn run_rfc_checks(path: &Path, fix: bool, check_type: &str) -> Vec<LintResult> {
         }
     }
 
+    // RFC 0073: Naming convention check
+    if (check_type == "all" || check_type == "naming") && rfcs_path.exists() {
+        let naming_re = regex::Regex::new(r"^\d{4}-[DAIS]-.+\.md$").unwrap();
+        let legacy_re = regex::Regex::new(r"^\d{4}-.+\.(draft|accepted|approved|wip|impl|super|superseded)\.md$").unwrap();
+        let mut legacy_count = 0;
+
+        if let Ok(entries) = fs::read_dir(&rfcs_path) {
+            for entry in entries.flatten() {
+                let name = entry.file_name();
+                let name_str = name.to_string_lossy();
+                if !name_str.ends_with(".md") || name_str.ends_with(".plan.md") {
+                    continue;
+                }
+                if !naming_re.is_match(&name_str) && legacy_re.is_match(&name_str) {
+                    legacy_count += 1;
+                    if legacy_count <= 5 {
+                        tracing::info!("Legacy RFC naming: {}", name_str);
+                    }
+                }
+            }
+        }
+
+        results.push(LintResult {
+            project_type: ProjectType::RfcDocs,
+            name: "naming",
+            tool: "blue_lint",
+            passed: legacy_count == 0,
+            issue_count: legacy_count,
+            fix_command: "blue rfc migrate",
+        });
+
+        if legacy_count > 5 {
+            tracing::info!("... and {} more legacy-named RFCs", legacy_count - 5);
+        }
+    }
+
     // RFC 0043: Mermaid diagram checks
     if (check_type == "all" || check_type == "mermaid") && docs_path.exists() {
         let mermaid_results = run_mermaid_checks(&docs_path, fix);

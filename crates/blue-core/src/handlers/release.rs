@@ -98,6 +98,7 @@ pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, Handle
         .get("bump")
         .and_then(|v| v.as_str())
         .and_then(VersionBump::from_str);
+    let execute = args.get("execute").and_then(|v| v.as_bool()).unwrap_or(false);
 
     let repo_dir = &state.home.root;
 
@@ -225,6 +226,93 @@ pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, Handle
         format!("git push origin v{}", version),
     ];
 
+    // RFC 0073: Execute release commands if requested
+    if execute {
+        let mut executed: Vec<String> = Vec::new();
+
+        // Step 1: git fetch origin
+        let fetch = Command::new("git")
+            .current_dir(repo_dir)
+            .args(["fetch", "origin"])
+            .output();
+        match fetch {
+            Ok(o) if o.status.success() => executed.push("git fetch origin".into()),
+            Ok(o) => {
+                return Ok(json!({
+                    "status": "error",
+                    "message": format!("git fetch failed: {}", String::from_utf8_lossy(&o.stderr)),
+                    "executed": executed
+                }));
+            }
+            Err(e) => {
+                return Ok(json!({
+                    "status": "error",
+                    "message": format!("git fetch failed: {}", e),
+                    "executed": executed
+                }));
+            }
+        }
+
+        // Step 2: git rebase origin/main
+        let rebase = Command::new("git")
+            .current_dir(repo_dir)
+            .args(["rebase", "origin/main"])
+            .output();
+        match rebase {
+            Ok(o) if o.status.success() => executed.push("git rebase origin/main".into()),
+            Ok(o) => {
+                // Abort the rebase on failure
+                let _ = Command::new("git")
+                    .current_dir(repo_dir)
+                    .args(["rebase", "--abort"])
+                    .output();
+                return Ok(json!({
+                    "status": "error",
+                    "message": format!("Rebase failed (aborted): {}", String::from_utf8_lossy(&o.stderr)),
+                    "executed": executed
+                }));
+            }
+            Err(e) => {
+                return Ok(json!({
+                    "status": "error",
+                    "message": format!("git rebase failed: {}", e),
+                    "executed": executed
+                }));
+            }
+        }
+
+        // Step 3: Push develop (so PR can be created)
+        let push = Command::new("git")
+            .current_dir(repo_dir)
+            .args(["push", "origin", "develop"])
+            .output();
+        match push {
+            Ok(o) if o.status.success() => executed.push("git push origin develop".into()),
+            _ => {
+                // Non-fatal: PR creation might still work
+            }
+        }
+
+        return Ok(json!({
+            "status": "success",
+            "current_version": current_version,
+            "version": version,
+            "suggested_bump": suggested_bump.as_str(),
+            "rfcs_included": implemented.iter().map(|r| &r.title).collect::<Vec<_>>(),
+            "changelog_entries": changelog_entries,
+            "pr_body": pr_body,
+            "executed": executed,
+            "remaining_commands": [
+                format!("gh pr create --base main --head develop --title \"Release v{}\" --body <pr_body>", version),
+                format!("# After PR merge: git tag v{} && git push origin v{}", version, version)
+            ],
+            "message": crate::voice::success(
+                &format!("Release v{} prepared ({} bump)", version, suggested_bump.as_str()),
+                Some(&format!("Rebased onto main, pushed develop. Create PR and tag after merge."))
+            )
+        }));
+    }
+
     let mut result = json!({
         "status": "success",
         "current_version": current_version,
@@ -236,7 +324,7 @@ pub fn handle_create(state: &ProjectState, args: &Value) -> Result<Value, Handle
         "commands": commands,
         "message": crate::voice::success(
             &format!("Ready to release v{} ({} bump)", version, suggested_bump.as_str()),
-            Some(&format!("{} RFCs included. Run the commands in order to complete the release.", implemented.len()))
+            Some(&format!("{} RFCs included. Run with --execute to prepare, or run commands manually.", implemented.len()))
         )
     });
 
