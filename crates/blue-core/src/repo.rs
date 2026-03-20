@@ -34,6 +34,10 @@ pub struct BlueHome {
     pub project_name: Option<String>,
     /// Whether this was migrated from old structure
     pub migrated: bool,
+    /// Org root directory (if detected via org.yaml)
+    pub org_root: Option<PathBuf>,
+    /// Parsed org manifest (if in an org context)
+    pub org_manifest: Option<crate::org::OrgManifest>,
 }
 
 impl BlueHome {
@@ -46,6 +50,8 @@ impl BlueHome {
             worktrees_path: blue_dir.join("worktrees"),
             project_name: extract_project_name(&root),
             migrated: false,
+            org_root: None,
+            org_manifest: None,
             blue_dir,
             root,
         }
@@ -57,6 +63,23 @@ impl BlueHome {
         std::fs::create_dir_all(&self.docs_path)?;
         std::fs::create_dir_all(&self.worktrees_path)?;
         Ok(())
+    }
+
+    /// Whether this is inside an org (org.yaml found in ancestor)
+    pub fn is_in_org(&self) -> bool {
+        self.org_root.is_some()
+    }
+
+    /// Whether this IS the org root
+    pub fn is_org_root(&self) -> bool {
+        self.org_root.as_ref() == Some(&self.root)
+    }
+
+    /// Resolve the PM repo path (if in org context)
+    pub fn pm_repo_path(&self) -> Option<PathBuf> {
+        self.org_root.as_ref().and_then(|root| {
+            self.org_manifest.as_ref().map(|m| m.pm_repo_path(root))
+        })
     }
 
     // Legacy compatibility methods - deprecated, will be removed
@@ -147,7 +170,14 @@ pub fn detect_blue(from: &Path) -> Result<BlueHome, RepoError> {
         }
 
         debug!("Found Blue's home at {:?}", blue_dir);
-        return Ok(BlueHome::new(root));
+        let mut home = BlueHome::new(root);
+        // Check for org context (RFC 0074)
+        let (org_root, org_manifest) = crate::org::OrgManifest::find_in_ancestors(&home.root)
+            .map(|(r, m)| (Some(r), Some(m)))
+            .unwrap_or((None, None));
+        home.org_root = org_root;
+        home.org_manifest = org_manifest;
+        return Ok(home);
     }
 
     // Check for legacy .repos/.data/.worktrees at root level
@@ -160,8 +190,14 @@ pub fn detect_blue(from: &Path) -> Result<BlueHome, RepoError> {
 
     // Auto-create .blue/ directory (no `blue init` required per RFC 0003)
     debug!("Creating new Blue home at {:?}", blue_dir);
-    let home = BlueHome::new(root);
+    let mut home = BlueHome::new(root);
     home.ensure_dirs().map_err(RepoError::Io)?;
+    // Check for org context (RFC 0074)
+    let (org_root, org_manifest) = crate::org::OrgManifest::find_in_ancestors(&home.root)
+        .map(|(r, m)| (Some(r), Some(m)))
+        .unwrap_or((None, None));
+    home.org_root = org_root;
+    home.org_manifest = org_manifest;
     Ok(home)
 }
 

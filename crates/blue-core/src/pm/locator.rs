@@ -43,6 +43,52 @@ pub enum LocatorError {
     Org(String),
 }
 
+/// Locate PM repo using org.yaml (RFC 0074).
+/// Falls back to the existing sibling-scanning approach if no org.yaml found.
+pub fn locate_pm_repo_from_org(code_repo_path: &Path) -> Result<PmRepoLocation, LocatorError> {
+    // Try org.yaml first
+    if let Some((org_root, manifest)) = crate::org::OrgManifest::find_in_ancestors(code_repo_path) {
+        let pm_path = manifest.pm_repo_path(&org_root);
+        let domain_yaml = pm_path.join("domain.yaml");
+        if domain_yaml.exists() {
+            let domain = PmDomain::load(&domain_yaml)?;
+
+            // Detect current repo name
+            let current_repo_name = crate::org::detect_org_from_repo(code_repo_path)
+                .map(|(_, name, _)| name)
+                .unwrap_or_else(|| {
+                    code_repo_path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("unknown")
+                        .to_string()
+                });
+
+            let current_repo_key = domain
+                .find_repo(&current_repo_name)
+                .and_then(|r| r.key.clone());
+
+            let available_areas: Vec<String> = domain
+                .areas_for_repo(&current_repo_name)
+                .iter()
+                .map(|a| a.key.clone())
+                .collect();
+
+            return Ok(PmRepoLocation {
+                pm_repo_path: pm_path,
+                domain_yaml_path: domain_yaml,
+                domain,
+                current_repo_name,
+                current_repo_key,
+                available_areas,
+            });
+        }
+    }
+
+    // Fall back to existing approach
+    locate_pm_repo(code_repo_path)
+}
+
 /// Locate the PM repo from a code repo.
 ///
 /// Scans sibling repos in the same org directory for a `domain.yaml` at root.

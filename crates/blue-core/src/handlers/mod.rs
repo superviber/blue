@@ -14,6 +14,7 @@ pub mod env;
 pub mod guide;
 pub mod index;
 pub mod lint;
+pub mod org_ops;
 pub mod playwright;
 pub mod postmortem;
 pub mod pr;

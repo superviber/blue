@@ -42,6 +42,8 @@ impl ProjectState {
                 worktrees_path: blue_dir.join("worktrees"),
                 project_name: Some("test".to_string()),
                 migrated: false,
+                org_root: None,
+                org_manifest: None,
             },
             store,
             worktrees: Vec::new(),

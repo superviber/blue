@@ -407,6 +407,59 @@ pub fn config_path() -> PathBuf {
         .join("config.toml")
 }
 
+/// Org-level manifest (RFC 0074)
+///
+/// Lives at the org root (e.g., ~/code/the-move-social/org.yaml).
+/// Points to the PM repo which holds domain.yaml, epics, sprints, etc.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OrgManifest {
+    /// Org name (e.g., "the-move-social")
+    pub org: String,
+    /// Relative path to PM repo from org root (e.g., "project-management")
+    pub pm_repo: String,
+}
+
+impl OrgManifest {
+    /// Load from a YAML file
+    pub fn load(path: &Path) -> Result<Self, OrgError> {
+        let content = std::fs::read_to_string(path)
+            .map_err(|e| OrgError::ReadConfig(format!("{}: {}", path.display(), e)))?;
+        serde_yaml::from_str(&content)
+            .map_err(|e| OrgError::ReadConfig(format!("parse {}: {}", path.display(), e)))
+    }
+
+    /// Save to a YAML file
+    pub fn save(&self, path: &Path) -> Result<(), OrgError> {
+        let content = serde_yaml::to_string(self)
+            .map_err(|e| OrgError::WriteConfig(format!("serialize: {}", e)))?;
+        std::fs::write(path, &content)
+            .map_err(|e| OrgError::WriteConfig(format!("write {}: {}", path.display(), e)))?;
+        Ok(())
+    }
+
+    /// Walk up from `from` looking for org.yaml. Returns (org_root, manifest).
+    pub fn find_in_ancestors(from: &Path) -> Option<(PathBuf, Self)> {
+        let mut current = from.to_path_buf();
+        loop {
+            let candidate = current.join("org.yaml");
+            if candidate.exists() {
+                if let Ok(manifest) = Self::load(&candidate) {
+                    return Some((current, manifest));
+                }
+            }
+            if !current.pop() {
+                break;
+            }
+        }
+        None
+    }
+
+    /// Resolve the PM repo path from the org root
+    pub fn pm_repo_path(&self, org_root: &Path) -> PathBuf {
+        org_root.join(&self.pm_repo)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -559,5 +612,55 @@ mod tests {
 
         let repos = config.scan_org("superviber");
         assert_eq!(repos, vec!["blue", "coherence"]);
+    }
+
+    #[test]
+    fn test_org_manifest_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("org.yaml");
+
+        let manifest = OrgManifest {
+            org: "the-move-social".to_string(),
+            pm_repo: "project-management".to_string(),
+        };
+
+        manifest.save(&path).unwrap();
+        let loaded = OrgManifest::load(&path).unwrap();
+        assert_eq!(loaded.org, "the-move-social");
+        assert_eq!(loaded.pm_repo, "project-management");
+    }
+
+    #[test]
+    fn test_org_manifest_find_in_ancestors() {
+        let dir = tempfile::tempdir().unwrap();
+        let org_root = dir.path();
+        let repo_dir = org_root.join("some-repo");
+        let nested = repo_dir.join("src").join("deep");
+        std::fs::create_dir_all(&nested).unwrap();
+
+        let manifest = OrgManifest {
+            org: "test-org".to_string(),
+            pm_repo: "pm".to_string(),
+        };
+        manifest.save(&org_root.join("org.yaml")).unwrap();
+
+        // Should find from nested directory
+        let (found_root, found) = OrgManifest::find_in_ancestors(&nested).unwrap();
+        assert_eq!(found_root, org_root);
+        assert_eq!(found.org, "test-org");
+        assert_eq!(found.pm_repo, "pm");
+    }
+
+    #[test]
+    fn test_org_manifest_pm_repo_path() {
+        let manifest = OrgManifest {
+            org: "the-move-social".to_string(),
+            pm_repo: "project-management".to_string(),
+        };
+        let org_root = Path::new("/home/user/code/the-move-social");
+        assert_eq!(
+            manifest.pm_repo_path(org_root),
+            PathBuf::from("/home/user/code/the-move-social/project-management")
+        );
     }
 }

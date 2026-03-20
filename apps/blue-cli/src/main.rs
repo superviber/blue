@@ -1437,11 +1437,20 @@ enum OrgCommands {
     /// Show status: org → repo mapping
     Status,
 
+    /// List RFCs across all repos in the org
+    Rfcs,
+
     /// Show/set blue home directory
     Home {
         /// New home path (if omitted, shows current)
         path: Option<String>,
     },
+
+    /// Bootstrap org: clone all repos from PM repo's domain.yaml
+    Bootstrap,
+
+    /// Initialize org.yaml at the org root (interactive)
+    Init,
 
     /// Migrate repos from flat layout to org-mapped directories
     Migrate {
@@ -1453,6 +1462,19 @@ enum OrgCommands {
         #[arg(long)]
         execute: bool,
     },
+
+    /// Link an RFC to PM/Jira
+    Link {
+        /// Repo containing the RFC
+        #[arg(long)]
+        repo: String,
+        /// RFC filename (e.g., 0074-A-org-level-operations.md)
+        #[arg(long)]
+        rfc: String,
+    },
+
+    /// Sync all RFCs with PM/Jira, report drift
+    Sync,
 }
 
 // ==================== RFC 0072: New Command Enums ====================
@@ -1692,59 +1714,97 @@ async fn tokio_main() -> Result<()> {
         None => {
             println!("{}", blue_core::voice::welcome());
         }
-        Some(Commands::Status) => match get_project_state() {
-            Ok(state) => {
-                let args = serde_json::json!({});
-                match blue_core::handlers::status::handle_status(&state, &args) {
+        Some(Commands::Status) => {
+            // RFC 0074: If at org root, show org-level status
+            let cwd_check = std::env::current_dir()?;
+            if cwd_check.join("org.yaml").exists() {
+                let manifest = blue_core::OrgManifest::load(&cwd_check.join("org.yaml"))?;
+                match blue_core::handlers::org_ops::handle_org_status(&cwd_check, &manifest) {
                     Ok(result) => {
-                        let project = result
-                            .get("project")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("unknown");
-                        let active = result
-                            .get("active")
-                            .and_then(|v| v.as_array())
-                            .map(|a| a.len())
-                            .unwrap_or(0);
-                        let ready = result
-                            .get("ready")
-                            .and_then(|v| v.as_array())
-                            .map(|a| a.len())
-                            .unwrap_or(0);
-                        let stalled = result
-                            .get("stalled")
-                            .and_then(|v| v.as_array())
-                            .map(|a| a.len())
-                            .unwrap_or(0);
-                        let drafts = result
-                            .get("drafts")
-                            .and_then(|v| v.as_array())
-                            .map(|a| a.len())
-                            .unwrap_or(0);
-                        let hint = result.get("hint").and_then(|v| v.as_str()).unwrap_or("");
-
-                        println!("Project: {}", project);
-                        println!("Active:  {} RFC(s)", active);
-                        println!("Ready:   {} RFC(s)", ready);
-                        if stalled > 0 {
-                            println!("Stalled: {} RFC(s)", stalled);
-                        }
-                        println!("Drafts:  {} RFC(s)", drafts);
+                        println!("Org: {}", manifest.org);
                         println!();
-                        println!("{}", hint);
+                        if let Some(repos) = result.get("repos").and_then(|r| r.as_array()) {
+                            for repo in repos {
+                                let name = repo.get("name").and_then(|n| n.as_str()).unwrap_or("?");
+                                let exists = repo.get("exists").and_then(|e| e.as_bool()).unwrap_or(false);
+                                let branch = repo.get("branch").and_then(|b| b.as_str()).unwrap_or("-");
+                                let total_rfcs = repo.get("rfcs").and_then(|r| r.get("total")).and_then(|t| t.as_i64()).unwrap_or(0);
+                                if exists {
+                                    println!("  {} ({}) -- {} RFCs", name, branch, total_rfcs);
+                                } else {
+                                    println!("  {} (not cloned)", name);
+                                }
+                            }
+                        }
+                        if let Some(epic_count) = result.get("epic_count").and_then(|e| e.as_i64()) {
+                            println!();
+                            println!("PM: {} -- {} epics", manifest.pm_repo, epic_count);
+                        }
+                        if let Some(jira) = result.get("jira") {
+                            if let Some(domain) = jira.get("domain").and_then(|d| d.as_str()) {
+                                let key = jira.get("project_key").and_then(|k| k.as_str()).unwrap_or("?");
+                                println!("Jira: {} @ {}", key, domain);
+                            }
+                        }
                     }
-                    Err(e) => {
-                        eprintln!("Error: {}", e);
-                        std::process::exit(1);
+                    Err(e) => println!("Error: {}", e),
+                }
+            } else {
+                match get_project_state() {
+                    Ok(state) => {
+                        let args = serde_json::json!({});
+                        match blue_core::handlers::status::handle_status(&state, &args) {
+                            Ok(result) => {
+                                let project = result
+                                    .get("project")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("unknown");
+                                let active = result
+                                    .get("active")
+                                    .and_then(|v| v.as_array())
+                                    .map(|a| a.len())
+                                    .unwrap_or(0);
+                                let ready = result
+                                    .get("ready")
+                                    .and_then(|v| v.as_array())
+                                    .map(|a| a.len())
+                                    .unwrap_or(0);
+                                let stalled = result
+                                    .get("stalled")
+                                    .and_then(|v| v.as_array())
+                                    .map(|a| a.len())
+                                    .unwrap_or(0);
+                                let drafts = result
+                                    .get("drafts")
+                                    .and_then(|v| v.as_array())
+                                    .map(|a| a.len())
+                                    .unwrap_or(0);
+                                let hint = result.get("hint").and_then(|v| v.as_str()).unwrap_or("");
+
+                                println!("Project: {}", project);
+                                println!("Active:  {} RFC(s)", active);
+                                println!("Ready:   {} RFC(s)", ready);
+                                if stalled > 0 {
+                                    println!("Stalled: {} RFC(s)", stalled);
+                                }
+                                println!("Drafts:  {} RFC(s)", drafts);
+                                println!();
+                                println!("{}", hint);
+                            }
+                            Err(e) => {
+                                eprintln!("Error: {}", e);
+                                std::process::exit(1);
+                            }
+                        }
+                    }
+                    Err(_) => {
+                        println!("{}", blue_core::voice::welcome());
+                        println!();
+                        println!("Run 'blue init' to get started.");
                     }
                 }
             }
-            Err(_) => {
-                println!("{}", blue_core::voice::welcome());
-                println!();
-                println!("Run 'blue init' to get started.");
-            }
-        },
+        }
         Some(Commands::Init { force }) => {
             let cwd = std::env::current_dir()?;
             let blue_dir = cwd.join(".blue");
@@ -1842,21 +1902,55 @@ async fn tokio_main() -> Result<()> {
             println!("  blue status");
         }
         Some(Commands::Next) => {
-            let state = get_project_state()?;
-            let args = serde_json::json!({});
-            match blue_core::handlers::status::handle_next(&state, &args) {
-                Ok(result) => {
-                    if let Some(recs) = result.get("recommendations").and_then(|v| v.as_array()) {
-                        for rec in recs {
-                            if let Some(s) = rec.as_str() {
-                                println!("{}", s);
+            // RFC 0074: If at org root, show org-level recommendations
+            let cwd_check = std::env::current_dir()?;
+            if cwd_check.join("org.yaml").exists() {
+                let manifest = blue_core::OrgManifest::load(&cwd_check.join("org.yaml"))?;
+                match blue_core::handlers::org_ops::handle_org_status(&cwd_check, &manifest) {
+                    Ok(result) => {
+                        let mut recommendations = Vec::new();
+                        if let Some(repos) = result.get("repos").and_then(|r| r.as_array()) {
+                            for repo in repos {
+                                let name = repo.get("name").and_then(|n| n.as_str()).unwrap_or("?");
+                                let exists = repo.get("exists").and_then(|e| e.as_bool()).unwrap_or(false);
+                                if !exists {
+                                    recommendations.push(format!("Clone missing repo: {}", name));
+                                    continue;
+                                }
+                                let draft = repo.get("rfcs").and_then(|r| r.get("draft")).and_then(|d| d.as_i64()).unwrap_or(0);
+                                if draft > 0 {
+                                    recommendations.push(format!("{}: {} draft RFC(s) to review", name, draft));
+                                }
+                            }
+                        }
+                        if recommendations.is_empty() {
+                            println!("All repos look good. No immediate actions needed.");
+                        } else {
+                            println!("Org recommendations:");
+                            for rec in &recommendations {
+                                println!("  - {}", rec);
                             }
                         }
                     }
+                    Err(e) => println!("Error: {}", e),
                 }
-                Err(e) => {
-                    eprintln!("Error: {}", e);
-                    std::process::exit(1);
+            } else {
+                let state = get_project_state()?;
+                let args = serde_json::json!({});
+                match blue_core::handlers::status::handle_next(&state, &args) {
+                    Ok(result) => {
+                        if let Some(recs) = result.get("recommendations").and_then(|v| v.as_array()) {
+                            for rec in recs {
+                                if let Some(s) = rec.as_str() {
+                                    println!("{}", s);
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Error: {}", e);
+                        std::process::exit(1);
+                    }
                 }
             }
         }
@@ -1916,25 +2010,111 @@ async fn tokio_main() -> Result<()> {
             }
         }
         Some(Commands::Lint) => {
-            println!("Checking standards.\n");
+            // RFC 0074: If at org root, lint all repos
+            let cwd_check = std::env::current_dir()?;
+            if cwd_check.join("org.yaml").exists() {
+                let manifest = blue_core::OrgManifest::load(&cwd_check.join("org.yaml"))?;
+                let pm_path = manifest.pm_repo_path(&cwd_check);
+                let domain_yaml = pm_path.join("domain.yaml");
 
-            // RFC 0063: Check staged files for Jira credential patterns
-            let mut warnings_count = 0;
+                if domain_yaml.exists() {
+                    let domain = blue_core::PmDomain::load(&domain_yaml)?;
+                    println!("Org lint: {}\n", manifest.org);
 
-            // Get staged files from git
-            let staged = std::process::Command::new("git")
-                .args(["diff", "--cached", "--name-only"])
-                .output();
+                    let mut total_issues = 0;
+                    let naming_re = regex::Regex::new(r"^\d{4}-[DAIS]-.+\.md$").unwrap();
 
-            if let Ok(output) = staged {
-                let files = String::from_utf8_lossy(&output.stdout);
-                for file_path in files.lines() {
-                    if file_path.is_empty() {
-                        continue;
+                    for repo_entry in &domain.repos {
+                        let repo_path = cwd_check.join(&repo_entry.name);
+                        if !repo_path.exists() {
+                            continue;
+                        }
+
+                        let rfcs_path = repo_path.join(".blue").join("docs").join("rfcs");
+                        if !rfcs_path.exists() {
+                            continue;
+                        }
+
+                        // Check naming conventions
+                        let mut naming_issues = 0;
+                        if let Ok(entries) = std::fs::read_dir(&rfcs_path) {
+                            for entry in entries.flatten() {
+                                let name = entry.file_name();
+                                let name_str = name.to_string_lossy();
+                                if name_str.ends_with(".md") && !name_str.ends_with(".plan.md")
+                                    && !naming_re.is_match(&name_str) {
+                                    naming_issues += 1;
+                                }
+                            }
+                        }
+
+                        if naming_issues > 0 {
+                            println!("  {}: {} naming issue(s)", repo_entry.name, naming_issues);
+                            total_issues += naming_issues;
+                        } else {
+                            println!("  {}: ok", repo_entry.name);
+                        }
                     }
-                    if let Ok(content) = std::fs::read_to_string(file_path) {
+
+                    // Cross-repo check: unlinked RFCs
+                    if let Ok(result) = blue_core::handlers::org_ops::handle_org_sync(&cwd_check, &manifest) {
+                        let unlinked = result.get("unlinked").and_then(|u| u.as_i64()).unwrap_or(0);
+                        if unlinked > 0 {
+                            println!("\n  {} unlinked RFC(s) -- run 'blue org sync' for details", unlinked);
+                            total_issues += unlinked as usize;
+                        }
+                    }
+
+                    println!();
+                    if total_issues == 0 {
+                        println!("All clear.");
+                    } else {
+                        println!("{} issue(s) found.", total_issues);
+                    }
+                } else {
+                    println!("No domain.yaml found in PM repo. Cannot lint org.");
+                }
+            } else {
+                println!("Checking standards.\n");
+
+                // RFC 0063: Check staged files for Jira credential patterns
+                let mut warnings_count = 0;
+
+                // Get staged files from git
+                let staged = std::process::Command::new("git")
+                    .args(["diff", "--cached", "--name-only"])
+                    .output();
+
+                if let Ok(output) = staged {
+                    let files = String::from_utf8_lossy(&output.stdout);
+                    for file_path in files.lines() {
+                        if file_path.is_empty() {
+                            continue;
+                        }
+                        if let Ok(content) = std::fs::read_to_string(file_path) {
+                            let warnings =
+                                blue_core::tracker::lint::check_for_jira_credentials(&content, file_path);
+                            for w in &warnings {
+                                println!(
+                                    "  [{}] {}:{} — {}",
+                                    w.severity, w.file, w.line, w.message
+                                );
+                                warnings_count += 1;
+                            }
+                        }
+                    }
+                }
+
+                // Also scan working directory for common credential files
+                let suspect_files = [
+                    ".env",
+                    "jira-credentials.toml",
+                    ".jira-cli/config.yml",
+                ];
+                for suspect in &suspect_files {
+                    if let Ok(content) = std::fs::read_to_string(suspect) {
                         let warnings =
-                            blue_core::tracker::lint::check_for_jira_credentials(&content, file_path);
+                            blue_core::tracker::lint::check_for_jira_credentials(&content, suspect);
                         for w in &warnings {
                             println!(
                                 "  [{}] {}:{} — {}",
@@ -1944,33 +2124,13 @@ async fn tokio_main() -> Result<()> {
                         }
                     }
                 }
-            }
 
-            // Also scan working directory for common credential files
-            let suspect_files = [
-                ".env",
-                "jira-credentials.toml",
-                ".jira-cli/config.yml",
-            ];
-            for suspect in &suspect_files {
-                if let Ok(content) = std::fs::read_to_string(suspect) {
-                    let warnings =
-                        blue_core::tracker::lint::check_for_jira_credentials(&content, suspect);
-                    for w in &warnings {
-                        println!(
-                            "  [{}] {}:{} — {}",
-                            w.severity, w.file, w.line, w.message
-                        );
-                        warnings_count += 1;
-                    }
+                if warnings_count > 0 {
+                    println!("\n{} credential warning(s) found.", warnings_count);
+                    std::process::exit(1);
+                } else {
+                    println!("  [ok] No credential leaks detected.");
                 }
-            }
-
-            if warnings_count > 0 {
-                println!("\n{} credential warning(s) found.", warnings_count);
-                std::process::exit(1);
-            } else {
-                println!("  [ok] No credential leaks detected.");
             }
         }
         Some(Commands::Migrate { from }) => {
@@ -5026,6 +5186,57 @@ async fn handle_reminder_command(command: ReminderCommands) -> Result<()> {
 
 /// Handle RFC subcommands (RFC 0061)
 async fn handle_rfc_command(command: RfcCommands) -> Result<()> {
+    // RFC 0074: If at org root, handle List and Create specially
+    let cwd_check = std::env::current_dir()?;
+    if cwd_check.join("org.yaml").exists() {
+        match &command {
+            RfcCommands::List { .. } => {
+                let manifest = blue_core::OrgManifest::load(&cwd_check.join("org.yaml"))?;
+                match blue_core::handlers::org_ops::handle_org_rfc_list(&cwd_check, &manifest) {
+                    Ok(result) => {
+                        if let Some(rfcs) = result.get("rfcs").and_then(|r| r.as_array()) {
+                            let mut current_repo = String::new();
+                            for rfc in rfcs {
+                                let repo = rfc.get("repo").and_then(|r| r.as_str()).unwrap_or("?");
+                                if repo != current_repo {
+                                    println!();
+                                    println!("{}:", repo);
+                                    current_repo = repo.to_string();
+                                }
+                                let number = rfc.get("number").and_then(|n| n.as_i64()).unwrap_or(0);
+                                let status = rfc.get("status").and_then(|s| s.as_str()).unwrap_or("?");
+                                let title = rfc.get("title").and_then(|t| t.as_str()).unwrap_or("?");
+                                let status_char = match status {
+                                    "draft" => "D",
+                                    "approved" => "A",
+                                    "implemented" => "I",
+                                    "superseded" => "S",
+                                    _ => "?",
+                                };
+                                println!("  {:04}-{} {}", number, status_char, title);
+                            }
+                        }
+                        if let Some(total) = result.get("total").and_then(|t| t.as_i64()) {
+                            println!();
+                            println!("{} RFCs total", total);
+                        }
+                    }
+                    Err(e) => println!("Error: {}", e),
+                }
+                return Ok(());
+            }
+            RfcCommands::Create { .. } => {
+                println!("You are at the org root. To create an RFC, either:");
+                println!("  1. cd into the target repo first");
+                println!("  2. Use: blue org rfcs  (to see all RFCs across repos)");
+                return Ok(());
+            }
+            _ => {
+                // Fall through to normal handling for other RFC subcommands
+            }
+        }
+    }
+
     let mut state = get_project_state()?;
 
     match command {
@@ -5992,6 +6203,86 @@ fn handle_org_command(command: OrgCommands) -> Result<()> {
                 config.orgs.len(),
                 total_repos
             );
+
+            // RFC 0074: If org.yaml exists in cwd, show org-level status
+            let cwd = std::env::current_dir()?;
+            let org_yaml = cwd.join("org.yaml");
+            if org_yaml.exists() {
+                if let Ok(manifest) = blue_core::OrgManifest::load(&org_yaml) {
+                    println!();
+                    println!("--- Org: {} ---", manifest.org);
+                    match blue_core::handlers::org_ops::handle_org_status(&cwd, &manifest) {
+                        Ok(result) => {
+                            if let Some(repos) = result.get("repos").and_then(|r| r.as_array()) {
+                                for repo in repos {
+                                    let name = repo.get("name").and_then(|n| n.as_str()).unwrap_or("?");
+                                    let exists = repo.get("exists").and_then(|e| e.as_bool()).unwrap_or(false);
+                                    let branch = repo.get("branch").and_then(|b| b.as_str()).unwrap_or("-");
+                                    let rfcs = repo.get("rfcs").and_then(|r| r.get("total")).and_then(|t| t.as_i64()).unwrap_or(0);
+
+                                    if exists {
+                                        println!("  {} ({}) -- {} RFCs", name, branch, rfcs);
+                                    } else {
+                                        println!("  {} (not cloned)", name);
+                                    }
+                                }
+                            }
+                            if let Some(epic_count) = result.get("epic_count").and_then(|e| e.as_i64()) {
+                                println!();
+                                println!("  PM: {} -- {} epics", manifest.pm_repo, epic_count);
+                            }
+                            if let Some(jira) = result.get("jira") {
+                                if let Some(domain) = jira.get("domain").and_then(|d| d.as_str()) {
+                                    let key = jira.get("project_key").and_then(|k| k.as_str()).unwrap_or("?");
+                                    println!("  Jira: {} @ {}", key, domain);
+                                }
+                            }
+                        }
+                        Err(e) => println!("  (org status error: {})", e),
+                    }
+                }
+            }
+        }
+
+        OrgCommands::Rfcs => {
+            let cwd = std::env::current_dir()?;
+            let org_yaml = cwd.join("org.yaml");
+            if !org_yaml.exists() {
+                println!("No org.yaml found. Run 'blue org init' first.");
+                return Ok(());
+            }
+            let manifest = blue_core::OrgManifest::load(&org_yaml)?;
+            match blue_core::handlers::org_ops::handle_org_rfc_list(&cwd, &manifest) {
+                Ok(result) => {
+                    if let Some(rfcs) = result.get("rfcs").and_then(|r| r.as_array()) {
+                        let mut current_repo = String::new();
+                        for rfc in rfcs {
+                            let repo = rfc.get("repo").and_then(|r| r.as_str()).unwrap_or("?");
+                            if repo != current_repo {
+                                println!();
+                                println!("{}:", repo);
+                                current_repo = repo.to_string();
+                            }
+                            let number = rfc.get("number").and_then(|n| n.as_i64()).unwrap_or(0);
+                            let status = rfc.get("status").and_then(|s| s.as_str()).unwrap_or("?");
+                            let title = rfc.get("title").and_then(|t| t.as_str()).unwrap_or("?");
+                            let status_char = match status {
+                                "draft" => "D",
+                                "approved" => "A",
+                                "implemented" => "I",
+                                "superseded" => "S",
+                                _ => "?",
+                            };
+                            println!("  {:04}-{} {}", number, status_char, title);
+                        }
+                    }
+                    if let Some(total) = result.get("total").and_then(|t| t.as_i64()) {
+                        println!();
+                        println!("{} RFCs total", total);
+                    }
+                }
+                Err(e) => println!("Error: {}", e),
+            }
         }
 
         OrgCommands::Migrate { from, execute } => {
@@ -6105,6 +6396,139 @@ fn handle_org_command(command: OrgCommands) -> Result<()> {
             println!("\nDone. {} moved, {} failed.", success, failed);
         }
 
+        OrgCommands::Init => {
+            let cwd = std::env::current_dir()?;
+            let org_yaml_path = cwd.join("org.yaml");
+
+            if org_yaml_path.exists() {
+                println!("org.yaml already exists at {}", org_yaml_path.display());
+                return Ok(());
+            }
+
+            // Scan cwd for subdirectories containing domain.yaml
+            let mut pm_candidates: Vec<String> = Vec::new();
+            if let Ok(entries) = std::fs::read_dir(&cwd) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.is_dir() && path.join("domain.yaml").exists() {
+                        if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                            pm_candidates.push(name.to_string());
+                        }
+                    }
+                }
+            }
+
+            let org_name = cwd
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("unknown")
+                .to_string();
+
+            if pm_candidates.is_empty() {
+                println!("No subdirectory with domain.yaml found in {}", cwd.display());
+                println!("Create a PM repo with domain.yaml first, then re-run 'blue org init'.");
+                return Ok(());
+            }
+
+            let pm_repo = if pm_candidates.len() == 1 {
+                pm_candidates[0].clone()
+            } else {
+                println!("Multiple PM repo candidates found:");
+                for (i, name) in pm_candidates.iter().enumerate() {
+                    println!("  [{}] {}", i + 1, name);
+                }
+                println!("Using first: {}", pm_candidates[0]);
+                pm_candidates[0].clone()
+            };
+
+            let manifest = blue_core::OrgManifest {
+                org: org_name.clone(),
+                pm_repo: pm_repo.clone(),
+            };
+            manifest.save(&org_yaml_path)?;
+
+            println!("Created org.yaml at {}", org_yaml_path.display());
+            println!("  org: {}", org_name);
+            println!("  pm_repo: {}", pm_repo);
+        }
+
+        OrgCommands::Bootstrap => {
+            let cwd = std::env::current_dir()?;
+            let org_yaml_path = cwd.join("org.yaml");
+
+            if !org_yaml_path.exists() {
+                println!("No org.yaml found in {}", cwd.display());
+                println!("Run 'blue org init' first.");
+                return Ok(());
+            }
+
+            let manifest = blue_core::OrgManifest::load(&org_yaml_path)?;
+            let pm_path = manifest.pm_repo_path(&cwd);
+
+            if !pm_path.exists() {
+                println!("PM repo not found at {}", pm_path.display());
+                println!("Clone it first, then re-run 'blue org bootstrap'.");
+                return Ok(());
+            }
+
+            let domain_yaml_path = pm_path.join("domain.yaml");
+            if !domain_yaml_path.exists() {
+                println!("No domain.yaml found in PM repo at {}", pm_path.display());
+                return Ok(());
+            }
+
+            let domain = blue_core::PmDomain::load(&domain_yaml_path)?;
+            let config = blue_core::BlueGlobalConfig::load();
+
+            println!("Bootstrapping org '{}' from {}", manifest.org, domain_yaml_path.display());
+            println!();
+
+            let mut cloned = 0;
+            let mut skipped = 0;
+            let mut failed = 0;
+
+            for repo_entry in &domain.repos {
+                let repo_path = cwd.join(&repo_entry.name);
+                if repo_path.exists() {
+                    println!("  skip {} (already exists)", repo_entry.name);
+                    skipped += 1;
+                    continue;
+                }
+
+                // Find the org in config to build clone URL
+                let org = config.find_org(&manifest.org);
+                let url = if let Some(org) = org {
+                    org.clone_url(&repo_entry.name)
+                } else {
+                    // Default to github SSH
+                    format!("git@github.com:{}/{}.git", manifest.org, repo_entry.name)
+                };
+
+                println!("  clone {} ...", repo_entry.name);
+                let output = std::process::Command::new("git")
+                    .args(["clone", &url, &repo_path.display().to_string()])
+                    .output();
+                match output {
+                    Ok(o) if o.status.success() => {
+                        println!("    ok: {}", repo_path.display());
+                        cloned += 1;
+                    }
+                    Ok(o) => {
+                        let stderr = String::from_utf8_lossy(&o.stderr);
+                        println!("    FAILED: {}", stderr.trim());
+                        failed += 1;
+                    }
+                    Err(e) => {
+                        println!("    FAILED: {}", e);
+                        failed += 1;
+                    }
+                }
+            }
+
+            println!();
+            println!("Done. {} cloned, {} skipped, {} failed.", cloned, skipped, failed);
+        }
+
         OrgCommands::Home { path } => {
             let mut config = blue_core::BlueGlobalConfig::load();
             match path {
@@ -6128,6 +6552,136 @@ fn handle_org_command(command: OrgCommands) -> Result<()> {
                 None => {
                     println!("{}", config.home.path);
                 }
+            }
+        }
+
+        OrgCommands::Link { repo, rfc } => {
+            let cwd = std::env::current_dir()?;
+            let org_yaml = cwd.join("org.yaml");
+            if !org_yaml.exists() {
+                println!("No org.yaml found. Run 'blue org init' first.");
+                return Ok(());
+            }
+            let manifest = blue_core::OrgManifest::load(&org_yaml)?;
+            let args = serde_json::json!({ "repo": repo, "rfc": rfc });
+            match blue_core::handlers::org_ops::handle_org_link(&cwd, &manifest, &args) {
+                Ok(result) => {
+                    println!(
+                        "RFC: {}",
+                        result
+                            .get("rfc_title")
+                            .and_then(|t| t.as_str())
+                            .unwrap_or("?")
+                    );
+
+                    // Show existing binding
+                    if let Some(existing) = result.get("existing_binding") {
+                        if let Some(key) = existing.get("jira_key").and_then(|k| k.as_str()) {
+                            println!("Already linked to: {}", key);
+                        }
+                    }
+
+                    // Show candidates
+                    if let Some(candidates) =
+                        result.get("candidates").and_then(|c| c.as_array())
+                    {
+                        if candidates.is_empty() {
+                            println!("\nNo matching epics/stories found.");
+                        } else {
+                            println!("\nCandidate matches:");
+                            for (i, c) in candidates.iter().enumerate() {
+                                let epic = c
+                                    .get("epic_title")
+                                    .and_then(|t| t.as_str())
+                                    .unwrap_or("?");
+                                let story = c.get("story_title").and_then(|t| t.as_str());
+                                let score =
+                                    c.get("score").and_then(|s| s.as_i64()).unwrap_or(0);
+                                let epic_id =
+                                    c.get("epic").and_then(|e| e.as_str()).unwrap_or("?");
+
+                                if let Some(story_title) = story {
+                                    let story_id = c
+                                        .get("story")
+                                        .and_then(|s| s.as_str())
+                                        .unwrap_or("?");
+                                    println!(
+                                        "  [{}] {} / {} — {} (score: {})",
+                                        i + 1,
+                                        epic_id,
+                                        story_id,
+                                        story_title,
+                                        score
+                                    );
+                                } else {
+                                    println!(
+                                        "  [{}] {} — {} (epic, score: {})",
+                                        i + 1,
+                                        epic_id,
+                                        epic,
+                                        score
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+                Err(e) => println!("Error: {}", e),
+            }
+        }
+
+        OrgCommands::Sync => {
+            let cwd = std::env::current_dir()?;
+            let org_yaml = cwd.join("org.yaml");
+            if !org_yaml.exists() {
+                println!("No org.yaml found. Run 'blue org init' first.");
+                return Ok(());
+            }
+            let manifest = blue_core::OrgManifest::load(&org_yaml)?;
+            match blue_core::handlers::org_ops::handle_org_sync(&cwd, &manifest) {
+                Ok(result) => {
+                    let linked = result.get("linked").and_then(|l| l.as_i64()).unwrap_or(0);
+                    let unlinked =
+                        result.get("unlinked").and_then(|u| u.as_i64()).unwrap_or(0);
+
+                    println!(
+                        "Org sync: {} RFCs ({} linked, {} unlinked)\n",
+                        linked + unlinked,
+                        linked,
+                        unlinked
+                    );
+
+                    if let Some(rfcs) = result.get("rfcs").and_then(|r| r.as_array()) {
+                        let mut current_repo = String::new();
+                        for rfc in rfcs {
+                            let repo = rfc
+                                .get("repo")
+                                .and_then(|r| r.as_str())
+                                .unwrap_or("?");
+                            if repo != current_repo {
+                                println!("{}:", repo);
+                                current_repo = repo.to_string();
+                            }
+                            let file = rfc
+                                .get("file")
+                                .and_then(|f| f.as_str())
+                                .unwrap_or("?");
+                            let is_linked = rfc
+                                .get("linked")
+                                .and_then(|l| l.as_bool())
+                                .unwrap_or(false);
+                            let jira_key =
+                                rfc.get("jira_key").and_then(|k| k.as_str());
+
+                            if is_linked {
+                                println!("  {} → {}", file, jira_key.unwrap_or("?"));
+                            } else {
+                                println!("  {} — unlinked", file);
+                            }
+                        }
+                    }
+                }
+                Err(e) => println!("Error: {}", e),
             }
         }
     }

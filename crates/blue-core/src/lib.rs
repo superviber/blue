@@ -85,12 +85,12 @@ pub use tracker::{
 };
 pub use pm::domain::{PmDomain, PmDomainError, RepoEntry};
 pub use pm::id::{format_epic_id, format_story_id, next_epic_id, next_story_id, parse_id, IdError};
-pub use pm::locator::{locate_pm_repo, locate_pm_repo_with_config, LocatorError, PmRepoLocation};
+pub use pm::locator::{locate_pm_repo, locate_pm_repo_from_org, locate_pm_repo_with_config, LocatorError, PmRepoLocation};
 pub use pm::sync::{discover_pm_items, run_pm_sync, parse_pm_front_matter, PmFrontMatter, PmItem};
 pub use org::{
     clone_repo, clone_repo_by_name, config_path as org_config_path, detect_org_from_repo,
     execute_move, parse_remote_url, scan_for_migration, BlueGlobalConfig, HomeConfig,
-    MigrationMove, Org, OrgError, Provider,
+    MigrationMove, Org, OrgError, OrgManifest, Provider,
 };
 pub use uri::{estimate_tokens, read_uri_content, BlueUri, UriError};
 pub use handler_error::HandlerError;
