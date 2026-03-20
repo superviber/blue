@@ -625,6 +625,12 @@ enum Commands {
         realm: Option<String>,
     },
 
+    /// Hook entry points for Claude Code integration
+    Hook {
+        #[command(subcommand)]
+        command: HookCommands,
+    },
+
     /// Sync RFCs to Jira (RFC 0063 — git is authority, Jira is projection)
     Sync {
         /// Jira domain (e.g., myorg.atlassian.net)
@@ -643,6 +649,14 @@ enum Commands {
         #[arg(long, default_value = "warn")]
         drift_policy: String,
     },
+}
+
+#[derive(Subcommand, Debug)]
+enum HookCommands {
+    /// Session start hook — outputs org context if in an org
+    SessionStart,
+    /// Post-compact hook — re-outputs org context after compaction
+    PostCompact,
 }
 
 #[derive(Subcommand)]
@@ -2180,9 +2194,49 @@ async fn tokio_main() -> Result<()> {
             force,
         }) => {
             handle_install_command(hooks_only, skills_only, mcp_only, force).await?;
+
+            // Also install embedded skills and user-level hooks via blue-core
+            if !hooks_only && !mcp_only {
+                match blue_core::install::install() {
+                    Ok(result) => {
+                        if !result.skills_installed.is_empty() {
+                            println!("\nEmbedded skills (user-level):");
+                            for s in &result.skills_installed {
+                                println!("  + {}", s);
+                            }
+                        }
+                        if !result.hooks_configured.is_empty() {
+                            println!("\nUser-level hooks (~/.claude/settings.json):");
+                            for h in &result.hooks_configured {
+                                println!("  + {}", h);
+                            }
+                        }
+                    }
+                    Err(e) => eprintln!("\nWarning: user-level install failed: {}", e),
+                }
+            }
         }
         Some(Commands::Uninstall) => {
             handle_uninstall_command().await?;
+
+            // Also remove user-level skills and hooks via blue-core
+            match blue_core::install::uninstall() {
+                Ok(result) => {
+                    if !result.skills_removed.is_empty() {
+                        println!("\nRemoved user-level skills:");
+                        for s in &result.skills_removed {
+                            println!("  - {}", s);
+                        }
+                    }
+                    if !result.hooks_removed.is_empty() {
+                        println!("\nRemoved user-level hooks:");
+                        for h in &result.hooks_removed {
+                            println!("  - {}", h);
+                        }
+                    }
+                }
+                Err(e) => eprintln!("\nWarning: user-level uninstall failed: {}", e),
+            }
         }
         Some(Commands::Doctor) => {
             handle_doctor_command().await?;
@@ -2506,6 +2560,9 @@ async fn tokio_main() -> Result<()> {
                 handle_sync_command(&domain, &project, dry_run, &drift_policy)
             })
             .await??;
+        }
+        Some(Commands::Hook { command }) => {
+            handle_hook_command(command)?;
         }
     }
 
@@ -6062,6 +6119,112 @@ fn ensure_project_exists(
             anyhow::bail!("Failed to create project '{}': {}", project_key, e);
         }
     }
+}
+
+// ==================== RFC 0074: Hook Commands ====================
+
+fn handle_hook_command(command: HookCommands) -> Result<()> {
+    match command {
+        HookCommands::SessionStart | HookCommands::PostCompact => {
+            // Walk up from cwd looking for org.yaml
+            let cwd = std::env::current_dir()?;
+            if let Some((org_root, manifest)) =
+                blue_core::OrgManifest::find_in_ancestors(&cwd)
+            {
+                let pm_path = manifest.pm_repo_path(&org_root);
+
+                println!("[Org Context: {}]", manifest.org);
+                println!("PM repo: {}", pm_path.display());
+
+                // Detect current location
+                let location = if cwd == org_root {
+                    "org root".to_string()
+                } else if let Some(repo_name) = cwd
+                    .strip_prefix(&org_root)
+                    .ok()
+                    .and_then(|p| p.components().next())
+                    .and_then(|c| c.as_os_str().to_str())
+                {
+                    format!("repo: {}", repo_name)
+                } else {
+                    "unknown".to_string()
+                };
+                println!("Current location: {}", location);
+
+                // Load domain.yaml if available
+                let domain_yaml = pm_path.join("domain.yaml");
+                if domain_yaml.exists() {
+                    if let Ok(domain) = blue_core::PmDomain::load(&domain_yaml) {
+                        println!();
+                        println!("Repos:");
+                        for repo in &domain.repos {
+                            let repo_path = org_root.join(&repo.name);
+                            let status = if repo_path.exists() {
+                                "exists"
+                            } else {
+                                "not cloned"
+                            };
+                            let desc = repo.description.as_deref().unwrap_or("");
+                            println!("  - {}: {} [{}]", repo.name, desc, status);
+                        }
+
+                        println!();
+                        println!("Areas:");
+                        for area in &domain.areas {
+                            let repos_str = area.repos.join(", ");
+                            println!("  - {} ({}): {}", area.key, area.name, repos_str);
+                        }
+
+                        // Jira info from domain.yaml
+                        if let (Some(key), Some(domain_str)) =
+                            (domain.jira_project_key(), domain.jira_domain())
+                        {
+                            println!();
+                            println!("Jira: {} @ {}", key, domain_str);
+                        }
+                    }
+                }
+
+                // Also check jira.toml as fallback
+                let jira_toml = pm_path.join("jira.toml");
+                if jira_toml.exists() {
+                    if let Ok(content) = std::fs::read_to_string(&jira_toml) {
+                        let mut jira_domain = None;
+                        let mut jira_key = None;
+                        for line in content.lines() {
+                            if let Some(val) = line
+                                .strip_prefix("domain")
+                                .and_then(|s| s.trim().strip_prefix('='))
+                                .map(|s| s.trim().trim_matches('"'))
+                            {
+                                jira_domain = Some(val.to_string());
+                            }
+                            if let Some(val) = line
+                                .strip_prefix("project_key")
+                                .and_then(|s| s.trim().strip_prefix('='))
+                                .map(|s| s.trim().trim_matches('"'))
+                            {
+                                jira_key = Some(val.to_string());
+                            }
+                        }
+                        if let (Some(key), Some(domain_val)) = (jira_key, jira_domain) {
+                            println!();
+                            println!("Jira (from jira.toml): {} @ {}", key, domain_val);
+                        }
+                    }
+                }
+
+                println!();
+                println!(
+                    "Org-wide RFCs go in: {}/.blue/docs/rfcs/",
+                    pm_path.display()
+                );
+                println!("Repo-specific RFCs go in: {{repo}}/.blue/docs/rfcs/");
+            }
+            // If no org.yaml found, output nothing (standalone repo mode)
+        }
+    }
+    Ok(())
 }
 
 // ==================== RFC 0067: Org Commands ====================

@@ -21,6 +21,7 @@ pub mod daemon;
 pub mod documents;
 pub mod forge;
 pub mod indexer;
+pub mod install;
 
 pub mod manifest;
 pub mod org;
