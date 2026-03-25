@@ -80,6 +80,7 @@ pub fn install() -> Result<InstallResult, InstallError> {
     configure_hooks(&settings_path, false)?;
     result.hooks_configured.push("SessionStart".to_string());
     result.hooks_configured.push("PreCompact".to_string());
+    result.hooks_configured.push("PreToolUse (guard)".to_string());
 
     Ok(result)
 }
@@ -138,6 +139,7 @@ pub fn uninstall() -> Result<InstallResult, InstallError> {
     configure_hooks(&settings_path, true)?;
     result.hooks_removed.push("SessionStart (blue)".to_string());
     result.hooks_removed.push("PreCompact (blue)".to_string());
+    result.hooks_removed.push("PreToolUse guard (blue)".to_string());
 
     Ok(result)
 }
@@ -200,6 +202,21 @@ fn configure_hooks(settings_path: &Path, remove: bool) -> Result<(), InstallErro
             arr.retain(|entry| !entry_contains_blue_hook(entry));
             arr.push(blue_hook_entry("post-compact"));
         }
+
+        // RFC 0076: PreToolUse guard (global, replaces per-project guard-write.sh)
+        let pre_tool_use = hooks_obj
+            .entry("PreToolUse")
+            .or_insert_with(|| serde_json::json!([]));
+        if let Some(arr) = pre_tool_use.as_array_mut() {
+            arr.retain(|entry| !entry_contains_blue_hook(entry));
+            arr.push(serde_json::json!({
+                "matcher": "Write|Edit|MultiEdit",
+                "hooks": [{
+                    "type": "command",
+                    "command": "blue guard --stdin"
+                }]
+            }));
+        }
     }
 
     // Ensure parent directory exists
@@ -214,7 +231,7 @@ fn configure_hooks(settings_path: &Path, remove: bool) -> Result<(), InstallErro
     Ok(())
 }
 
-/// Check if a hook entry contains a "blue hook" command
+/// Check if a hook entry contains a blue-managed command ("blue hook" or "blue guard")
 fn entry_contains_blue_hook(entry: &serde_json::Value) -> bool {
     entry
         .get("hooks")
@@ -223,7 +240,7 @@ fn entry_contains_blue_hook(entry: &serde_json::Value) -> bool {
             hooks.iter().any(|h| {
                 h.get("command")
                     .and_then(|c| c.as_str())
-                    .map(|c| c.contains("blue hook"))
+                    .map(|c| c.contains("blue hook") || c.contains("blue guard"))
                     .unwrap_or(false)
             })
         })
@@ -317,9 +334,9 @@ mod tests {
         let session_start = settings["hooks"]["SessionStart"].as_array().unwrap();
         assert_eq!(session_start.len(), 2);
 
-        // PreToolUse should be untouched
+        // PreToolUse should have the existing hook plus the blue guard hook (RFC 0076)
         let pre_tool_use = settings["hooks"]["PreToolUse"].as_array().unwrap();
-        assert_eq!(pre_tool_use.len(), 1);
+        assert_eq!(pre_tool_use.len(), 2);
     }
 
     #[test]

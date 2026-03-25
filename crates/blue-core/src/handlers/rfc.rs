@@ -11,6 +11,57 @@ use std::fs;
 
 use crate::handler_error::HandlerError;
 
+/// RFC 0076: Scan the rfcs/ directory and import any files not yet in the database.
+///
+/// This runs before list/status operations so that RFCs created outside blue
+/// (manually, by Claude, or by other tools) are automatically discovered.
+/// Errors are silently ignored — this is best-effort.
+fn sync_filesystem_rfcs(state: &ProjectState) {
+    let rfcs_dir = state.home.docs_path.join("rfcs");
+    if !rfcs_dir.exists() {
+        return;
+    }
+
+    // Get set of already-tracked file paths for quick lookup
+    let tracked_paths: std::collections::HashSet<String> = state
+        .store
+        .list_documents(DocType::Rfc)
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|d| d.file_path)
+        .collect();
+
+    let entries = match fs::read_dir(&rfcs_dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.extension().map(|e| e == "md").unwrap_or(false) {
+            continue;
+        }
+        if path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map(|n| n.ends_with(".plan.md"))
+            .unwrap_or(false)
+        {
+            continue;
+        }
+
+        // Check if already tracked by file_path
+        let relative = path
+            .strip_prefix(&state.home.docs_path)
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_default();
+
+        if !relative.is_empty() && !tracked_paths.contains(&relative) {
+            let _ = state.store.register_from_file(&path, &state.home.docs_path);
+        }
+    }
+}
+
 /// Handle blue_rfc_create
 ///
 /// Creates a new RFC with optional problem statement and source spike.
@@ -201,6 +252,10 @@ pub fn handle_get(state: &ProjectState, args: &Value) -> Result<Value, HandlerEr
 pub fn handle_list(state: &ProjectState, args: &Value) -> Result<Value, HandlerError> {
     let status_filter = args.get("status").and_then(|v| v.as_str());
 
+    // RFC 0076: Auto-import untracked RFC files from filesystem before listing.
+    // This ensures RFCs created outside blue (manually or by other tools) appear.
+    let _ = sync_filesystem_rfcs(state);
+
     let docs = if let Some(status) = status_filter {
         state
             .store
@@ -247,10 +302,11 @@ pub fn handle_update_status(state: &ProjectState, args: &Value) -> Result<Value,
         .and_then(|v| v.as_str())
         .ok_or(HandlerError::InvalidParams)?;
 
-    // Find the document to get its file path and current status
+    // Find the document to get its file path and current status.
+    // Uses filesystem fallback (RFC 0076) so RFCs created outside blue are auto-imported.
     let doc = state
         .store
-        .find_document(DocType::Rfc, title)
+        .find_document_with_fallback(DocType::Rfc, title, &state.home.docs_path)
         .map_err(|e| HandlerError::StateLoadFailed(e.to_string()))?;
 
     // Parse statuses and validate transition (RFC 0014)

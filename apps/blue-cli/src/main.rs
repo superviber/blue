@@ -25,7 +25,13 @@ fn maybe_handle_guard_sync() -> Option<i32> {
 
     // Quick check: is this a guard command?
     if args.len() >= 2 && args[1] == "guard" {
-        // Parse --path=VALUE
+        // RFC 0076: --stdin mode reads full PreToolUse JSON from stdin
+        let has_stdin = args.iter().any(|a| a == "--stdin");
+        if has_stdin {
+            return Some(run_guard_stdin_sync());
+        }
+
+        // Legacy: --path=VALUE mode
         let path = args
             .iter()
             .find(|a| a.starts_with("--path="))
@@ -33,6 +39,98 @@ fn maybe_handle_guard_sync() -> Option<i32> {
 
         if let Some(path) = path {
             return Some(run_guard_sync(path));
+        }
+    }
+    None
+}
+
+/// RFC 0076: Synchronous guard that reads full PreToolUse JSON from stdin.
+///
+/// Handles content-aware checks (RFC status interception) that the old
+/// --path mode cannot do. Runs pre-tokio for speed.
+fn run_guard_stdin_sync() -> i32 {
+    use std::io::Read;
+
+    // Read stdin with a timeout-like approach (non-blocking read of available data)
+    let mut input = String::new();
+    let _ = std::io::stdin().read_to_string(&mut input);
+
+    if input.is_empty() {
+        return 0; // No input, allow
+    }
+
+    // Parse JSON
+    let json: serde_json::Value = match serde_json::from_str(&input) {
+        Ok(v) => v,
+        Err(_) => return 0, // Can't parse, allow
+    };
+
+    let tool_input = match json.get("tool_input") {
+        Some(ti) => ti,
+        None => return 0,
+    };
+
+    let file_path = tool_input
+        .get("file_path")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+
+    if file_path.is_empty() {
+        return 0;
+    }
+
+    // RFC 0076: Content-aware RFC status interception (RFC 0031)
+    if file_path.contains(".blue/docs/rfcs/") {
+        let old_string = tool_input
+            .get("old_string")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let content = tool_input
+            .get("content")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        // Edit tool: check if old_string contains Status field
+        if !old_string.is_empty() && old_string.contains("| **Status**") {
+            eprintln!("guard: blocked direct RFC status edit");
+            eprintln!("hint: Use `blue rfc status \"<title>\" --set <draft|approved|implemented|superseded>` instead");
+            eprintln!("why: The filename prefix (D/A/I/S) must stay in sync with the Status field");
+            return 2;
+        }
+
+        // Write tool: check if status is being changed via full rewrite
+        if !content.is_empty() && content.contains("| **Status**") {
+            if let Ok(current) = std::fs::read_to_string(file_path) {
+                let current_status = extract_status_from_markdown(&current);
+                let new_status = extract_status_from_markdown(content);
+                if let (Some(cur), Some(new)) = (current_status, new_status) {
+                    if cur != new {
+                        eprintln!("guard: blocked RFC status change via file rewrite ({} → {})", cur, new);
+                        eprintln!("hint: Use `blue rfc status \"<title>\" --set {}` instead", new.to_lowercase());
+                        eprintln!("why: The filename prefix (D/A/I/S) must stay in sync with the Status field");
+                        return 2;
+                    }
+                }
+            }
+        }
+    }
+
+    // Delegate to existing path-based guard logic
+    run_guard_sync(file_path)
+}
+
+/// Extract the Status field value from RFC markdown frontmatter.
+fn extract_status_from_markdown(content: &str) -> Option<String> {
+    for line in content.lines().take(20) {
+        if line.contains("| **Status**") {
+            // Parse: | **Status**  | Draft     |
+            let parts: Vec<&str> = line.split('|').collect();
+            if parts.len() >= 3 {
+                let status = parts[2].trim();
+                if !status.is_empty() {
+                    return Some(status.to_string());
+                }
+            }
         }
     }
     None
@@ -434,9 +532,13 @@ enum Commands {
 
     /// Guard: Check if file writes are allowed (RFC 0038 PreToolUse hook)
     Guard {
-        /// Path to check
+        /// Path to check (legacy mode, use --stdin for RFC 0076 global hook)
+        #[arg(long, required_unless_present = "stdin")]
+        path: Option<String>,
+
+        /// Read full PreToolUse JSON from stdin (RFC 0076 global hook mode)
         #[arg(long)]
-        path: String,
+        stdin: bool,
 
         /// Tool that triggered the check (for audit logging)
         #[arg(long)]
@@ -1489,6 +1591,13 @@ enum OrgCommands {
 
     /// Sync all RFCs with PM/Jira, report drift
     Sync,
+
+    /// Install Blue in all repos across the org (hooks, skills, init)
+    Install {
+        /// Overwrite existing hooks
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 // ==================== RFC 0072: New Command Enums ====================
@@ -2166,8 +2275,16 @@ async fn tokio_main() -> Result<()> {
         Some(Commands::Context { command }) => {
             handle_context_command(command).await?;
         }
-        Some(Commands::Guard { path, tool }) => {
-            handle_guard_command(&path, tool.as_deref()).await?;
+        Some(Commands::Guard { path, stdin, tool }) => {
+            // --stdin is handled synchronously in maybe_handle_guard_sync() before we get here.
+            // If we reach here with --stdin, it means the sync path didn't fire (shouldn't happen).
+            if stdin {
+                eprintln!("guard: --stdin should be handled synchronously");
+                std::process::exit(1);
+            }
+            if let Some(ref p) = path {
+                handle_guard_command(p, tool.as_deref()).await?;
+            }
         }
         Some(Commands::SessionHeartbeat) => {
             // Silent heartbeat - touch session file if it exists
@@ -4079,45 +4196,15 @@ fn log_guard_bypass(path: &str, tool: Option<&str>, reason: &str) {
 // RFC 0052: Blue Install Command
 // ============================================================================
 
-const SESSION_START_HOOK: &str = r#"#!/bin/bash
-# Managed by: blue install
-# Blue SessionStart hook - sets up PATH for Claude Code
-
-if [ -n "$CLAUDE_ENV_FILE" ] && [ -n "$CLAUDE_PROJECT_DIR" ]; then
-  echo "export PATH=\"\$CLAUDE_PROJECT_DIR/target/release:\$PATH\"" >> "$CLAUDE_ENV_FILE"
-fi
-
-exit 0
-"#;
-
-const GUARD_WRITE_HOOK: &str = r#"#!/bin/bash
-# Managed by: blue install
-# Blue PreToolUse hook - enforces RFC 0038 worktree protection
-
-# Read stdin with bash timeout (portable, no GNU timeout needed)
-INPUT=""
-while IFS= read -t 2 -r line; do
-    INPUT="${INPUT}${line}"
-done
-
-if [ -z "$INPUT" ]; then
-    exit 0
-fi
-
-FILE_PATH=$(echo "$INPUT" | jq -r '.tool_input.file_path // empty' 2>/dev/null || echo "")
-
-if [ -z "$FILE_PATH" ]; then
-    exit 0
-fi
-
-blue guard --path="$FILE_PATH"
-"#;
+// RFC 0076: SESSION_START_HOOK and GUARD_WRITE_HOOK constants removed.
+// Per-project hook scripts are no longer generated. All hooks are registered
+// globally in ~/.claude/settings.json via blue_core::install::configure_hooks().
 
 async fn handle_install_command(
     hooks_only: bool,
     skills_only: bool,
     _mcp_only: bool,
-    force: bool,
+    _force: bool,
 ) -> Result<()> {
     let cwd = std::env::current_dir()?;
     let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Could not find home directory"))?;
@@ -4126,10 +4213,16 @@ async fn handle_install_command(
 
     let install_all = !hooks_only && !skills_only;
 
-    // Install hooks
+    // RFC 0076: Hooks are now global in ~/.claude/settings.json
     if install_all || hooks_only {
-        println!("Hooks:");
-        install_hooks(&cwd, force)?;
+        println!("Global hooks (~/.claude/settings.json):");
+        let result = blue_core::install::install()?;
+        for hook in &result.hooks_configured {
+            println!("  ✓ {}", hook);
+        }
+
+        // Clean up stale per-project hooks (RFC 0076 migration)
+        cleanup_per_project_hooks(&cwd)?;
     }
 
     // Install skills
@@ -4147,116 +4240,168 @@ async fn handle_install_command(
     Ok(())
 }
 
-fn install_hooks(project_dir: &std::path::Path, force: bool) -> Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-
+/// RFC 0076: Remove per-project hook files that are now handled globally.
+fn cleanup_per_project_hooks(project_dir: &std::path::Path) -> Result<()> {
     let hooks_dir = project_dir.join(".claude").join("hooks");
-    std::fs::create_dir_all(&hooks_dir)?;
+    let mut cleaned = false;
 
-    // Write session-start.sh
-    let session_start_path = hooks_dir.join("session-start.sh");
-    if !session_start_path.exists() || force {
-        std::fs::write(&session_start_path, SESSION_START_HOOK)?;
-        std::fs::set_permissions(&session_start_path, std::fs::Permissions::from_mode(0o755))?;
-        println!("  ✓ .claude/hooks/session-start.sh");
-    } else {
-        println!("  - .claude/hooks/session-start.sh (exists, use --force to overwrite)");
+    // Remove guard-write.sh if managed by blue
+    let guard_write = hooks_dir.join("guard-write.sh");
+    if guard_write.exists() {
+        if let Ok(content) = std::fs::read_to_string(&guard_write) {
+            if content.contains("Managed by: blue install") {
+                std::fs::remove_file(&guard_write)?;
+                println!("  ✓ Removed stale .claude/hooks/guard-write.sh (now global)");
+                cleaned = true;
+            }
+        }
     }
 
-    // Write guard-write.sh
-    let guard_write_path = hooks_dir.join("guard-write.sh");
-    if !guard_write_path.exists() || force {
-        std::fs::write(&guard_write_path, GUARD_WRITE_HOOK)?;
-        std::fs::set_permissions(&guard_write_path, std::fs::Permissions::from_mode(0o755))?;
-        println!("  ✓ .claude/hooks/guard-write.sh");
-    } else {
-        println!("  - .claude/hooks/guard-write.sh (exists, use --force to overwrite)");
+    // Remove session-start.sh if managed by blue
+    let session_start = hooks_dir.join("session-start.sh");
+    if session_start.exists() {
+        if let Ok(content) = std::fs::read_to_string(&session_start) {
+            if content.contains("Managed by: blue install") {
+                std::fs::remove_file(&session_start)?;
+                println!("  ✓ Removed stale .claude/hooks/session-start.sh (now global)");
+                cleaned = true;
+            }
+        }
     }
 
-    // Update settings.json
+    // Clean per-project settings.json hook entries
     let settings_path = project_dir.join(".claude").join("settings.json");
-    let settings = merge_hook_settings(&settings_path)?;
-    std::fs::write(&settings_path, serde_json::to_string_pretty(&settings)?)?;
-    println!("  ✓ .claude/settings.json (merged)");
+    if settings_path.exists() {
+        if let Ok(content) = std::fs::read_to_string(&settings_path) {
+            if let Ok(mut settings) = serde_json::from_str::<serde_json::Value>(&content) {
+                let mut modified = false;
+                if let Some(hooks) = settings.get_mut("hooks") {
+                    if let Some(obj) = hooks.as_object_mut() {
+                        // Remove hook entries that reference per-project blue scripts
+                        for key in ["SessionStart", "PreToolUse"] {
+                            if let Some(arr) = obj.get_mut(key).and_then(|v| v.as_array_mut()) {
+                                let before = arr.len();
+                                arr.retain(|entry| {
+                                    let cmd = entry
+                                        .get("hooks")
+                                        .and_then(|h| h.as_array())
+                                        .and_then(|a| a.first())
+                                        .and_then(|h| h.get("command"))
+                                        .and_then(|c| c.as_str())
+                                        .unwrap_or("");
+                                    !cmd.contains(".claude/hooks/")
+                                });
+                                if arr.len() != before {
+                                    modified = true;
+                                }
+                            }
+                        }
+                        // Remove empty hook arrays
+                        let empty_keys: Vec<String> = obj
+                            .iter()
+                            .filter(|(_, v)| v.as_array().map(|a| a.is_empty()).unwrap_or(false))
+                            .map(|(k, _)| k.clone())
+                            .collect();
+                        for key in empty_keys {
+                            obj.remove(&key);
+                            modified = true;
+                        }
+                    }
+                }
+                if modified {
+                    // If hooks is now empty, remove it entirely
+                    if settings
+                        .get("hooks")
+                        .and_then(|h| h.as_object())
+                        .map(|o| o.is_empty())
+                        .unwrap_or(false)
+                    {
+                        settings.as_object_mut().unwrap().remove("hooks");
+                    }
+                    // If settings is now empty (just {}), remove the file
+                    if settings.as_object().map(|o| o.is_empty()).unwrap_or(false) {
+                        std::fs::remove_file(&settings_path)?;
+                        println!("  ✓ Removed empty .claude/settings.json");
+                    } else {
+                        std::fs::write(
+                            &settings_path,
+                            serde_json::to_string_pretty(&settings)?,
+                        )?;
+                        println!("  ✓ Cleaned per-project hook entries from .claude/settings.json");
+                    }
+                    cleaned = true;
+                }
+            }
+        }
+    }
+
+    // Remove empty hooks directory
+    if hooks_dir.exists() {
+        if hooks_dir
+            .read_dir()
+            .map(|mut d| d.next().is_none())
+            .unwrap_or(false)
+        {
+            std::fs::remove_dir(&hooks_dir)?;
+            // Also remove .claude/ if now empty
+            let claude_dir = project_dir.join(".claude");
+            if claude_dir
+                .read_dir()
+                .map(|mut d| d.next().is_none())
+                .unwrap_or(false)
+            {
+                std::fs::remove_dir(&claude_dir)?;
+            }
+            cleaned = true;
+        }
+    }
+
+    if !cleaned {
+        println!("  - No stale per-project hooks found");
+    }
 
     Ok(())
 }
 
-fn merge_hook_settings(settings_path: &std::path::Path) -> Result<serde_json::Value> {
-    use serde_json::json;
+// RFC 0076: install_hooks() and merge_hook_settings() removed.
+// Hooks are now global in ~/.claude/settings.json via blue_core::install::install().
+// Per-project hooks are cleaned up by cleanup_per_project_hooks().
 
-    let mut settings: serde_json::Value = if settings_path.exists() {
-        let content = std::fs::read_to_string(settings_path)?;
-        serde_json::from_str(&content).unwrap_or_else(|_| json!({}))
-    } else {
-        json!({})
-    };
+/// Embedded skill contents — resolved at compile time so `blue install` works from any directory.
+const EMBEDDED_SKILLS: &[(&str, &str)] = &[
+    (
+        "blue-alignment-expert",
+        include_str!("../../../skills/alignment-expert/SKILL.md"),
+    ),
+    (
+        "blue-alignment-play",
+        include_str!("../../../skills/alignment-play/SKILL.md"),
+    ),
+    (
+        "blue-org-context",
+        include_str!("../../../skills/blue-org-context/SKILL.md"),
+    ),
+    (
+        "blue-domain-setup",
+        include_str!("../../../skills/domain-setup/SKILL.md"),
+    ),
+    (
+        "blue-wt",
+        include_str!("../../../skills/wt/SKILL.md"),
+    ),
+];
 
-    // Ensure hooks object exists
-    if settings.get("hooks").is_none() {
-        settings["hooks"] = json!({});
-    }
-
-    // Add SessionStart hook
-    settings["hooks"]["SessionStart"] = json!([
-        {
-            "hooks": [
-                {
-                    "type": "command",
-                    "command": ".claude/hooks/session-start.sh"
-                }
-            ]
-        }
-    ]);
-
-    // Add PreToolUse hook
-    settings["hooks"]["PreToolUse"] = json!([
-        {
-            "matcher": "Write|Edit|MultiEdit",
-            "hooks": [
-                {
-                    "type": "command",
-                    "command": ".claude/hooks/guard-write.sh"
-                }
-            ]
-        }
-    ]);
-
-    Ok(settings)
-}
-
-fn install_skills(project_dir: &std::path::Path, home: &std::path::Path) -> Result<()> {
-    let skills_dir = project_dir.join("skills");
+fn install_skills(_project_dir: &std::path::Path, home: &std::path::Path) -> Result<()> {
     let target_dir = home.join(".claude").join("skills");
-
     std::fs::create_dir_all(&target_dir)?;
 
-    if !skills_dir.exists() {
-        println!("  - No skills directory found");
-        return Ok(());
-    }
+    for (skill_name, content) in EMBEDDED_SKILLS {
+        let skill_dir = target_dir.join(skill_name);
+        std::fs::create_dir_all(&skill_dir)?;
 
-    for entry in std::fs::read_dir(&skills_dir)? {
-        let entry = entry?;
-        let path = entry.path();
-
-        if path.is_dir() {
-            let skill_name = entry.file_name();
-            let link_path = target_dir.join(&skill_name);
-
-            // Remove existing symlink if present
-            if link_path.exists() || link_path.symlink_metadata().is_ok() {
-                std::fs::remove_file(&link_path).ok();
-            }
-
-            // Create symlink
-            std::os::unix::fs::symlink(&path, &link_path)?;
-            println!(
-                "  ✓ ~/.claude/skills/{} -> {}",
-                skill_name.to_string_lossy(),
-                path.display()
-            );
-        }
+        let skill_file = skill_dir.join("SKILL.md");
+        std::fs::write(&skill_file, content)?;
+        println!("  ✓ ~/.claude/skills/{}/SKILL.md", skill_name);
     }
 
     Ok(())
@@ -4291,9 +4436,16 @@ async fn handle_uninstall_command() -> Result<()> {
 
     println!("Removing Blue from Claude Code...\n");
 
-    // Remove hooks
-    println!("Hooks:");
-    uninstall_hooks(&cwd)?;
+    // RFC 0076: Remove global hooks from ~/.claude/settings.json
+    println!("Global hooks:");
+    let result = blue_core::install::uninstall()?;
+    for hook in &result.hooks_removed {
+        println!("  ✓ Removed {}", hook);
+    }
+
+    // Clean up any remaining per-project hooks
+    println!("\nPer-project hooks:");
+    cleanup_per_project_hooks(&cwd)?;
 
     // Remove skills
     println!("\nSkills:");
@@ -4306,77 +4458,14 @@ async fn handle_uninstall_command() -> Result<()> {
     Ok(())
 }
 
-fn uninstall_hooks(project_dir: &std::path::Path) -> Result<()> {
-    let hooks_dir = project_dir.join(".claude").join("hooks");
-
-    // Remove hook scripts
-    let session_start = hooks_dir.join("session-start.sh");
-    if session_start.exists() {
-        // Check if managed by blue
-        if let Ok(content) = std::fs::read_to_string(&session_start) {
-            if content.contains("Managed by: blue install") {
-                std::fs::remove_file(&session_start)?;
-                println!("  ✓ Removed .claude/hooks/session-start.sh");
-            } else {
-                println!("  - .claude/hooks/session-start.sh (not managed by blue, skipped)");
-            }
-        }
-    }
-
-    let guard_write = hooks_dir.join("guard-write.sh");
-    if guard_write.exists() {
-        if let Ok(content) = std::fs::read_to_string(&guard_write) {
-            if content.contains("Managed by: blue install") {
-                std::fs::remove_file(&guard_write)?;
-                println!("  ✓ Removed .claude/hooks/guard-write.sh");
-            } else {
-                println!("  - .claude/hooks/guard-write.sh (not managed by blue, skipped)");
-            }
-        }
-    }
-
-    // Clean settings.json
-    let settings_path = project_dir.join(".claude").join("settings.json");
-    if settings_path.exists() {
-        if let Ok(content) = std::fs::read_to_string(&settings_path) {
-            if let Ok(mut settings) = serde_json::from_str::<serde_json::Value>(&content) {
-                if let Some(hooks) = settings.get_mut("hooks") {
-                    if let Some(obj) = hooks.as_object_mut() {
-                        obj.remove("SessionStart");
-                        obj.remove("PreToolUse");
-                    }
-                }
-                std::fs::write(&settings_path, serde_json::to_string_pretty(&settings)?)?;
-                println!("  ✓ Cleaned .claude/settings.json");
-            }
-        }
-    }
-
-    Ok(())
-}
-
-fn uninstall_skills(project_dir: &std::path::Path, home: &std::path::Path) -> Result<()> {
-    let skills_dir = project_dir.join("skills");
+fn uninstall_skills(_project_dir: &std::path::Path, home: &std::path::Path) -> Result<()> {
     let target_dir = home.join(".claude").join("skills");
 
-    if !skills_dir.exists() {
-        println!("  - No skills to remove");
-        return Ok(());
-    }
-
-    for entry in std::fs::read_dir(&skills_dir)? {
-        let entry = entry?;
-        if entry.path().is_dir() {
-            let skill_name = entry.file_name();
-            let link_path = target_dir.join(&skill_name);
-
-            if link_path.symlink_metadata().is_ok() {
-                std::fs::remove_file(&link_path)?;
-                println!(
-                    "  ✓ Removed ~/.claude/skills/{}",
-                    skill_name.to_string_lossy()
-                );
-            }
+    for (skill_name, _) in EMBEDDED_SKILLS {
+        let skill_dir = target_dir.join(skill_name);
+        if skill_dir.exists() {
+            std::fs::remove_dir_all(&skill_dir)?;
+            println!("  ✓ Removed ~/.claude/skills/{}", skill_name);
         }
     }
 
@@ -4385,8 +4474,6 @@ fn uninstall_skills(project_dir: &std::path::Path, home: &std::path::Path) -> Re
 
 
 async fn handle_doctor_command() -> Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-
     let cwd = std::env::current_dir()?;
     let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Could not find home directory"))?;
 
@@ -4483,90 +4570,91 @@ async fn handle_doctor_command() -> Result<()> {
         issues += 1;
     }
 
-    // Check hooks
-    println!("\nHooks:");
-    let hooks_dir = cwd.join(".claude").join("hooks");
+    // RFC 0076: Check global hooks in ~/.claude/settings.json
+    println!("\nGlobal hooks (~/.claude/settings.json):");
+    let global_settings_path = home.join(".claude").join("settings.json");
+    if global_settings_path.exists() {
+        if let Ok(content) = std::fs::read_to_string(&global_settings_path) {
+            if let Ok(settings) = serde_json::from_str::<serde_json::Value>(&content) {
+                let hooks = settings.get("hooks").and_then(|h| h.as_object());
+                let check_hook = |event: &str, needle: &str| -> bool {
+                    hooks
+                        .and_then(|h| h.get(event))
+                        .and_then(|v| v.as_array())
+                        .map(|arr| {
+                            arr.iter().any(|entry| {
+                                entry
+                                    .get("hooks")
+                                    .and_then(|h| h.as_array())
+                                    .map(|hooks| {
+                                        hooks.iter().any(|h| {
+                                            h.get("command")
+                                                .and_then(|c| c.as_str())
+                                                .map(|c| c.contains(needle))
+                                                .unwrap_or(false)
+                                        })
+                                    })
+                                    .unwrap_or(false)
+                            })
+                        })
+                        .unwrap_or(false)
+                };
 
-    let session_start = hooks_dir.join("session-start.sh");
-    if session_start.exists() {
-        let is_executable = std::fs::metadata(&session_start)
-            .map(|m| m.permissions().mode() & 0o111 != 0)
-            .unwrap_or(false);
-        if is_executable {
-            println!("  ✓ session-start.sh (installed, executable)");
-        } else {
-            println!("  ✗ session-start.sh (not executable)");
-            issues += 1;
-        }
-    } else {
-        println!("  ✗ session-start.sh missing");
-        issues += 1;
-    }
-
-    let guard_write = hooks_dir.join("guard-write.sh");
-    if guard_write.exists() {
-        let is_executable = std::fs::metadata(&guard_write)
-            .map(|m| m.permissions().mode() & 0o111 != 0)
-            .unwrap_or(false);
-        if is_executable {
-            println!("  ✓ guard-write.sh (installed, executable)");
-        } else {
-            println!("  ✗ guard-write.sh (not executable)");
-            issues += 1;
-        }
-    } else {
-        println!("  ✗ guard-write.sh missing");
-        issues += 1;
-    }
-
-    let settings_path = cwd.join(".claude").join("settings.json");
-    if settings_path.exists() {
-        if let Ok(content) = std::fs::read_to_string(&settings_path) {
-            if content.contains("SessionStart") && content.contains("PreToolUse") {
-                println!("  ✓ settings.json configured");
-            } else {
-                println!("  ✗ settings.json missing hook configuration");
-                issues += 1;
-            }
-        }
-    } else {
-        println!("  ✗ settings.json missing");
-        issues += 1;
-    }
-
-    // Check skills
-    println!("\nSkills:");
-    let skills_dir = cwd.join("skills");
-    let target_dir = home.join(".claude").join("skills");
-
-    if skills_dir.exists() {
-        for entry in std::fs::read_dir(&skills_dir)? {
-            let entry = entry?;
-            if entry.path().is_dir() {
-                let skill_name = entry.file_name();
-                let link_path = target_dir.join(&skill_name);
-
-                if link_path.symlink_metadata().is_ok() {
-                    // Check if symlink points to correct target
-                    if let Ok(target) = std::fs::read_link(&link_path) {
-                        if target == entry.path() {
-                            println!("  ✓ {} (symlink valid)", skill_name.to_string_lossy());
-                        } else {
-                            println!(
-                                "  ✗ {} (symlink points to wrong target)",
-                                skill_name.to_string_lossy()
-                            );
-                            issues += 1;
-                        }
-                    }
+                if check_hook("SessionStart", "blue hook session-start") {
+                    println!("  ✓ SessionStart (blue hook session-start)");
                 } else {
-                    println!("  ✗ {} (symlink missing)", skill_name.to_string_lossy());
+                    println!("  ✗ SessionStart hook missing");
+                    issues += 1;
+                }
+
+                if check_hook("PreCompact", "blue hook post-compact") {
+                    println!("  ✓ PreCompact (blue hook post-compact)");
+                } else {
+                    println!("  ✗ PreCompact hook missing");
+                    issues += 1;
+                }
+
+                if check_hook("PreToolUse", "blue guard") {
+                    println!("  ✓ PreToolUse (blue guard --stdin)");
+                } else {
+                    println!("  ✗ PreToolUse guard hook missing");
                     issues += 1;
                 }
             }
         }
     } else {
-        println!("  - No skills directory");
+        println!("  ✗ ~/.claude/settings.json missing");
+        issues += 1;
+    }
+
+    // RFC 0076: Warn about stale per-project hooks
+    let hooks_dir = cwd.join(".claude").join("hooks");
+    let guard_write = hooks_dir.join("guard-write.sh");
+    let session_start_hook = hooks_dir.join("session-start.sh");
+    if guard_write.exists() || session_start_hook.exists() {
+        println!("\nStale per-project hooks:");
+        if guard_write.exists() {
+            println!("  ⚠ .claude/hooks/guard-write.sh (now global, run `blue install` to clean up)");
+            issues += 1;
+        }
+        if session_start_hook.exists() {
+            println!("  ⚠ .claude/hooks/session-start.sh (now global, run `blue install` to clean up)");
+            issues += 1;
+        }
+    }
+
+    // Check skills (embedded — just verify the target files exist)
+    println!("\nSkills:");
+    let target_dir = home.join(".claude").join("skills");
+
+    for (skill_name, _) in EMBEDDED_SKILLS {
+        let skill_file = target_dir.join(skill_name).join("SKILL.md");
+        if skill_file.exists() {
+            println!("  ✓ {}", skill_name);
+        } else {
+            println!("  ✗ {} (missing — run `blue install`)", skill_name);
+            issues += 1;
+        }
     }
 
     // RFC 0072: Check for stale MCP config
@@ -6791,6 +6879,97 @@ fn handle_org_command(command: OrgCommands) -> Result<()> {
                 }
                 Err(e) => println!("Error: {}", e),
             }
+        }
+
+        OrgCommands::Install { force: _ } => {
+            let cwd = std::env::current_dir()?;
+            let home = dirs::home_dir()
+                .ok_or_else(|| anyhow::anyhow!("Could not find home directory"))?;
+
+            // Find org root: either cwd has org.yaml, or walk up
+            let (org_root, manifest) =
+                if cwd.join("org.yaml").exists() {
+                    let m = blue_core::OrgManifest::load(&cwd.join("org.yaml"))?;
+                    (cwd.clone(), m)
+                } else if let Some((root, m)) = blue_core::OrgManifest::find_in_ancestors(&cwd) {
+                    (root, m)
+                } else {
+                    println!("No org.yaml found. Run 'blue org init' at the org root first.");
+                    return Ok(());
+                };
+
+            println!("Installing Blue across org: {}\n", manifest.org);
+
+            // Step 1: Install skills globally (once)
+            println!("Skills (global):");
+            install_skills(&org_root, &home)?;
+
+            // Step 2: Find all repos in the org directory
+            let mut repos: Vec<(String, std::path::PathBuf)> = Vec::new();
+            if let Ok(entries) = std::fs::read_dir(&org_root) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.is_dir() && path.join(".git").exists() {
+                        if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                            repos.push((name.to_string(), path));
+                        }
+                    }
+                }
+            }
+            repos.sort_by(|a, b| a.0.cmp(&b.0));
+
+            if repos.is_empty() {
+                println!("\nNo repos found in {}", org_root.display());
+                return Ok(());
+            }
+
+            // Step 3: Install hooks + init in each repo
+            println!("\nRepos ({}):", repos.len());
+            for (name, repo_path) in &repos {
+                println!("\n  {} {}:", if repo_path.join(".blue").exists() { "●" } else { "○" }, name);
+
+                // RFC 0076: Clean up per-project hooks (hooks are now global)
+                match cleanup_per_project_hooks(repo_path) {
+                    Ok(()) => {}
+                    Err(e) => {
+                        println!("    ✗ hook cleanup failed: {}", e);
+                        continue;
+                    }
+                }
+
+                // Init .blue/ if not present
+                if !repo_path.join(".blue").exists() {
+                    match blue_core::detect_blue(repo_path) {
+                        Ok(blue_home) => {
+                            let project = blue_home
+                                .project_name
+                                .clone()
+                                .unwrap_or_else(|| "default".to_string());
+                            let _ = blue_core::ProjectState::load(blue_home.clone(), &project);
+                            println!("    ✓ initialized .blue/");
+                        }
+                        Err(e) => {
+                            println!("    ✗ init failed: {}", e);
+                        }
+                    }
+                } else {
+                    println!("    - .blue/ exists");
+                }
+
+                // Set git config for rebase workflow
+                if repo_path.join(".git").exists() {
+                    let _ = std::process::Command::new("git")
+                        .args(["config", "pull.rebase", "true"])
+                        .current_dir(repo_path)
+                        .output();
+                    let _ = std::process::Command::new("git")
+                        .args(["config", "rebase.autoStash", "true"])
+                        .current_dir(repo_path)
+                        .output();
+                }
+            }
+
+            println!("\nBlue installed across {} repos. Restart Claude Code to activate.", repos.len());
         }
 
         OrgCommands::Sync => {
